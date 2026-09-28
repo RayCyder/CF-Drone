@@ -14,7 +14,7 @@
 #define BATTERY_FLYING_THRUST_MIN    0.15f  // 推力≥此值视为飞行中，L1不适用
 #define BATTERY_ACTION_DEBOUNCE_TIME  0.9f  // 低压连续判定防抖时间（秒）
 
-extern float t;
+extern double t;
 float batteryVoltage = 0.0f;  // 全局最新电压，由 updateBatteryVoltage() 定期刷新
 
 bool batteryBlocksArming() {
@@ -27,7 +27,7 @@ bool batteryAlertActiveForFlight(bool flying) {
 }
 
 void updateBatteryVoltage() {
-	static float lastCheck = 0;
+	static double lastCheck = 0;
 	if (t - lastCheck < 0.5f) return;  // 每 0.5 秒采样一次
 	lastCheck = t;
 	batteryVoltage = readBatteryVoltage();

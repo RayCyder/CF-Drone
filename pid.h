@@ -17,28 +17,28 @@ public:
 	LowPassFilter<float> lpf; // low pass filter for derivative term
 
 	PID(float p, float i, float d, float windup = 0, float dAlpha = 1, float dtMax = 0.1) :
-		p(p), i(i), d(d), windup(windup), lpf(dAlpha), dtMax(dtMax) {}
+		p(p), i(i), d(d), windup(windup), dtMax(dtMax), lpf(dAlpha) {}
 
-	float update(float error) {
-		float dt = t - prevTime;
-
-		if (dt > 0 && dt < dtMax) {
-			integral += error * dt;
-			derivative = lpf.update((error - prevError) / dt); // compute derivative and apply low-pass filter
+	// dt is the integer-clock frame interval, not a float absolute-time subtraction.
+	float update(float error, float sampleDt = dt, bool integrate = true) {
+		if (!isfinite(error) || !isfinite(sampleDt) || sampleDt <= 0 || sampleDt >= dtMax) {
+			reset();
+			return isfinite(error) ? p * error : 0.0f;
+		}
+		if (i > 0 && windup > 0) {
+			const float limit = windup / i;
+			if (integrate) integral += error * sampleDt;
+			integral = constrain(integral, -limit, limit);
 		} else {
 			integral = 0;
-			derivative = 0;
 		}
-
+		derivative = isfinite(prevError) ? lpf.update((error - prevError) / sampleDt) : 0.0f;
 		prevError = error;
-		prevTime = t;
-
-		return p * error + constrain(i * integral, -windup, windup) + d * derivative; // PID
+		return p * error + i * integral + d * derivative;
 	}
 
 	void reset() {
 		prevError = NAN;
-		prevTime = NAN;
 		integral = 0;
 		derivative = 0;
 		lpf.reset();
@@ -46,5 +46,4 @@ public:
 
 private:
 	float prevError = NAN;
-	float prevTime = NAN;
 };

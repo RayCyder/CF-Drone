@@ -13,8 +13,8 @@
 #include "web_rc_input.h"
 
 // 飞控统一控制变量（供协议适配层写入，与 SBUS/MAVLink 共用）
-extern float t;
-extern float controlTime;
+extern double t;
+extern double controlTime;
 extern float controlRoll, controlPitch, controlYaw, controlThrottle, controlMode;
 extern float batteryVoltage;
 extern const char* motd;

@@ -97,6 +97,7 @@ Vector ratesTarget;
 Vector ratesExtra; // feedforward rates
 Vector torqueTarget;
 float thrustTarget;
+float motorMixScale = 1.0f;
 
 // ============== 软件配平参数 ==============
 // 用于补偿机械不对称（重心偏移、电机/桨叶推力差异、IMU 安装偏斜等）引起的固定方向漂移。
@@ -247,7 +248,10 @@ void interpretControls() {
 }
 
 void controlAttitude() {
-	if (!armed || attitudeTarget.invalid() || thrustTarget < motThrMin) return; // skip attitude control
+	if (!armed || attitudeTarget.invalid() || thrustTarget < motThrMin) {
+		rollPID.reset(); pitchPID.reset(); yawPID.reset();
+		return;
+	}
 
 	const Vector up(0, 0, 1);
 	Vector upActual = Quaternion::rotateVector(up, attitude);
@@ -264,14 +268,18 @@ void controlAttitude() {
 
 
 void controlRates() {
-	if (!armed || ratesTarget.invalid() || thrustTarget < motThrMin) return; // skip rates control
+	if (!armed || ratesTarget.invalid() || thrustTarget < motThrMin) {
+		rollRatePID.reset(); pitchRatePID.reset(); yawRatePID.reset();
+		motorMixScale = 1.0f;
+		return;
+	}
 
 	Vector error = ratesTarget - rates;
 
 	// Calculate desired torque, where 0 - no torque, 1 - maximum possible torque
-	torqueTarget.x = rollRatePID.update(error.x);
-	torqueTarget.y = pitchRatePID.update(error.y);
-	torqueTarget.z = yawRatePID.update(error.z);
+	torqueTarget.x = rollRatePID.update(error.x, dt, motorMixScale >= 0.999f || error.x * torqueTarget.x <= 0);
+	torqueTarget.y = pitchRatePID.update(error.y, dt, motorMixScale >= 0.999f || error.y * torqueTarget.y <= 0);
+	torqueTarget.z = yawRatePID.update(error.z, dt, motorMixScale >= 0.999f || error.z * torqueTarget.z <= 0);
 }
 
 void controlTorque() {
@@ -313,6 +321,7 @@ void desaturate(float& a, float& b, float& c, float& d) {
 		scale = min(scale, avg / (avg - minVal));
 	}
 
+	motorMixScale = scale;
 	if (scale < 1.0f) {
 		a = avg + (a - avg) * scale;
 		b = avg + (b - avg) * scale;

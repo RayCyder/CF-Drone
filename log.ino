@@ -12,7 +12,8 @@
 #define LOG_SIZE LOG_DURATION * LOG_RATE
 
 extern bool armed;
-extern float batteryVoltage, controlRoll, controlPitch, controlYaw, controlThrottle, controlMode, controlTime;
+extern float batteryVoltage, controlRoll, controlPitch, controlYaw, controlThrottle, controlMode;
+extern double controlTime;
 extern float motors[4];
 extern float dt;
 extern Vector gyro, acc;
@@ -22,6 +23,7 @@ extern int mode;
 static int logPointer = 0;
 static int logCount = 0;
 static uint32_t logSequence = 0;
+static float logTime = 0;
 static float logArmed = 0;
 static float logFaultMask = 0;
 static float logRcAge = -1;
@@ -36,7 +38,7 @@ struct LogEntry {
 };
 
 LogEntry logEntries[] = {
-	{"t", &t},
+	{"t", &logTime},
 	{"dt_s", &dt},
 	{"gyro_x", &gyro.x},
 	{"gyro_y", &gyro.y},
@@ -100,6 +102,7 @@ bool copyLatestLogRow(float *destination, int capacity, uint32_t *sequence) {
 }
 
 void prepareLogData() {
+	logTime = (float)t; // Display only; never used by control or scheduling.
 	attitudeEuler = attitude.toEuler();
 	attitudeTargetEuler = attitudeTarget.toEuler();
 	logMode = (float)mode;

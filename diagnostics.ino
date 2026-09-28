@@ -117,8 +117,8 @@ void recordLoopTiming(float dt) {
 void updateDiagnostics() {
 	extern bool imuOK;
 	extern bool motorOutputsOK;
-	extern float controlTime;
-	extern float t;
+	extern double controlTime;
+	extern double t;
 	extern float rcLossTimeout;
 	extern bool armed;
 	extern float thrustTarget;
@@ -159,7 +159,8 @@ void clearDiagnosticHistory() {
 void printDiagnostics() {
 	updateDiagnostics();
 	extern bool armed, imuOK, motorOutputsOK;
-	extern float t, dt, loopRate, batteryVoltage, controlTime, controlRoll, controlPitch, controlYaw, controlThrottle;
+	extern float dt, loopRate, batteryVoltage, controlRoll, controlPitch, controlYaw, controlThrottle;
+	extern double t, controlTime;
 	print("DIAG_CONTEXT uptime_ms=%lu armed=%u imu_ok=%u motor_ok=%u battery_v=%.2f rc_age_s=%.3f rc=(%.2f,%.2f,%.2f,%.2f) loop_rate=%.0f dt=%.4f free_heap=%lu\n",
 		(unsigned long)millis(), armed ? 1 : 0, imuOK ? 1 : 0, motorOutputsOK ? 1 : 0,
 		batteryVoltage, controlTime > 0 ? t - controlTime : -1.0f,

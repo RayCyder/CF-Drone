@@ -9,14 +9,14 @@ float rcLossTimeout = 1;        // RC丢失超时时间（秒），可通过参�
 float descendTime = 3;          // 过渡到目标下降推力的时间（秒）
 float descendThrust = 0.35f;     // 自动下降目标推力（归一化指令，需按机体实测调整）
 static bool controlledLandingActive = false;
-static float lastDescendUpdateTime = NAN;
+static double lastDescendUpdateTime = NAN;
 #define WEB_RC_LOSS_TIMEOUT_MS 8000UL  // Web遥控器失联阈值(ms)，必须大于心跳间隔2000ms
 
 // 倒置保护参数
 #define INVERTED_COS_THRESHOLD -0.7f   // cos(134°)，倾角超过134°视为倒置（留出陀螺漂移裕量）
 #define INVERTED_TIMEOUT        1.5f   // 持续倒置超过1.5秒触发停机
 
-extern float controlTime;
+extern double controlTime;
 extern float controlRoll, controlPitch, controlThrottle, controlYaw;
 
 #if WEB_RC_ENABLED
@@ -32,7 +32,7 @@ extern void disarm();
 extern int mode;
 extern float dt;
 extern float thrustTarget;
-extern float t;
+extern double t;
 extern float batteryVoltage;  // battery.ino
 extern Quaternion attitudeTarget;
 extern Quaternion attitude;
@@ -162,7 +162,7 @@ void invertedFailsafe() {
 	// 取机体Z轴在世界系的Z分量：正立时≈+1，倒置时≈-1
 	Vector worldUp = Quaternion::rotateVector(Vector(0, 0, 1), attitude);
 
-	static float invertedStartTime = 0;
+	static double invertedStartTime = 0;
 	if (worldUp.z < INVERTED_COS_THRESHOLD) {
 		isInverted = true;
 		if (invertedStartTime == 0) invertedStartTime = t;
@@ -183,8 +183,8 @@ void invertedFailsafe() {
 // L3（2.6V）：飞行中自动降落（复用固定目标推力的 descend()）
 void batteryFailsafe() {
 	static bool l3Latched = false;
-	static float lowSince = 0.0f;
-	static float l3LastNotify = 0.0f;
+	static double lowSince = 0.0f;
+	static double l3LastNotify = 0.0f;
 
 	if (batteryVoltage < VBAT_ABSENT_THRESHOLD) return; // 未接电池，忽略
 	if (!armed) {

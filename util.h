@@ -12,7 +12,7 @@
 #endif
 
 const float ONE_G = 9.80665;
-extern float t;
+extern double t;
 
 float mapf(float x, float in_min, float in_max, float out_min, float out_max) {
 	return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
@@ -60,7 +60,7 @@ void splitString(String& str, String& token0, String& token1, String& token2) {
 class Rate {
 public:
 	float rate;
-	float last = 0;
+	double last = 0;
 	Rate(float rate) : rate(rate) {}
 
 	operator bool() {
@@ -76,7 +76,7 @@ public:
 class Delay {
 public:
 	float delay;
-	float start = NAN;
+	double start = NAN;
 	Delay(float delay) : delay(delay) {}
 
 	bool update(bool on) {

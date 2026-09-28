@@ -21,8 +21,9 @@ void setWebConsoleCommandOutput(bool enabled) {
 
 extern const int MOTOR_REAR_LEFT, MOTOR_REAR_RIGHT, MOTOR_FRONT_RIGHT, MOTOR_FRONT_LEFT;
 extern const int RAW, ACRO, STAB, AUTO;
-extern float t, dt, loopRate;
-extern float controlTime;
+extern float dt, loopRate;
+extern double t;
+extern double controlTime;
 extern uint16_t channels[16];
 extern float controlRoll, controlPitch, controlThrottle, controlYaw, controlMode;
 extern float motors[4];
@@ -108,7 +109,7 @@ void print(const char* format, ...) {
 }
 
 void pause(float duration) {
-	float start = t;
+	double start = t;
 	while (t - start < duration) {
 		readIMU(); // 长时间阻塞命令（ca/cr）期间也需要持续刷新IMU/姿态，否则打印信息会定格在进入pause前的旧值
 		step();

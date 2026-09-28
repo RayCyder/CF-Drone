@@ -14,7 +14,7 @@ Rate telemetryFast(BOARD_MAVLINK_TELEM_FAST_HZ);  // 遥测频率：C3=5Hz（降
 bool mavlinkConnected = false;
 String mavlinkPrintBuffer;
 
-extern float controlTime;
+extern double controlTime;
 extern float motors[4];
 extern bool requestArm();
 extern void disarm();

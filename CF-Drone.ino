@@ -16,7 +16,7 @@
 #define WIFI_ENABLED    BOARD_WIFI_ENABLED
 #define WEB_RC_ENABLED  BOARD_WEB_RC_ENABLED
 
-float t = NAN; // 当前步进时间，单位：秒
+double t = NAN; // 当前步进时间，单位：秒
 float dt; // 与上一步进的时间差，单位：秒
 float controlRoll, controlPitch, controlYaw, controlThrottle; // 飞手输入指令，范围 [-1, 1]
 float controlMode = NAN;

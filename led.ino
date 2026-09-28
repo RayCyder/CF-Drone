@@ -12,8 +12,8 @@
 
 // ---- 外部依赖声明 ----
 extern bool armed;
-extern float t;
-extern float controlTime;
+extern double t;
+extern double controlTime;
 extern float rcLossTimeout;
 extern float thrustTarget;    // control.ino
 extern float batteryVoltage;  // battery.ino

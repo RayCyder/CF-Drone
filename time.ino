@@ -1,27 +1,28 @@
-// 时间相关函数
-// Time related functions
+// Keep absolute time monotonic across the Arduino 32-bit micros() wrap.
+#include <esp_timer.h>
 
-float loopRate; // Hz
+float loopRate;
 
 void step() {
-	float now = micros() / 1000000.0;
-	dt = now - t;
-	t = now;
-
-	if (!(dt > 0)) {
-		dt = 0; // assume dt to be zero on first step and on reset
-	}
-
-	computeLoopRate();
+    static int64_t previousUs = 0;
+    static bool initialized = false;
+    const int64_t nowUs = esp_timer_get_time();
+    const int64_t elapsedUs = initialized ? nowUs - previousUs : 0;
+    previousUs = nowUs;
+    initialized = true;
+    dt = elapsedUs > 0 ? (float)elapsedUs * 1e-6f : 0.0f;
+    t = (double)nowUs * 1e-6;
+    computeLoopRate();
 }
 
 void computeLoopRate() {
-	static float windowStart = 0;
-	static uint32_t rate = 0;
-	rate++;
-	if (t - windowStart >= 1) { // 1 second window
-		loopRate = rate;
-		windowStart = t;
-		rate = 0;
-	}
+    static double windowStart = 0;
+    static uint32_t count = 0;
+    ++count;
+    const double elapsed = t - windowStart;
+    if (elapsed >= 1.0) {
+        loopRate = (float)(count / elapsed);
+        windowStart = t;
+        count = 0;
+    }
 }
