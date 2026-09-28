@@ -126,7 +126,10 @@ void loop() {
 	recordLoopStage(LOOP_STAGE_SERIAL_INPUT, micros() - stageStarted);
 	stageStarted = micros();
 #if WIFI_ENABLED
-	processMavlink(); // 处理MAVLink通信
+	// The control loop runs at ~1 kHz, but MAVLink control/telemetry is much
+	// slower. Poll at 200 Hz to cap network parsing work per second and jitter.
+	static Rate mavlinkServiceRate(200.0f);
+	if (mavlinkServiceRate) processMavlink(); // 处理MAVLink通信
 #endif
 	recordLoopStage(LOOP_STAGE_MAVLINK, micros() - stageStarted);
 	stageStarted = micros();
