@@ -20,6 +20,10 @@ uint32_t nowMs=1000;
 uint32_t millis(){return nowMs;}
 uint32_t micros(){return nowMs*1000;}
 bool webRCEnabled=false,useWebRC=false;
+bool localSequenceActive=false;
+bool isLocalSequenceRunning(){return localSequenceActive;}
+unsigned localSequenceCancelCount=0;
+void cancelLocalSequenceForManualMode(){++localSequenceCancelCount;localSequenceActive=false;}
 unsigned long webRCLastUpdate=0;
 bool isUsingWebRC(){return webRCEnabled && useWebRC;}
 uint16_t webEdges=0;
@@ -69,6 +73,9 @@ int main(){
     assert(!setFlightMode(ALTHOLD));
     assert(!setFlightMode(AUTO)); // no preflight target stream
     assert(setFlightMode(STAB));
+    localSequenceActive=true; armed=false; mode=STAB; controlThrottle=0; controlYaw=1;
+    interpretControls(); assert(!armed); // generated sequence values are not RC arm gestures
+    assert(setFlightMode(STAB) && !localSequenceActive && localSequenceCancelCount==1);
     AutoAttitudeCommand cmd{Quaternion(),Vector(),.5f,true,false};
     AutoAttitudeCommand invalid=cmd; invalid.attitude=Quaternion(0,0,0,0);
     assert(!submitAutoAttitudeTarget(invalid));

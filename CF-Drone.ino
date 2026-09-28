@@ -12,6 +12,7 @@
 #include "log_transfer.h"
 #include "system_log.h"
 #include "web_rc_input.h"
+#include "open_loop_sequence.h"
 #include <esp_system.h>
 
 // WiFi 和 Web 遥控器开关由 board_config.h 按芯片自动设置：

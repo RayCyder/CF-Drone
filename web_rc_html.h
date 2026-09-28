@@ -260,6 +260,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <div class="status-item"><span class="status-dot" id="status-dot"></span><span id="connection-text">连接中...</span></div>
       <div class="status-item" id="armed-status-item" style="background:rgba(255,51,51,0.15)"><span id="armed-status" style="color:#ff6666">已上锁</span></div>
       <div class="status-item"><span>飞行模式</span><span id="flight-mode">自稳</span></div>
+      <button id="route-takeover-main" class="status-item" style="display:none;background:#167c3a;color:white;border:0" onclick="takeManualControl()">接管摇杆</button>
       <div class="status-item"><span>电池电压</span><span id="battery">-</span></div>
       <div class="status-item"><span>遥控延迟</span><span id="latency">-</span></div>
       <div class="status-item"><span>丢包率</span><span id="packet-loss">0%</span></div>
@@ -327,11 +328,14 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   </section>
   <section id="route-page" class="route-page" aria-hidden="true">
     <div class="route-shell">
-      <div class="diagnostic-top"><h2>开环控制序列</h2><div class="diagnostic-actions"><button onclick="closeRoutePage()">返回遥控器</button></div></div>
-      <p class="route-help">每行依次填写：持续秒数 油门百分比 横滚数值 俯仰数值 偏航数值，字段以空格分隔。三个姿态轴是遥控输入数值（-100 到 100），不是角度。空行和 # 开头的注释行会忽略。上传后由飞控本机逐段执行；序列结束或点“停止序列”会进入固件受控下降流程。无位置/高度反馈，不能保证实际航迹、半径或落点；须连接飞控、由操作者解锁，并处于自稳模式。</p>
+      <div class="diagnostic-top"><h2>开环动作序列</h2><div class="diagnostic-actions"><button onclick="closeRoutePage()">返回遥控器</button></div></div>
+      <p class="route-help">只有加速度计和陀螺仪，无位置、高度或触地反馈。本功能执行定时动作，不能保证航迹或落点。连接断开、执行周期中断、完成或停止时会转入定推力下降；需操作者确认情况后上锁。</p>
+      <p class="route-help">每行：持续秒数（0.1–600） 油门百分比（0–100） 横滚/俯仰/偏航输入（各 -100–100，不是角度）。最多 128 段、合计 30 分钟、正文 4096 字节；空行和 # 注释不执行。</p>
       <textarea id="route-editor" class="route-editor" spellcheck="false" aria-label="开环控制序列"></textarea>
-      <div class="route-page-actions"><button onclick="saveRoute()">保存序列</button><button class="run" onclick="startRoute()">开始发送</button><button class="stop" onclick="stopRoute()">停止序列</button></div>
-      <div class="route-status" id="route-status">序列未运行。开始前需连接、解锁并选择自稳模式；完成或停止后飞控将尝试受控下降。</div>
+      <div class="route-page-actions"><button onclick="saveRoute()">保存到浏览器</button><button id="route-upload" onclick="uploadRoute()">上传并校验</button><button id="route-start" class="run" onclick="startRoute()">启动已上传序列</button><button id="route-stop" class="stop" onclick="stopRoute()">停止并下降</button><button id="route-takeover" onclick="takeManualControl()">接管摇杆</button></div>
+      <p class="route-help">先在上锁且电机停止时上传；启动需要由操作者解锁并选择自稳模式。“停止并下降”保留下降控制，“接管摇杆”明确退出序列并切回手动自稳。</p>
+      <div class="route-status" id="route-message" role="status">当前内容尚未上传；上传不会解锁或启动。</div>
+      <div class="route-status" id="route-status">正在读取飞控状态…</div>
     </div>
   </section>
   <!-- 版权页脚 -->
@@ -378,7 +382,7 @@ let routeTimer = null;
 let flightRouteRunning = false;
 let routeStarting = false;
 let routeHold = false;
-let routeManualOverride = false;
+let routePending='',routeUploadedText=null,routeUploadedRevision=0,routeServerState='empty',routeStatusBusy=false;
 const CONSOLE_BASE_POLL_MS = 500;
 const CONSOLE_CATCHUP_POLL_MS = 80;
 const CONSOLE_PAGE_LIMIT = 20;
@@ -390,7 +394,7 @@ const buttonConfigs = [
   {icon:"🔒",label:"上锁",   color:"#ff3333",desc:"锁定电机"},
   {icon:"🛑",label:"急停",   color:"#ff0055",desc:"紧急停止"},
   {icon:"🛬",label:"迫降",   color:"#ff8c00",desc:"保持水平并进入自动下降；无高度/速度反馈"},
-  {icon:"🔄",label:"切换模式", color:"#00cfff",desc:"自稳→特技→定高 循环切换"},
+  {icon:"🔄",label:"切换模式", color:"#00cfff",desc:"自稳与特技切换；不支持定高"},
   {icon:"🖥",label:"调试",   color:"#4a9eff",desc:"调试控制台"}
 ];
 
@@ -406,97 +410,106 @@ function init() {
   requestAnimationFrame(initKnobPositions);
 }
 
-const defaultRouteText=`3.0 50.0 0.0 0.0 0
-3.0 49.5 11.53 0 0
-3.0 49.0 0 11.53 0
-3.0 48.5 -11.53 0 0
-3.0 48.0 0 -11.53 0
-3.0 47.5 11.14 0 0
-3.0 47.0 0 11.14 0
-3.0 46.5 -11.14 0 0
-3.0 46.0 0 -11.14 0
-3.0 45.5 10.75 0 0
-3.0 45.0 0 10.75 0
-3.0 44.5 -10.75 0 0
-3.0 44.0 0 -10.75 0
-3.0 43.5 10.35 0 0
-3.0 43.0 0 10.35 0
-3.0 42.5 -10.35 0 0
-3.0 42.0 0 -10.35 0
-3.0 41.5 9.96 0 0
-3.0 41.0 0 9.96 0
-3.0 40.5 -9.96 0 0
-3.0 40.0 0.0 0.0 0`;
+const defaultRouteText=`# 每行：持续秒数 油门百分比 横滚输入 俯仰输入 偏航输入
+# 格式示例（注释不会执行）：1.0 0 0 0 0
+# 请填写经机体验证的指令。这里只执行定时动作，不规划空间航线。`;
+function routeMessage(message){document.getElementById('route-message').textContent=message;}
 function parseRouteText(){
-  const points=[];const lines=document.getElementById('route-editor').value.split(/\r?\n/);
+  const text=document.getElementById('route-editor').value;
+  if(new TextEncoder().encode(text).length>4096)throw new Error('序列正文不能超过 4096 字节');
+  const points=[];const lines=text.split(/\r?\n/);
   for(let i=0;i<lines.length;i++){
     const line=lines[i].trim();if(!line||line.startsWith('#'))continue;
     const fields=line.split(/[\s,]+/);
-    if(fields.length!==5||fields.some(v=>v===''||!Number.isFinite(Number(v))))throw new Error(`第 ${i+1} 行需包含 5 个数字`);
+    if(fields.length!==5||fields.some(v=>v===''||!Number.isFinite(Number(v))))throw new Error(`第 ${i+1} 行需包含 5 个有限数字`);
     const [duration,throttle,roll,pitch,yaw]=fields.map(Number);
     if(duration<0.1||duration>600||throttle<0||throttle>100||Math.abs(roll)>100||Math.abs(pitch)>100||Math.abs(yaw)>100)throw new Error(`第 ${i+1} 行参数超出范围`);
     points.push({duration,throttle,roll,pitch,yaw});
   }
-  if(!points.length)throw new Error('请至少填写一个有效航段');
-  if(points.reduce((sum,p)=>sum+p.duration,0)>1800)throw new Error('序列总时长不能超过 30 分钟');
+  if(!points.length)throw new Error('请至少填写一个有效动作段');
+  if(points.length>128)throw new Error('最多支持 128 个动作段');
+  if(points.reduce((sum,p)=>sum+Math.round(p.duration*1000),0)>1800000)throw new Error('序列总时长不能超过 30 分钟');
   return points;
 }
+function updateRouteControls(){
+  const busy=routeStarting||!!routePending;
+  const active=flightRouteRunning||routeHold||routeServerState==='start_pending';
+  const editor=document.getElementById('route-editor');
+  editor.disabled=busy||active;
+  document.getElementById('route-upload').disabled=busy||active||currentArmed||!connectionOk;
+  document.getElementById('route-start').disabled=busy||active||!currentArmed||!connectionOk||currentFlightMode!==2||routeUploadedText!==editor.value||!routeUploadedRevision||routeServerState!=='ready';
+  document.getElementById('route-stop').disabled=busy||!active;
+  document.getElementById('route-takeover').disabled=busy||!active||!connectionOk;
+  document.getElementById('route-takeover-main').style.display=active?'':'none';
+  document.getElementById('route-takeover-main').disabled=busy||!connectionOk;
+}
 function saveRoute(){
-  if(flightRouteRunning){showToast('执行中不能保存');return;}
-  try{localStorage.setItem('cfDroneOpenLoopSequence',document.getElementById('route-editor').value);document.getElementById('route-status').textContent='序列已保存在此浏览器。';}
-  catch(_){showToast('浏览器未允许本地保存');}
+  try{localStorage.setItem('cfDroneOpenLoopSequence',document.getElementById('route-editor').value);routeMessage('已保存到此浏览器；尚未上传到飞控。');}
+  catch(_){routeMessage('浏览器未允许本地保存，编辑内容仍保留在页面。');}
 }
 function loadRoute(){
-  let value='';try{value=localStorage.getItem('cfDroneOpenLoopSequence')||'';}catch(_){ }
-  if(!value){
-    try{const old=JSON.parse(localStorage.getItem('cfDroneOpenLoopRoute')||'[]');if(Array.isArray(old)&&old.length)value=old.map(p=>[p.duration,p.throttle,p.roll,p.pitch,p.yaw].join(' ')).join('\n');}catch(_){ }
-  }
-  document.getElementById('route-editor').value=value||defaultRouteText;
+  let value='';try{value=localStorage.getItem('cfDroneOpenLoopSequence')||'';}catch(_){}
+  if(!value){try{const old=JSON.parse(localStorage.getItem('cfDroneOpenLoopRoute')||'[]');if(Array.isArray(old)&&old.length)value=old.map(p=>[p.duration,p.throttle,p.roll,p.pitch,p.yaw].join(' ')).join('\n');}catch(_){}}
+  const editor=document.getElementById('route-editor');editor.value=value||defaultRouteText;
+  editor.addEventListener('input',()=>{routeUploadedText=null;routeUploadedRevision=0;routeMessage('内容已修改，请在上锁状态重新上传校验。');updateRouteControls();});
+  updateRouteControls();
 }
-function openRoutePage(){document.getElementById('route-page').style.display='block';document.getElementById('route-page').setAttribute('aria-hidden','false');}
+function openRoutePage(){document.getElementById('route-page').style.display='block';document.getElementById('route-page').setAttribute('aria-hidden','false');refreshRouteStatus();startRouteMonitor();}
 function closeRoutePage(){document.getElementById('route-page').style.display='none';document.getElementById('route-page').setAttribute('aria-hidden','true');}
-function startRoute(){
-  if(flightRouteRunning||routeStarting)return;
-  if(!connectionOk||!currentArmed){showToast('请先连接飞控并由操作者解锁');return;}
-  if(currentFlightMode!==2){showToast('请先切换到自稳模式');return;}
-  let points;try{points=parseRouteText();}catch(error){document.getElementById('route-status').textContent=error.message;return;}
-  routeStarting=true;
-  const editor=document.getElementById('route-editor');
-  document.getElementById('route-status').textContent='正在上传并校验序列…';
-  fetch('/route/upload',{method:'POST',headers:{'Content-Type':'text/plain'},body:editor.value})
-    .then(async response=>{const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'序列上传失败');return fetch('/route/start',{method:'POST'});})
-    .then(async response=>{const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'飞控未能启动序列');flightRouteRunning=true;routeHold=true;routeManualOverride=false;startRouteMonitor();return refreshRouteStatus();})
-    .catch(error=>{document.getElementById('route-status').textContent=error.message;})
-    .finally(()=>{routeStarting=false;});
-}
-function startRouteMonitor(){
-  if(routeTimer)return;
-  routeTimer=setInterval(refreshRouteStatus,500);
-}
-async function refreshRouteStatus(){
+async function uploadRoute(){
+  if(routeStarting||routePending)return;
+  if(currentArmed||!connectionOk){routeMessage('上传前请连接飞控并保持上锁、电机停止。');return;}
+  try{parseRouteText();}catch(error){routeMessage(error.message);return;}
+  const text=document.getElementById('route-editor').value;
+  routeStarting=true;updateRouteControls();routeMessage('正在上传并校验；不会解锁或启动。');
   try{
-    const response=await fetch('/route/status',{cache:'no-store'});if(!response.ok)return null;
-    const data=await response.json();
-    if(data.arm!==undefined)currentArmed=!!data.arm;
-    if(data.mode!==undefined){currentFlightMode=data.mode;document.getElementById('flight-mode').textContent=['直控','特技','自稳','定高','自动'][data.mode]||'未知';}
-    const status=document.getElementById('route-status');
-    if(data.state==='running'){
-      flightRouteRunning=true;routeHold=!routeManualOverride;
-      status.textContent=`飞控本机执行中：第 ${data.step}/${data.count} 段，共 ${Number(data.duration_s).toFixed(1)} 秒`;
-    }else if(data.state==='landing'){
-      flightRouteRunning=false;routeHold=!routeManualOverride;
-      status.textContent='序列已结束，飞控正在按受控下降流程着陆。';
-    }else if(data.state==='complete'){
-      flightRouteRunning=false;routeHold=!routeManualOverride;
-      status.textContent='下降流程结束，飞控已上锁；触碰摇杆可恢复手动控制。';
-    }else if(data.state==='aborted'){
-      flightRouteRunning=false;routeHold=!routeManualOverride;
-      status.textContent='序列已中止；触碰摇杆可接管控制。';
-    }
-    if(['complete','aborted','ready','empty'].includes(data.state)&&routeTimer){clearInterval(routeTimer);routeTimer=null;}
-    return data;
-  }catch(_){ return null; }
+    const response=await fetch('/route/upload',{method:'POST',headers:{'Content-Type':'text/plain'},body:text});
+    const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'序列上传失败');
+    routeUploadedText=text;routeUploadedRevision=result.plan_revision;
+    routeMessage('已上传校验。启动前请返回遥控器，由操作者解锁并选择自稳模式。');
+    await refreshRouteStatus();
+  }catch(error){routeMessage('上传未完成：'+error.message);}
+  finally{routeStarting=false;updateRouteControls();}
 }
+function startRoute(){
+  if(routeStarting||routePending)return;
+  if(!currentArmed||currentFlightMode!==2||!connectionOk){routeMessage('启动需要连接飞控、由操作者解锁，并处于自稳模式。');return;}
+  if(!routeUploadedRevision||routeUploadedText!==document.getElementById('route-editor').value){routeMessage('请先在上锁状态上传并校验当前内容。');return;}
+  requestRouteAction('start');
+}
+async function requestRouteAction(action){
+  if(routePending)return;
+  routePending=action;updateRouteControls();
+  routeMessage(action==='start'?'正在请求启动，等待飞控确认…':action==='stop'?'正在请求停止并进入定推力下降…':'正在请求手动接管，等待飞控确认…');
+  try{
+    const options={method:'POST'};
+    if(action==='start'){options.headers={'Content-Type':'application/x-www-form-urlencoded'};options.body='revision='+encodeURIComponent(routeUploadedRevision);}
+    const response=await fetch('/route/'+action,options),result=await response.json();
+    if(!response.ok||!result.ok)throw new Error(result.error||'飞控拒绝请求');
+    startRouteMonitor();await refreshRouteStatus();
+  }catch(error){routeMessage('请求未确认：'+error.message+'；请以飞控状态为准。');}
+  finally{routePending='';updateRouteControls();}
+}
+function startRouteMonitor(){if(!routeTimer)routeTimer=setInterval(refreshRouteStatus,500);}
+async function refreshRouteStatus(){
+  if(routeStatusBusy)return null;
+  routeStatusBusy=true;
+  try{
+    const response=await fetch('/route/status',{cache:'no-store'});if(!response.ok)throw new Error('状态不可用');
+    const data=await response.json();routeServerState=data.state;
+    if(data.arm!==undefined)currentArmed=!!data.arm;
+    if(data.mode!==undefined){currentFlightMode=data.mode;document.getElementById('flight-mode').textContent=['直控','特技','自稳','不支持','自动'][data.mode]||'未知';}
+    flightRouteRunning=data.state==='running'||data.state==='start_pending';routeHold=flightRouteRunning||data.state==='landing';
+    if(routeUploadedRevision&&data.plan_revision!==routeUploadedRevision){routeUploadedRevision=0;routeUploadedText=null;routeMessage('飞控中的序列已改变，请上锁后重新上传当前内容。');}
+    const messages={empty:'尚无已上传的动作序列。',ready:`已校验 ${data.count} 段，共 ${Number(data.duration_s).toFixed(1)} 秒；等待操作者启动。`,start_pending:'正在确认启动条件…',running:`飞控本机执行中：第 ${data.step}/${data.count} 段，共 ${Number(data.duration_s).toFixed(1)} 秒。`,landing:'已停止动作序列，正在保持定推力下降；无法检测触地，需操作者上锁。',complete:'序列已停止，飞控已上锁；这不代表传感器确认着陆。',aborted:'序列已退出，控制已交还当前手动模式。'};
+    document.getElementById('route-status').textContent=(messages[data.state]||'状态未知')+(data.pending?' 正在处理请求…':'')+(data.reason?' 原因：'+routeReason(data.reason):'');
+    if(!routeHold&&document.getElementById('route-page').getAttribute('aria-hidden')==='true'&&routeTimer){clearInterval(routeTimer);routeTimer=null;}
+    updateRouteControls();return data;
+  }catch(_){document.getElementById('route-status').textContent='无法确认飞控状态；已上传序列可能仍在本机执行。请恢复连接。';return null;}
+  finally{routeStatusBusy=false;}
+}
+function routeReason(reason){return ({sequence_complete:'动作段已执行完毕',stop_requested:'操作者停止',stop_disarmed:'停止时已上锁',takeover_requested:'手动接管',manual_takeover:'切换到手动模式',disarmed:'已上锁',mode_changed:'切换模式',scheduler_gap:'执行周期中断，已转下降',multiple_expired_segments:'错过多个动作段，已转下降',landing_interrupted:'下降流程被接管',revision_mismatch:'上传批次已变化',requires_armed_stab:'启动条件不满足',web_rc_link_required:'启动时遥控连接已超时'})[reason]||reason;}
+
 async function confirmArmButton(buttonIndex, warning){
   const expectedArmed=buttonIndex===0;
   let actual=null;
@@ -512,17 +525,8 @@ async function confirmArmButton(buttonIndex, warning){
   else if(actual===expectedArmed)showToast(expectedArmed?'✅ 已解锁':'🔒 已上锁');
   else showToast(expectedArmed?'❌ 飞控仍显示上锁，请查看自检状态':'⚠️ 未能确认上锁状态');
 }
-function stopRoute(manualTakeover=false){
-  routeManualOverride=manualTakeover;
-  flightRouteRunning=false;routeHold=!manualTakeover;
-  fetch('/route/stop',{method:'POST'}).catch(()=>{});
-  document.getElementById('route-status').textContent=manualTakeover?'正在中止序列，交还摇杆控制…':'正在停止序列并进入受控下降…';
-  startRouteMonitor();
-}
-function takeManualControl(){
-  if(flightRouteRunning){stopRoute(true);return;}
-  if(routeHold){routeManualOverride=true;routeHold=false;}
-}
+function stopRoute(){requestRouteAction('stop');}
+function takeManualControl(){if(flightRouteRunning||routeHold)requestRouteAction('takeover');}
 
 function initKnobPositions() {
   // 根据初始 rawY 将旋鈕定位到正确位置（左摇杆油门在底部）
@@ -652,7 +656,7 @@ function updateDisplayAll() {
 
 /*======================== Pointer Events 处理 ========================*/
 function handlePointerStart(e, side) {
-  takeManualControl();
+  if(flightRouteRunning||routeHold){showToast('请先点击接管摇杆，再操作摇杆');return;}
   touches.set(e.pointerId, side);
   document.getElementById(`joystick-${side}`).classList.add('active');
   updateJoystickPosition(side, e.clientX, e.clientY);
@@ -668,7 +672,7 @@ function handlePointerEnd(e, side) {
   const knob     = document.getElementById(`knob-${side}`);
   const joystick = document.getElementById(`joystick-${side}`);
   joystick.classList.remove('active');
-  // 计算归位目标：左摇杆Y轴非ALTHOLD时归底，其他归中
+  // 油门归底，其余轴归中（六轴硬件无定高模式）
   const targetRawY = (side === 'left' && currentFlightMode !== 3) ? -100 : 0;
   const radius = joystick.getBoundingClientRect().width / 2 - 10;
   const targetDy = -targetRawY / 100 * radius;
@@ -704,14 +708,14 @@ function sendToESP(url, data) {
     .then(resp => {
       consecutiveFails = 0;
       updateConnectionStatus(true);
-      const names = ['直控','特技','自稳','定高','自动'];
+      const names = ['直控','特技','自稳','不支持','自动'];
 
       // 模式切换结果
       if (resp.m !== undefined && resp.rt !== 2) {
       if (resp.m !== currentFlightMode) {
         if (!resp.warn) showToast('✅ 已切换：' + (names[resp.m] || '未知'));
         const leftTouched = [...touches.values()].includes('left');
-        if (!leftTouched && !flightRouteRunning && !routeHold) resetLeftStick(resp.m === 3 ? 0 : -100);
+        if (!leftTouched && !flightRouteRunning && !routeHold) resetLeftStick(-100);
         }
         currentFlightMode = resp.m;
         document.getElementById('flight-mode').textContent = names[resp.m] || '自稳';
@@ -727,6 +731,7 @@ function sendToESP(url, data) {
         el.style.color = resp.arm ? '#00ff88' : '#ff6666';
       }
 
+      updateRouteControls();
       // 按钮松开确认 toast（rt=2, bs=0）
       if (resp.rt === 2 && resp.bs === 0) {
         if (resp.bi >= 0 && resp.bi <= 2) {
@@ -878,11 +883,10 @@ function resetLeftStick(targetRawY) {
 function handleButton(idx) {
   if (idx === 5) { toggleConsole(); return; }
   if (idx === 4) {
-    // 模式循环：自稳(2)→特技(1)→定高(3)→自稳
+    // 六轴模式循环：自稳(2) ↔ 特技(1)
     // 不在点击时弹 toast，结果完全依赖后端 resp.m 确认后触发
     let nextBit;
     if (currentFlightMode === 2)      nextBit = 7; // STAB→ACRO
-    else if (currentFlightMode === 1) nextBit = 8; // ACRO→ALTHOLD
     else                              nextBit = 6; // 其他→STAB
     sendButtonData(nextBit, 1);
     setTimeout(() => sendButtonData(nextBit, 0), 100);

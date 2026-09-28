@@ -11,6 +11,8 @@
 #include "diagnostics.h"
 #include "system_log.h"
 #include "web_rc_input.h"
+#include "open_loop_sequence.h"
+#include "control.h"
 #include "flight_log.h"
 
 // 飞控统一控制变量（供协议适配层写入，与 SBUS/MAVLink 共用）
@@ -46,25 +48,37 @@ uint16_t webRCButtons    = 0;       // 16位按钮位掩码，bit0=解锁 bit1=�
 static uint16_t webRCButtonPressEdges = 0;
 unsigned long webRCLastUpdate = 0;  // 最后一次收包的 millis() 时间戳
 
-// Browser-uploaded open-loop sequence. The bounded RAM queue lets the flight
-// controller execute it locally without a continuous browser connection.
-#define OPEN_LOOP_MAX_STEPS 128
-#define OPEN_LOOP_MAX_BODY  4096
-static OpenLoopStep *openLoopSteps = nullptr;
+// Browser-uploaded open-loop sequence. Fixed double buffers avoid heap churn and
+// keep route execution local to the flight loop after upload.
+static OpenLoopPackedStep openLoopBuffers[2][OPEN_LOOP_MAX_STEPS];
 static portMUX_TYPE openLoopMux = portMUX_INITIALIZER_UNLOCKED;
+static uint8_t openLoopActiveBuffer = 0;
 static uint16_t openLoopCount = 0;
 static uint16_t openLoopIndex = 0;
-static unsigned long openLoopStepStarted = 0;
-static bool openLoopRunning = false;
+static uint32_t openLoopTotalMs = 0;
+static uint32_t openLoopRevision = 0;
+static uint32_t openLoopStartMs = 0;
+static uint32_t openLoopCurrentDeadlineMs = 0;
+static uint32_t openLoopLastSchedulerMs = 0;
+static OpenLoopControls openLoopAppliedControls = {0, 0, 0, 0};
 static bool openLoopLandingStarted = false;
-static uint8_t openLoopState = 0; // 0=empty, 1=ready, 2=running, 3=landing, 4=complete, 5=aborted
-static float openLoopTotalSeconds = 0.0f;
+static bool openLoopStartRequested = false;
+static bool openLoopStopRequested = false;
+static bool openLoopTakeoverRequested = false;
+static uint32_t openLoopRequestedRevision = 0;
+static bool openLoopUploadInProgress = false;
+static uint8_t openLoopState = OPEN_LOOP_STATE_EMPTY;
+static const char *openLoopReason = "empty";
 
 extern int mode;
 extern const int STAB, AUTO;
 extern bool armed;
 extern bool motorsActive();
 extern void descend();
+extern bool isControlledLandingActive();
+extern float webRCThrottleScale, webRCStickScale, webRCYawScale;
+extern float stickDeadzone, throttleDeadzone;
+extern WebServer webRCServer;
 
 #define WEB_LOG_CSV_COLUMNS_CAPACITY 40
 #define WEB_LOG_CSV_ROW_CAPACITY 1024
@@ -87,116 +101,183 @@ static bool appendCsvFloat(char *line, size_t capacity, int &used, float value, 
     return true;
 }
 
-static void skipRouteSeparators(char *&cursor) {
-    while (*cursor && (isspace((unsigned char)*cursor) || *cursor == ',')) cursor++;
+static void copyOpenLoopStep(uint8_t activeBuffer, uint16_t index, OpenLoopPackedStep &step) {
+    step = openLoopBuffers[activeBuffer][index];
 }
 
-static bool parseOpenLoopLine(char *line, OpenLoopStep &step) {
-    char *cursor = line;
-    skipRouteSeparators(cursor);
-    if (!*cursor || *cursor == '#') return false;
-
-    float values[5];
-    for (int i = 0; i < 5; i++) {
-        skipRouteSeparators(cursor);
-        if (!*cursor) return false;
-        char *end = nullptr;
-        values[i] = strtof(cursor, &end);
-        if (end == cursor || isnan(values[i]) || isinf(values[i])) return false;
-        cursor = end;
-        if (*cursor && !isspace((unsigned char)*cursor) && *cursor != ',') return false;
-    }
-    skipRouteSeparators(cursor);
-    if (*cursor) return false;
-    if (values[0] < 0.1f || values[0] > 600.0f || values[1] < 0.0f || values[1] > 100.0f ||
-        fabsf(values[2]) > 100.0f || fabsf(values[3]) > 100.0f || fabsf(values[4]) > 100.0f) return false;
-    step = {values[0], values[1], values[2], values[3], values[4]};
-    return true;
+bool isLocalSequenceRunning() {
+    portENTER_CRITICAL(&openLoopMux);
+    const bool running = openLoopState == OPEN_LOOP_STATE_RUNNING || openLoopState == OPEN_LOOP_STATE_START_PENDING;
+    portEXIT_CRITICAL(&openLoopMux);
+    return running;
 }
 
-static bool parseOpenLoopSequence(const String &body, OpenLoopStep *staging, uint16_t &count, float &duration) {
-    if (body.isEmpty() || body.length() > OPEN_LOOP_MAX_BODY) return false;
-    count = 0;
-    duration = 0.0f;
-    char line[128];
-    size_t lineLength = 0;
-    const char *text = body.c_str();
-    for (size_t i = 0; i <= body.length(); i++) {
-        const char c = i == body.length() ? '\n' : text[i];
-        if (c == '\n') {
-            line[lineLength] = '\0';
-            char *trim = line;
-            while (isspace((unsigned char)*trim)) trim++;
-            if (*trim && *trim != '#') {
-                if (count >= OPEN_LOOP_MAX_STEPS || !parseOpenLoopLine(trim, staging[count])) return false;
-                duration += staging[count].duration;
-                if (duration > 1800.0f) return false;
-                count++;
-            }
-            lineLength = 0;
-        } else {
-            if (lineLength >= sizeof(line) - 1) return false;
-            line[lineLength++] = c;
-        }
-    }
-    return count > 0;
+static void setOpenLoopReason(const char *reason) {
+    openLoopReason = reason ? reason : "unknown";
 }
 
-static const char *openLoopStateName(uint8_t state) {
-    switch (state) {
-        case 1: return "ready";
-        case 2: return "running";
-        case 3: return "landing";
-        case 4: return "complete";
-        case 5: return "aborted";
-        default: return "empty";
+void cancelLocalSequenceForManualMode() {
+    portENTER_CRITICAL(&openLoopMux);
+    if (openLoopState == OPEN_LOOP_STATE_RUNNING || openLoopState == OPEN_LOOP_STATE_START_PENDING ||
+        openLoopState == OPEN_LOOP_STATE_LANDING) {
+        openLoopState = OPEN_LOOP_STATE_ABORTED;
+        openLoopStartRequested = false;
+        openLoopStopRequested = false;
+        openLoopTakeoverRequested = false;
+        openLoopLandingStarted = false;
+        setOpenLoopReason("manual_takeover");
     }
+    portEXIT_CRITICAL(&openLoopMux);
+}
+
+static void applyOpenLoopControls(const OpenLoopControls &controls) {
+    controlRoll = openLoopClampFloat(controls.roll, -1.0f, 1.0f);
+    controlPitch = openLoopClampFloat(controls.pitch, -1.0f, 1.0f);
+    controlYaw = openLoopClampFloat(controls.yaw, -1.0f, 1.0f);
+    controlThrottle = openLoopClampFloat(controls.throttle, 0.0f, 1.0f);
+    controlMode = NAN;
+    setCurrentControlSource(CONTROL_SOURCE_LOCAL_SEQUENCE);
+}
+
+static void startOpenLoopNow(uint32_t now) {
+    openLoopIndex = 0;
+    openLoopStartMs = now;
+    openLoopLastSchedulerMs = now;
+    openLoopLandingStarted = false;
+    openLoopAppliedControls = {controlRoll, controlPitch, controlYaw, controlThrottle};
+    openLoopCurrentDeadlineMs = now + openLoopBuffers[openLoopActiveBuffer][0].durationMs;
+    openLoopState = OPEN_LOOP_STATE_RUNNING;
+    setOpenLoopReason("running");
+}
+
+static void enterOpenLoopLandingLocked(const char *reason) {
+    openLoopState = OPEN_LOOP_STATE_LANDING;
+    openLoopStartRequested = false;
+    openLoopStopRequested = false;
+    openLoopTakeoverRequested = false;
+    openLoopLandingStarted = false;
+    setOpenLoopReason(reason);
 }
 
 static void stepOpenLoopSequence() {
-    bool applyStep = false;
     bool beginLanding = false;
-    OpenLoopStep step;
-    const unsigned long now = millis();
+    bool requestManualStab = false;
+    bool applyStep = false;
+    OpenLoopPackedStep step;
+    uint32_t elapsedForSlew = 0;
+    const uint32_t now = millis();
 
     portENTER_CRITICAL(&openLoopMux);
-    if (openLoopState == 3) {
+    if (openLoopTakeoverRequested) {
+        openLoopTakeoverRequested = false;
+        openLoopStartRequested = false;
+        openLoopStopRequested = false;
+        openLoopState = OPEN_LOOP_STATE_ABORTED;
+        openLoopLandingStarted = false;
+        setOpenLoopReason("takeover_requested");
+        requestManualStab = true;
+    } else if (openLoopStopRequested) {
+        openLoopStopRequested = false;
+        if (armed) enterOpenLoopLandingLocked("stop_requested");
+        else {
+            openLoopState = OPEN_LOOP_STATE_COMPLETE;
+            setOpenLoopReason("stop_disarmed");
+        }
+    }
+
+    if (openLoopStartRequested && openLoopState == OPEN_LOOP_STATE_START_PENDING) {
+        if (openLoopRequestedRevision != openLoopRevision) {
+            openLoopState = OPEN_LOOP_STATE_READY;
+            openLoopStartRequested = false;
+            setOpenLoopReason("revision_mismatch");
+        } else if (openLoopCount == 0) {
+            openLoopState = OPEN_LOOP_STATE_EMPTY;
+            openLoopStartRequested = false;
+            setOpenLoopReason("no_uploaded_sequence");
+        } else if (!isWebRCEnabled()) {
+            openLoopState = OPEN_LOOP_STATE_READY;
+            openLoopStartRequested = false;
+            setOpenLoopReason("web_rc_link_required");
+        } else if (!armed || mode != STAB) {
+            openLoopState = OPEN_LOOP_STATE_READY;
+            openLoopStartRequested = false;
+            setOpenLoopReason("requires_armed_stab");
+        } else {
+            openLoopStartRequested = false;
+            startOpenLoopNow(now);
+        }
+    }
+
+    if (openLoopState == OPEN_LOOP_STATE_LANDING) {
         if (!openLoopLandingStarted) {
             openLoopLandingStarted = true;
             beginLanding = true;
         } else if (!armed) {
-            openLoopState = 4;
-        } else if (mode != AUTO) {
-            openLoopState = 5;
+            openLoopState = OPEN_LOOP_STATE_COMPLETE;
+            setOpenLoopReason("disarmed");
+        } else if (!isControlledLandingActive()) {
+            openLoopState = OPEN_LOOP_STATE_ABORTED;
+            setOpenLoopReason("landing_interrupted");
         }
-    } else if (openLoopRunning) {
-        if (!armed || mode != STAB) {
-            openLoopRunning = false;
-            openLoopState = armed ? 5 : 4;
+    } else if (openLoopState == OPEN_LOOP_STATE_RUNNING) {
+        const uint32_t dtMs = now - openLoopLastSchedulerMs;
+        if (!armed) {
+            openLoopState = OPEN_LOOP_STATE_COMPLETE;
+            setOpenLoopReason("disarmed");
+        } else if (mode != STAB) {
+            openLoopState = OPEN_LOOP_STATE_ABORTED;
+            setOpenLoopReason("mode_changed");
+        } else if (dtMs > OPEN_LOOP_SCHEDULER_GAP_MS) {
+            enterOpenLoopLandingLocked("scheduler_gap");
+            beginLanding = true;
         } else {
-            if (now - openLoopStepStarted >= (unsigned long)(openLoopSteps[openLoopIndex].duration * 1000.0f)) {
+            if (openLoopElapsed(now, openLoopCurrentDeadlineMs)) {
                 openLoopIndex++;
                 if (openLoopIndex >= openLoopCount) {
-                    openLoopRunning = false;
-                    openLoopState = 3;
-                    openLoopLandingStarted = true;
+                    enterOpenLoopLandingLocked("sequence_complete");
                     beginLanding = true;
                 } else {
-                    openLoopStepStarted = now;
+                    openLoopCurrentDeadlineMs += openLoopBuffers[openLoopActiveBuffer][openLoopIndex].durationMs;
+                    if (openLoopElapsed(now, openLoopCurrentDeadlineMs)) {
+                        enterOpenLoopLandingLocked("multiple_expired_segments");
+                        beginLanding = true;
+                    }
                 }
             }
-            if (openLoopRunning) {
-                step = openLoopSteps[openLoopIndex];
+            if (openLoopState == OPEN_LOOP_STATE_RUNNING) {
+                copyOpenLoopStep(openLoopActiveBuffer, openLoopIndex, step);
+                elapsedForSlew = dtMs;
+                openLoopLastSchedulerMs = now;
                 applyStep = true;
             }
         }
     }
     portEXIT_CRITICAL(&openLoopMux);
 
+    if (requestManualStab) setFlightMode(STAB);
     if (beginLanding) descend();
-    if (applyStep) setWebRCInput(step.roll, step.pitch, step.yaw, step.throttle * 2.0f - 100.0f);
+    if (applyStep) {
+        OpenLoopControls target;
+        openLoopMapStepToControls(step, stickDeadzone, throttleDeadzone,
+                                  webRCStickScale, webRCYawScale, webRCThrottleScale, target);
+        portENTER_CRITICAL(&openLoopMux);
+        openLoopSlewControls(openLoopAppliedControls, target, elapsedForSlew);
+        OpenLoopControls controls = openLoopAppliedControls;
+        portEXIT_CRITICAL(&openLoopMux);
+        applyOpenLoopControls(controls);
+    }
 }
 
+static bool parseRevisionArg(uint32_t &revision) {
+    if (!webRCServer.hasArg("revision")) return false;
+    const String text = webRCServer.arg("revision");
+    if (text.isEmpty() || text.length() > 10) return false;
+    char *end = nullptr;
+    const unsigned long value = strtoul(text.c_str(), &end, 10);
+    if (end == text.c_str() || *end != '\0' || value == 0 || value > UINT32_MAX) return false;
+    revision = (uint32_t)value;
+    return true;
+}
 // ==================== 灵敏度缩放 ====================
 // 最终输出 = 处理后角度 × scale / STICK_MAX，结果写入 control* ([-1,1])
 // 减小 scale → 飞机响应更柔和；增大 → 更灵敏
@@ -420,12 +501,14 @@ void setWebRCInput(float roll, float pitch, float yaw, float throttle) {
     portEXIT_CRITICAL(&webRCStateMux);
 
     // 写入统一控制变量（与 SBUS/MAVLink 同路径）
-    controlRoll     = constrain(pRoll  * webRCStickScale / STICK_MAX, -1.0f, 1.0f);
-    controlPitch    = constrain(pPitch * webRCStickScale / STICK_MAX, -1.0f, 1.0f);
-    controlYaw      = constrain(pYaw   * webRCYawScale   / STICK_MAX, -1.0f, 1.0f);
-    controlThrottle = pThrottle / THROTTLE_MAX;
-    controlMode     = NAN;
-    controlTime     = t;
+    if (!isLocalSequenceRunning()) {
+        controlRoll     = constrain(pRoll  * webRCStickScale / STICK_MAX, -1.0f, 1.0f);
+        controlPitch    = constrain(pPitch * webRCStickScale / STICK_MAX, -1.0f, 1.0f);
+        controlYaw      = constrain(pYaw   * webRCYawScale   / STICK_MAX, -1.0f, 1.0f);
+        controlThrottle = pThrottle / THROTTLE_MAX;
+        controlMode     = NAN;
+        controlTime     = t;
+    }
 
     static float lastPrintedThrottle = -1.0f;
     if (fabsf(pThrottle - lastPrintedThrottle) > 5.0f) {
@@ -734,88 +817,125 @@ void setupWebRC() {
     webRCServer.on("/web_rc/heartbeat", HTTP_POST, handleWebRCRequest);
 
     webRCServer.on("/route/upload", HTTP_POST, []() {
-        uint16_t count = 0;
-        float duration = 0.0f;
         if (!webRCServer.hasArg("plain")) {
             webRCServer.send(400, "application/json", "{\"ok\":0,\"error\":\"missing sequence\"}");
             return;
         }
-        const String body = webRCServer.arg("plain");
-        OpenLoopStep *staging = (OpenLoopStep *)malloc(sizeof(OpenLoopStep) * OPEN_LOOP_MAX_STEPS);
-        if (!staging) {
-            webRCServer.send(503, "application/json", "{\"ok\":0,\"error\":\"out of memory\"}");
+        if (webRCServer.arg("plain").length() > OPEN_LOOP_MAX_BODY) {
+            webRCServer.send(413, "application/json", "{\"ok\":0,\"error\":\"body_too_large\"}");
             return;
         }
-        if (!parseOpenLoopSequence(body, staging, count, duration)) {
-            free(staging);
-            webRCServer.send(400, "application/json", "{\"ok\":0,\"error\":\"invalid sequence: 5 numeric fields per row; max 128 rows and 30 minutes\"}");
-            return;
-        }
+        uint8_t stagingIndex;
         portENTER_CRITICAL(&openLoopMux);
-        if (openLoopState == 2 || openLoopState == 3) {
-            portEXIT_CRITICAL(&openLoopMux);
-            free(staging);
+        const bool busy = openLoopUploadInProgress || openLoopState == OPEN_LOOP_STATE_RUNNING ||
+            openLoopState == OPEN_LOOP_STATE_START_PENDING || openLoopState == OPEN_LOOP_STATE_LANDING;
+        if (!busy) openLoopUploadInProgress = true;
+        stagingIndex = openLoopActiveBuffer ^ 1U;
+        portEXIT_CRITICAL(&openLoopMux);
+        if (busy) {
             webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"route busy\"}");
             return;
         }
-        OpenLoopStep *previousSteps = openLoopSteps;
-        openLoopSteps = staging;
-        staging = nullptr;
-        openLoopCount = count;
+        const String body = webRCServer.arg("plain");
+        const OpenLoopParseResult parsed = parseOpenLoopSequenceText(
+            body.c_str(), body.length(), openLoopBuffers[stagingIndex], OPEN_LOOP_MAX_STEPS);
+        if (!parsed.ok || armed || motorsActive()) {
+            portENTER_CRITICAL(&openLoopMux);
+            openLoopUploadInProgress = false;
+            portEXIT_CRITICAL(&openLoopMux);
+            const int status = (!parsed.ok) ? 400 : 409;
+            char response[128];
+            snprintf(response, sizeof(response), "{\"ok\":0,\"error\":\"%s\"}",
+                !parsed.ok ? parsed.reason : "upload_requires_disarmed_motors_stopped");
+            webRCServer.send(status, "application/json", response);
+            return;
+        }
+        uint32_t revision;
+        portENTER_CRITICAL(&openLoopMux);
+        openLoopActiveBuffer = stagingIndex;
+        openLoopCount = parsed.count;
+        openLoopTotalMs = parsed.totalMs;
         openLoopIndex = 0;
-        openLoopTotalSeconds = duration;
-        openLoopRunning = false;
-        openLoopLandingStarted = false;
-        openLoopState = 1;
+        openLoopRevision++;
+        if (openLoopRevision == 0) openLoopRevision = 1;
+        revision = openLoopRevision;
+        openLoopState = OPEN_LOOP_STATE_READY;
+        openLoopStartRequested = false;
+        openLoopStopRequested = false;
+        openLoopTakeoverRequested = false;
+        openLoopUploadInProgress = false;
+        setOpenLoopReason("uploaded");
         portEXIT_CRITICAL(&openLoopMux);
-        free(previousSteps);
-        webRCServer.send(200, "application/json", "{\"ok\":1,\"state\":\"ready\"}");
+        char response[96];
+        snprintf(response, sizeof(response), "{\"ok\":1,\"state\":\"ready\",\"plan_revision\":%lu}", (unsigned long)revision);
+        webRCServer.send(200, "application/json", response);
     });
     webRCServer.on("/route/start", HTTP_POST, []() {
-        portENTER_CRITICAL(&openLoopMux);
-        const bool hasSequence = openLoopState == 1 && openLoopCount > 0;
-        portEXIT_CRITICAL(&openLoopMux);
-        if (!hasSequence) {
-            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"no uploaded sequence\"}");
-            return;
-        }
-        if (!isWebRCEnabled() || !armed || mode != STAB) {
-            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires connected Web RC, armed, STAB mode\"}");
+        uint32_t revision = 0;
+        if (!parseRevisionArg(revision)) {
+            webRCServer.send(400, "application/json", "{\"ok\":0,\"error\":\"missing_revision\"}");
             return;
         }
         portENTER_CRITICAL(&openLoopMux);
-        openLoopIndex = 0;
-        openLoopStepStarted = millis();
-        openLoopRunning = true;
-        openLoopState = 2;
+        const bool accepted = !openLoopUploadInProgress && openLoopState == OPEN_LOOP_STATE_READY &&
+            openLoopCount > 0 && revision == openLoopRevision && isWebRCEnabled() && armed && mode == STAB;
+        if (accepted) {
+            openLoopRequestedRevision = revision;
+            openLoopStartRequested = true;
+            openLoopState = OPEN_LOOP_STATE_START_PENDING;
+            setOpenLoopReason("start_pending");
+        }
         portEXIT_CRITICAL(&openLoopMux);
-        webRCServer.send(200, "application/json", "{\"ok\":1,\"state\":\"running\"}");
+        if (!accepted) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires_current_plan_connected_armed_stab\"}");
+            return;
+        }
+        webRCServer.send(202, "application/json", "{\"ok\":1,\"state\":\"start_pending\",\"pending\":true}");
     });
     webRCServer.on("/route/stop", HTTP_POST, []() {
         portENTER_CRITICAL(&openLoopMux);
-        if (openLoopRunning) {
-            openLoopRunning = false;
-            openLoopLandingStarted = false;
-            openLoopState = armed ? 3 : 4;
-        }
+        const bool active = openLoopState == OPEN_LOOP_STATE_RUNNING || openLoopState == OPEN_LOOP_STATE_START_PENDING;
+        if (active) openLoopStopRequested = true;
         portEXIT_CRITICAL(&openLoopMux);
-        webRCServer.send(200, "application/json", "{\"ok\":1}");
+        if (!active) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"sequence_not_running\"}");
+            return;
+        }
+        webRCServer.send(202, "application/json", "{\"ok\":1,\"pending\":true}");
+    });
+    webRCServer.on("/route/takeover", HTTP_POST, []() {
+        portENTER_CRITICAL(&openLoopMux);
+        const bool active = openLoopState == OPEN_LOOP_STATE_RUNNING || openLoopState == OPEN_LOOP_STATE_START_PENDING ||
+            openLoopState == OPEN_LOOP_STATE_LANDING;
+        if (active) openLoopTakeoverRequested = true;
+        portEXIT_CRITICAL(&openLoopMux);
+        if (!active) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"sequence_not_active\"}");
+            return;
+        }
+        webRCServer.send(202, "application/json", "{\"ok\":1,\"pending\":true}");
     });
     webRCServer.on("/route/status", HTTP_GET, []() {
         uint8_t state;
         uint16_t count, index;
-        float duration;
+        uint32_t totalMs, revision;
+        const char *reason;
+        bool pending;
         portENTER_CRITICAL(&openLoopMux);
         state = openLoopState;
         count = openLoopCount;
         index = openLoopIndex;
-        duration = openLoopTotalSeconds;
+        totalMs = openLoopTotalMs;
+        revision = openLoopRevision;
+        reason = openLoopReason;
+        pending = openLoopStartRequested || openLoopStopRequested || openLoopTakeoverRequested;
         portEXIT_CRITICAL(&openLoopMux);
-        char response[192];
+        char response[256];
         snprintf(response, sizeof(response),
-            "{\"state\":\"%s\",\"count\":%u,\"step\":%u,\"duration_s\":%.1f,\"arm\":%d,\"mode\":%d}",
+            "{\"state\":\"%s\",\"count\":%u,\"step\":%u,\"duration_s\":%.1f,\"plan_revision\":%lu,\"pending\":%s,\"reason\":\"%s\",\"arm\":%d,\"mode\":%d}",
             openLoopStateName(state), (unsigned)count,
-            (unsigned)(index < count ? index + 1 : count), duration, (int)armed, mode);
+            (unsigned)(index < count ? index + 1 : count), totalMs / 1000.0,
+            (unsigned long)revision, pending ? "true" : "false", reason, (int)armed, mode);
         webRCServer.send(200, "application/json", response);
     });
 

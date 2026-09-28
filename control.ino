@@ -252,6 +252,13 @@ static bool applyAutoTarget() {
 bool setFlightMode(int requestedMode) {
 	if (!isSupportedFlightMode(requestedMode)) return false;
 	if (requestedMode == AUTO && !autoTargetReady()) return false;
+	#if WEB_RC_ENABLED
+	if (requestedMode == STAB || requestedMode == ACRO) {
+		extern bool isLocalSequenceRunning();
+		extern void cancelLocalSequenceForManualMode();
+		if (isLocalSequenceRunning() || isControlledLandingActive()) cancelLocalSequenceForManualMode();
+	}
+	#endif
 
 	if (isControlledLandingActive()) {
 		if (requestedMode == STAB || requestedMode == ACRO) {
@@ -363,6 +370,12 @@ void control() {
 }
 
 void interpretControls() {
+	// A locally uploaded sequence owns the stick targets until an explicit mode
+	// change/takeover or disarm. Do not interpret its generated values as RC gestures.
+#if WEB_RC_ENABLED
+	extern bool isLocalSequenceRunning();
+	if (isLocalSequenceRunning()) return;
+#endif
 	if (motorTestArmInhibit && (controlThrottle >= 0.05f || controlYaw <= 0.95f))
 		motorTestArmInhibit = false;
 	static int lastControlModeSlot = -1;
