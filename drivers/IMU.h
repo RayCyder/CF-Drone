@@ -132,17 +132,25 @@ public:
 
 		if (usingInterrupt) {
 #ifdef ESP32
-			const uint32_t started = millis();
+			const uint32_t startedUs = micros();
+			const uint32_t timeoutUs = timeoutMs * 1000UL;
 			do {
-				const uint32_t elapsed = (uint32_t)(millis() - started);
-				if (elapsed >= timeoutMs) return false;
-				const uint32_t remaining = timeoutMs - elapsed;
+				const uint32_t elapsedUs = (uint32_t)(micros() - startedUs);
+				if (elapsedUs >= timeoutUs) return false;
+				const uint32_t remaining = (timeoutUs - elapsedUs + 999UL) / 1000UL;
 				if (xSemaphoreTake(interruptSemaphore, pdMS_TO_TICKS(remaining)) != pdTRUE) return false;
 				// The ESP32 board has no wired MPU data-ready pin, so the software
-				// timer can fire just before the sensor sets RAW_DATA_RDY. Keep
-				// waiting within the timeout window instead of reporting a false miss.
+				// timer can fire just before the sensor sets RAW_DATA_RDY. Poll briefly
+				// after the wake: waiting for the next 1 kHz timer tick here can stretch
+				// an otherwise healthy control iteration by a full millisecond.
 				if (this->read()) return true;
-			} while ((uint32_t)(millis() - started) < timeoutMs);
+				const uint32_t pollStartedUs = micros();
+				while ((uint32_t)(micros() - pollStartedUs) < 200UL &&
+					(uint32_t)(micros() - startedUs) < timeoutUs) {
+					delayMicroseconds(20);
+					if (this->read()) return true;
+				}
+			} while ((uint32_t)(micros() - startedUs) < timeoutUs);
 			return false;
 #endif
 		} else {

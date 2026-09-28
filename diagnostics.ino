@@ -53,7 +53,9 @@ static LoopStageMetrics loopStages[] = {
     {"imu",1200}, {"imu_wait",1500}, {"imu_process",200}, {"rc_web",200},
     {"estimate",200}, {"battery_adc",200}, {"control_law",200}, {"motor_out",150},
     {"control",500}, {"serial_input",200},
-    {"mavlink",300}, {"param_sync",200}, {"maintenance",300}, {"whole_loop",1500}
+    {"mavlink",300}, {"flight_log",300}, {"param_sync",200}, {"led",100},
+    {"diagnostics",200}, {"wifi_service",300}, {"loop_gap",100},
+    {"maintenance",300}, {"whole_loop",1500}
 };
 static uint32_t lastStageReportMs = 0;
 
@@ -75,7 +77,7 @@ static void reportLoopStages() {
     lastStageReportMs = now;
     const LoopStageMetrics *worst = nullptr;
     for (const auto &entry : loopStages) {
-        if (!strcmp(entry.name,"whole_loop") || !strcmp(entry.name,"control") ||
+        if (!strcmp(entry.name,"imu") || !strcmp(entry.name,"whole_loop") || !strcmp(entry.name,"control") ||
             !strcmp(entry.name,"maintenance")) continue;
         if (entry.pendingWorstUs && (!worst || entry.pendingWorstUs > worst->pendingWorstUs)) worst = &entry;
     }

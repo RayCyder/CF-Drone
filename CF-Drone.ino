@@ -90,6 +90,8 @@ void setup() {
 
 void loop() {
 	const uint32_t loopStarted = micros();
+	static uint32_t previousLoopEnd = 0;
+	if (previousLoopEnd) recordLoopStage(LOOP_STAGE_LOOP_GAP, loopStarted - previousLoopEnd);
 	uint32_t stageStarted = loopStarted;
 	readIMU(); // 读取IMU原始数据（陀螺仪/加速度计），并完成校准与坐标旋转
 	recordLoopStage(LOOP_STAGE_IMU, micros() - stageStarted);
@@ -130,14 +132,22 @@ void loop() {
 	stageStarted = micros();
 	groupStarted = stageStarted;
 	logData(); // 记录飞行日志数据
+	recordLoopStage(LOOP_STAGE_FLIGHT_LOG, micros() - stageStarted);
 	stageStarted = micros();
 	syncParameters(); // 参数变更后延迟写入Flash，避免频繁擦写
 	recordLoopStage(LOOP_STAGE_PARAM_SYNC, micros() - stageStarted);
+	stageStarted = micros();
 	updateLED(); // 根据当前飞行状态刷新LED指示效果
+	recordLoopStage(LOOP_STAGE_LED, micros() - stageStarted);
+	stageStarted = micros();
 	updateDiagnostics();
+	recordLoopStage(LOOP_STAGE_DIAGNOSTICS, micros() - stageStarted);
+	stageStarted = micros();
 #if WIFI_ENABLED
 	serviceWiFi(); // 更新连接状态、配网DNS与超时回退
 #endif
+	recordLoopStage(LOOP_STAGE_WIFI_SERVICE, micros() - stageStarted);
 	recordLoopStage(LOOP_STAGE_MAINTENANCE, micros() - groupStarted);
 	recordLoopStage(LOOP_STAGE_WHOLE_LOOP, micros() - loopStarted);
+	previousLoopEnd = micros();
 }
