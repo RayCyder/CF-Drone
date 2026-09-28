@@ -33,6 +33,7 @@ static DiagnosticState diagnosticStates[] = {
 	{DIAG_BATTERY_LOW, "BATTERY_LOW", "WARNING", "检查电池电量、分压电阻和ADC引脚", false, 0, 0, 0, 0, 0},
 	{DIAG_LOOP_OVERRUN, "LOOP_OVERRUN", "WARNING", "检查循环负载、通信请求和日志输出", false, 0, 0, 0, 0, 0},
 	{DIAG_PARAMETER, "PARAMETER", "CRITICAL", "检查参数范围；修正后重启并重新执行diag", false, 0, 0, 0, 0, 0},
+	{DIAG_AUTO_TARGET_TIMEOUT, "AUTO_TARGET_TIMEOUT", "WARNING", "检查外部AUTO控制链路、目标频率和模式切换流程", false, 0, 0, 0, 0, 0},
 };
 
 static uint32_t loopOverrunCount = 0;
@@ -121,17 +122,28 @@ void updateDiagnostics() {
 	extern double t;
 	extern float rcLossTimeout;
 	extern bool armed;
+	extern int mode;
+	extern const int AUTO;
 	extern float thrustTarget;
 	extern bool batteryAlertActiveForFlight(bool flying);
+	extern bool autoTargetTimedOut();
+	extern bool isControlledLandingActive();
 	setDiagnosticFault(DIAG_IMU_INIT, !imuOK);
 	setDiagnosticFault(DIAG_MOTOR_INIT, !motorOutputsOK);
-	bool rcInputLost = armed && controlTime != 0 && (t - controlTime > rcLossTimeout);
+	bool rcInputLost = armed && mode != AUTO && controlTime != 0 && (t - controlTime > rcLossTimeout);
 #if WEB_RC_ENABLED
 	// The shared RC timestamp only advances on stick packets. Web RC heartbeats
 	// keep that transport alive, so don't report the unused physical RC path lost.
 	if (isUsingWebRC()) rcInputLost = false;
 #endif
 	setDiagnosticFault(DIAG_RC_LOSS, rcInputLost);
+	bool autoTimeoutFault = false;
+	if (armed && mode == AUTO) {
+		autoTimeoutFault = isControlledLandingActive() ?
+			((getActiveDiagnosticFaults() & DIAG_AUTO_TARGET_TIMEOUT) != 0) :
+			autoTargetTimedOut();
+	}
+	setDiagnosticFault(DIAG_AUTO_TARGET_TIMEOUT, autoTimeoutFault);
 	setDiagnosticFault(DIAG_BATTERY_LOW,
 		batteryAlertActiveForFlight(armed && thrustTarget >= 0.15f));
 	if (lastLoopOverrunMs && (uint32_t)(millis() - lastLoopOverrunMs) > 10000UL)

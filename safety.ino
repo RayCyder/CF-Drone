@@ -2,6 +2,7 @@
 // Fail-safe functions
 
 #include "diagnostics.h"
+#include "control.h"
 
 bool isInverted = false;  // 当前机身是否处于倒置（Z轴cos < INVERTED_COS_THRESHOLD）
 
@@ -64,6 +65,7 @@ void failsafe() {
 void rcLossFailsafe() {
 	if (controlTime == 0) return; // no RC at all
 	if (!armed) return;
+	if (mode == AUTO) return; // AUTO has an independent external-target timeout.
 #if WEB_RC_ENABLED
 	if (isUsingWebRC()) return; // WebRC独立负责其超时（webRCLossFailsafe）
 #endif
@@ -75,8 +77,10 @@ void rcLossFailsafe() {
 // Smooth descend on RC lost. Without a height/vertical-speed sensor this is
 // only a conservative fixed-thrust descent, not closed-loop speed control.
 void descend() {
+	const bool firstLandingFrame = !controlledLandingActive;
 	controlledLandingActive = true;
-	if (mode != AUTO) {
+	setCurrentControlSource(CONTROL_SOURCE_LANDING);
+	if (firstLandingFrame) {
 		// 首次进入：保持当前偏航（仅强制机体水平），清零速率前馈，重置PID积分
 		float currentYaw = attitude.getYaw();
 		attitudeTarget = Quaternion::fromEuler(Vector(0, 0, currentYaw));
@@ -112,18 +116,19 @@ void clearControlledLanding() {
 
 // Allow pilot to interrupt automatic flight
 void autoFailsafe() {
-	static float roll, pitch, yaw, throttle;
-	
-	// control*已统一涳盖SBUS/MAVLink/WebRC输入，直接检查即可
-	if ((roll != controlRoll || pitch != controlPitch || yaw != controlYaw || abs(throttle - controlThrottle) > 0.05) &&
-		mode == AUTO && !controlledLandingActive) {
-		mode = STAB;
+	if (!armed || mode != AUTO) {
+		setDiagnosticFault(DIAG_AUTO_TARGET_TIMEOUT, false);
+		return;
 	}
-	
-	roll = controlRoll;
-	pitch = controlPitch;
-	yaw = controlYaw;
-	throttle = controlThrottle;
+	if (controlledLandingActive) {
+		return;
+	}
+	if (autoTargetTimedOut()) {
+		setDiagnosticFault(DIAG_AUTO_TARGET_TIMEOUT, true);
+		descend();
+	} else {
+		setDiagnosticFault(DIAG_AUTO_TARGET_TIMEOUT, false);
+	}
 }
 
 #if WEB_RC_ENABLED
@@ -144,8 +149,14 @@ void webRCLossFailsafe() {
 	// on every control-loop iteration until the longer timeout expires.
 	if (timeoutHandled) return;
 	timeoutHandled = true;
-	print("Web RC连接丢失，启动下降\n");
 	setDiagnosticFault(DIAG_WEB_RC_LOSS, true);
+	if (mode == AUTO && autoTargetReady()) {
+		print("Web RC连接丢失，外部AUTO目标有效，保持AUTO控制\n");
+		webRCEnabled = false;
+		useWebRC = false;
+		return;
+	}
+	print("Web RC连接丢失，启动下降\n");
 	descend();
 	webRCEnabled = false;
 	useWebRC = false;

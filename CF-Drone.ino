@@ -7,6 +7,7 @@
 #include "util.h"
 #include "board_config.h"
 #include "diagnostics.h"
+#include "control.h"
 #include "system_log.h"
 #include "web_rc_input.h"
 #include <esp_system.h>

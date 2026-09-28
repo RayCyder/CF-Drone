@@ -12,6 +12,8 @@
 
 // ---- 外部依赖声明 ----
 extern bool armed;
+extern int mode;
+extern const int AUTO;
 extern double t;
 extern double controlTime;
 extern float rcLossTimeout;
@@ -58,7 +60,7 @@ bool ledAlertActive() {
 	if (isInverted) return true;
 
 	// 遥控失联检测（SBUS RC，仅解锁后）
-	if (controlTime != 0 && armed && (t - controlTime > rcLossTimeout)) return true;
+	if (mode != AUTO && controlTime != 0 && armed && (t - controlTime > rcLossTimeout)) return true;
 
 #if WEB_RC_ENABLED
 	// Web RC 失联检测：已激活但超时

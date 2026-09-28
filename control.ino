@@ -7,10 +7,7 @@
 #include "util.h"
 #include "diagnostics.h"
 #include "system_log.h"
-
-#if WEB_RC_ENABLED
 #include "control.h"
-#endif
 
 // 参数适配118mm轴距的微型四轴飞行器
 // ============== 角速率环（内环）参数 ==============
@@ -99,6 +96,24 @@ Vector torqueTarget;
 float thrustTarget;
 float motorMixScale = 1.0f;
 
+#define AUTO_TARGET_TIMEOUT_MS 500UL
+#define AUTO_TARGET_READY_MS 100UL
+#define AUTO_TARGET_READY_COUNT 3
+#define AUTO_THRUST_MIN 0.0f
+#define AUTO_THRUST_MAX 1.0f
+#define AUTO_QUAT_NORM_MIN 0.5f
+#define AUTO_QUAT_NORM_MAX 1.5f
+
+static AutoTargetKind autoTargetKind = AUTO_TARGET_NONE;
+static AutoAttitudeCommand autoAttitudeCommand;
+static AutoActuatorCommand autoActuatorCommand;
+static uint32_t autoTargetFirstValidMs = 0;
+static uint32_t autoTargetLastValidMs = 0;
+static uint8_t autoTargetValidCount = 0;
+static uint32_t autoTargetAppliedMs = 0;
+static bool autoTargetAppliedValid = false;
+static ControlSource currentControlSource = CONTROL_SOURCE_NONE;
+
 // ============== 软件配平参数 ==============
 // 用于补偿机械不对称（重心偏移、电机/桨叶推力差异、IMU 安装偏斜等）引起的固定方向漂移。
 // 单位：弧度（rad）。
@@ -129,12 +144,196 @@ extern bool motorTestArmInhibit;
 extern bool imuOK;
 extern void descend();
 extern void clearControlledLanding();
+extern bool isControlledLandingActive();
 extern bool isAccelCalibrationActive();
+
+static bool normalizeAutoQuaternion(Quaternion& q) {
+	if (!q.finite()) return false;
+	float norm = q.norm();
+	if (!isfinite(norm) || norm < AUTO_QUAT_NORM_MIN || norm > AUTO_QUAT_NORM_MAX) return false;
+	q.normalize();
+	return q.finite();
+}
+
+static void resetAllPids() {
+	rollRatePID.reset();
+	pitchRatePID.reset();
+	yawRatePID.reset();
+	rollPID.reset();
+	pitchPID.reset();
+	yawPID.reset();
+}
+
+void resetControlTargets() {
+	attitudeTarget.invalidate();
+	ratesTarget.invalidate();
+	ratesExtra = Vector(0, 0, 0);
+	torqueTarget.invalidate();
+	motorMixScale = 1.0f;
+}
+
+void resetAutoTargetState() {
+	autoTargetKind = AUTO_TARGET_NONE;
+	autoTargetFirstValidMs = 0;
+	autoTargetLastValidMs = 0;
+	autoTargetValidCount = 0;
+	autoTargetAppliedMs = 0;
+	autoTargetAppliedValid = false;
+	setDiagnosticFault(DIAG_AUTO_TARGET_TIMEOUT, false);
+}
+
+ControlSource getCurrentControlSource() {
+	return currentControlSource;
+}
+
+void setCurrentControlSource(ControlSource source) {
+	currentControlSource = source;
+}
+
+Vector constrainRatesToConfiguredLimits(const Vector& rates) {
+	return Vector(
+		constrain(rates.x, -maxRate.x, maxRate.x),
+		constrain(rates.y, -maxRate.y, maxRate.y),
+		constrain(rates.z, -maxRate.z, maxRate.z));
+}
+
+bool ratesWithinConfiguredLimits(const Vector& rates) {
+	return rates.finite() &&
+		fabsf(rates.x) <= maxRate.x &&
+		fabsf(rates.y) <= maxRate.y &&
+		fabsf(rates.z) <= maxRate.z;
+}
+
+static void markAutoTargetApplied() {
+	autoTargetAppliedMs = millis();
+	autoTargetAppliedValid = true;
+}
+
+bool isSupportedFlightMode(int requestedMode) {
+	return requestedMode == RAW || requestedMode == ACRO ||
+		requestedMode == STAB || requestedMode == AUTO;
+}
+
+static bool applyAutoTarget() {
+	if (autoTargetKind == AUTO_TARGET_NONE || !autoTargetReady()) return false;
+	if (autoTargetKind == AUTO_TARGET_ATTITUDE) {
+		setCurrentControlSource(CONTROL_SOURCE_EXTERNAL_ATTITUDE);
+		if (autoAttitudeCommand.useAttitude) {
+			attitudeTarget = autoAttitudeCommand.attitude;
+			ratesTarget.invalidate();
+			ratesExtra = autoAttitudeCommand.useRates ? autoAttitudeCommand.rates : Vector(0, 0, 0);
+		} else {
+			attitudeTarget.invalidate();
+			ratesTarget = autoAttitudeCommand.rates;
+			ratesExtra = Vector(0, 0, 0);
+		}
+		torqueTarget.invalidate();
+		thrustTarget = autoAttitudeCommand.thrust;
+		markAutoTargetApplied();
+		return true;
+	}
+	if (autoTargetKind == AUTO_TARGET_ACTUATOR) {
+		setCurrentControlSource(CONTROL_SOURCE_EXTERNAL_MOTORS);
+		attitudeTarget.invalidate();
+		ratesTarget.invalidate();
+		torqueTarget.invalidate();
+		ratesExtra = Vector(0, 0, 0);
+		thrustTarget = (autoActuatorCommand.motors[0] + autoActuatorCommand.motors[1] +
+			autoActuatorCommand.motors[2] + autoActuatorCommand.motors[3]) * 0.25f;
+		if (armed) {
+			for (int i = 0; i < 4; ++i) motors[i] = autoActuatorCommand.motors[i];
+		}
+		markAutoTargetApplied();
+		return true;
+	}
+	return false;
+}
+
+bool setFlightMode(int requestedMode) {
+	if (!isSupportedFlightMode(requestedMode)) return false;
+	if (requestedMode == AUTO && !autoTargetReady()) return false;
+
+	if (isControlledLandingActive()) {
+		if (requestedMode == STAB || requestedMode == ACRO) {
+			clearControlledLanding();
+		} else {
+			return mode == requestedMode;
+		}
+	}
+
+	if (mode == requestedMode) return true;
+
+	mode = requestedMode;
+	resetAllPids();
+	resetControlTargets();
+	if (mode != AUTO) setDiagnosticFault(DIAG_AUTO_TARGET_TIMEOUT, false);
+	if (mode == AUTO) applyAutoTarget();
+	return true;
+}
+
+static void markAutoTargetValid(AutoTargetKind kind) {
+	const uint32_t now = millis();
+	if (autoTargetValidCount == 0 ||
+		(uint32_t)(now - autoTargetLastValidMs) > AUTO_TARGET_TIMEOUT_MS ||
+		autoTargetKind != kind) {
+		autoTargetFirstValidMs = now;
+		autoTargetValidCount = 0;
+	}
+	autoTargetKind = kind;
+	autoTargetLastValidMs = now;
+	if (autoTargetValidCount < UINT8_MAX) ++autoTargetValidCount;
+	if (!isControlledLandingActive()) setDiagnosticFault(DIAG_AUTO_TARGET_TIMEOUT, false);
+}
+
+bool submitAutoAttitudeTarget(const AutoAttitudeCommand& target) {
+	AutoAttitudeCommand normalized = target;
+	if (!isfinite(normalized.thrust) || normalized.thrust < AUTO_THRUST_MIN || normalized.thrust > AUTO_THRUST_MAX)
+		return false;
+	if (!normalized.useAttitude && !normalized.useRates) return false;
+	if (normalized.useAttitude && !normalizeAutoQuaternion(normalized.attitude)) return false;
+	if (normalized.useRates && !ratesWithinConfiguredLimits(normalized.rates)) return false;
+
+	autoAttitudeCommand = normalized;
+	markAutoTargetValid(AUTO_TARGET_ATTITUDE);
+	if (mode == AUTO && !isControlledLandingActive()) applyAutoTarget();
+	return true;
+}
+
+bool submitAutoActuatorTarget(const AutoActuatorCommand& target) {
+	AutoActuatorCommand normalized = target;
+	for (int i = 0; i < 4; ++i) {
+		if (!isfinite(normalized.motors[i]) ||
+			normalized.motors[i] < 0.0f || normalized.motors[i] > 1.0f)
+			return false;
+	}
+	autoActuatorCommand = normalized;
+	markAutoTargetValid(AUTO_TARGET_ACTUATOR);
+	if (mode == AUTO && !isControlledLandingActive()) applyAutoTarget();
+	return true;
+}
+
+bool autoTargetReady() {
+	if (autoTargetKind == AUTO_TARGET_NONE || autoTargetValidCount == 0) return false;
+	const uint32_t now = millis();
+	if ((uint32_t)(now - autoTargetLastValidMs) > AUTO_TARGET_TIMEOUT_MS) return false;
+	return autoTargetValidCount >= AUTO_TARGET_READY_COUNT &&
+		(uint32_t)(now - autoTargetFirstValidMs) >= AUTO_TARGET_READY_MS;
+}
+
+bool autoTargetTimedOut() {
+	if (mode == AUTO && armed) {
+		if (!autoTargetAppliedValid) return true;
+		return (uint32_t)(millis() - autoTargetAppliedMs) > AUTO_TARGET_TIMEOUT_MS;
+	}
+	if (autoTargetKind == AUTO_TARGET_NONE || autoTargetValidCount == 0) return false;
+	return (uint32_t)(millis() - autoTargetLastValidMs) > AUTO_TARGET_TIMEOUT_MS;
+}
 
 bool requestArm() {
 	if (armed) return true;
 	if (motorTestArmInhibit) return false;
 	updateDiagnostics();
+	if (mode == AUTO && !autoTargetReady()) return false;
 	if (motorTestActive || isAccelCalibrationActive() || controlThrottle > ARM_THROTTLE_LIMIT || !imuOK ||
 		batteryBlocksArming() || hasBlockingDiagnosticFault()) return false;
 	return tryArmWithSystemLog();
@@ -148,6 +347,7 @@ void disarm() {
 	thrustTarget = 0.0f;
 	memset(motors, 0, sizeof(float) * 4);
 	torqueTarget.invalidate();
+	resetAutoTargetState();
 	if (outputWasActive) sendMotors();
 }
 
@@ -165,11 +365,19 @@ void control() {
 void interpretControls() {
 	if (motorTestArmInhibit && (controlThrottle >= 0.05f || controlYaw <= 0.95f))
 		motorTestArmInhibit = false;
-	if (controlMode < 0.25) mode = flightModes[0];
-	else if (controlMode <= 0.75) mode = flightModes[1];
-	else if (controlMode > 0.75) mode = flightModes[2];
-
-	if (mode == AUTO) return; // pilot is not effective in AUTO mode
+	static int lastControlModeSlot = -1;
+	int controlModeSlot = -1;
+	if (isfinite(controlMode) && controlMode >= 0.0f && controlMode <= 1.0f) {
+		if (controlMode < 0.25f) controlModeSlot = 0;
+		else if (controlMode <= 0.75f) controlModeSlot = 1;
+		else controlModeSlot = 2;
+	}
+	if (controlModeSlot >= 0 && controlModeSlot != lastControlModeSlot) {
+		int requestedMode = flightModes[controlModeSlot];
+		if (requestedMode == ALTHOLD) requestedMode = STAB;
+		setFlightMode(requestedMode);
+		lastControlModeSlot = controlModeSlot;
+	}
 
 #if WEB_RC_ENABLED
 	if (!isUsingWebRC()) { // SBUS手势解锁仅当WebRC未活跃时生效
@@ -214,6 +422,14 @@ void interpretControls() {
 	if (controlThrottle < 0.05 && controlYaw < -0.95) disarm(); // disarm gesture
 #if WEB_RC_ENABLED
 	}
+#endif
+
+	if (mode == AUTO || isControlledLandingActive()) return; // pilot sticks do not drive AUTO/landing targets
+
+#if WEB_RC_ENABLED
+	setCurrentControlSource(isUsingWebRC() ? CONTROL_SOURCE_WEB_RC : CONTROL_SOURCE_PHYSICAL_RC);
+#else
+	setCurrentControlSource(CONTROL_SOURCE_PHYSICAL_RC);
 #endif
 
 	if (abs(controlYaw) < 0.1) controlYaw = 0; // yaw dead zone
@@ -264,6 +480,7 @@ void controlAttitude() {
 
 	float yawError = wrapAngle(attitudeTarget.getYaw() - attitude.getYaw());
 	ratesTarget.z = yawPID.update(yawError) + ratesExtra.z;
+	ratesTarget = constrainRatesToConfiguredLimits(ratesTarget);
 }
 
 
@@ -407,18 +624,17 @@ void interpretWebRC() {
 
 	// 按钮6：STAB模式（上升沿）
 	if (risingEdge & 0x0040) {
-		mode = STAB;
+		setFlightMode(STAB);
 	}
 
 	// 按钮7：ACRO模式（上升沿）
 	if (risingEdge & 0x0080) {
-		mode = ACRO;
+		setFlightMode(ACRO);
 	}
 
-	// 按鈕。8：ALTHOLD定高模式（上升沿）- 暂未实现，跳过定高切到STAB，避免前端模式循环卡死
+	// 按钮8保留给ALTHOLD；当前六轴硬件不支持，入口只告警，不切模式。
 	if (risingEdge & 0x0100) {
-		mode = STAB;
-		setWebRCWarn("定高模式暂不支持，已切换为自稳");
+		setWebRCWarn("定高模式暂不支持");
 	}
 
 	// 模式切换日志

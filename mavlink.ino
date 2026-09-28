@@ -6,6 +6,29 @@
 #include <MAVLink.h>
 #include "util.h"
 #include "board_config.h"
+#include "control.h"
+
+#ifndef ATTITUDE_TARGET_TYPEMASK_BODY_ROLL_RATE_IGNORE
+#define ATTITUDE_TARGET_TYPEMASK_BODY_ROLL_RATE_IGNORE 1
+#endif
+#ifndef ATTITUDE_TARGET_TYPEMASK_BODY_PITCH_RATE_IGNORE
+#define ATTITUDE_TARGET_TYPEMASK_BODY_PITCH_RATE_IGNORE 2
+#endif
+#ifndef ATTITUDE_TARGET_TYPEMASK_BODY_YAW_RATE_IGNORE
+#define ATTITUDE_TARGET_TYPEMASK_BODY_YAW_RATE_IGNORE 4
+#endif
+#ifndef ATTITUDE_TARGET_TYPEMASK_THROTTLE_IGNORE
+#define ATTITUDE_TARGET_TYPEMASK_THROTTLE_IGNORE 64
+#endif
+#ifndef ATTITUDE_TARGET_TYPEMASK_ATTITUDE_IGNORE
+#define ATTITUDE_TARGET_TYPEMASK_ATTITUDE_IGNORE 128
+#endif
+#define ATTITUDE_TARGET_TYPEMASK_SUPPORTED ( \
+	ATTITUDE_TARGET_TYPEMASK_BODY_ROLL_RATE_IGNORE | \
+	ATTITUDE_TARGET_TYPEMASK_BODY_PITCH_RATE_IGNORE | \
+	ATTITUDE_TARGET_TYPEMASK_BODY_YAW_RATE_IGNORE | \
+	ATTITUDE_TARGET_TYPEMASK_THROTTLE_IGNORE | \
+	ATTITUDE_TARGET_TYPEMASK_ATTITUDE_IGNORE)
 
 int mavlinkSysId = 1;
 Rate telemetrySlow(2);
@@ -97,6 +120,9 @@ void handleMavlink(const void *_msg) {
 		mavlink_manual_control_t m;
 		mavlink_msg_manual_control_decode(&msg, &m);
 		if (m.target && m.target != mavlinkSysId) return; // 0 is broadcast
+		if (m.x < -1000 || m.x > 1000 || m.y < -1000 || m.y > 1000 ||
+			m.r < -1000 || m.r > 1000 || m.z < 0 || m.z > 1000)
+			return;
 
 		controlThrottle = m.z / 1000.0f;
 		controlPitch = m.x / 1000.0f;
@@ -173,49 +199,40 @@ void handleMavlink(const void *_msg) {
 	}
 
 	if (msg.msgid == MAVLINK_MSG_ID_SET_ATTITUDE_TARGET) {
-		if (mode != AUTO) return;
-
 		mavlink_set_attitude_target_t m;
 		mavlink_msg_set_attitude_target_decode(&msg, &m);
 		if (m.target_system && m.target_system != mavlinkSysId) return;
+		if (m.target_component && m.target_component != MAV_COMP_ID_AUTOPILOT1) return;
 
-		// copy attitude, rates and thrust targets
-		ratesTarget.x = m.body_roll_rate;
-		ratesTarget.y = -m.body_pitch_rate; // convert to flu
-		ratesTarget.z = -m.body_yaw_rate;
-		attitudeTarget.w = m.q[0];
-		attitudeTarget.x = m.q[1];
-		attitudeTarget.y = -m.q[2];
-		attitudeTarget.z = -m.q[3];
-		if (m.thrust > 0.0f && !requestArm()) {
-			disarm();
-			return;
-		}
-		thrustTarget = m.thrust;
-		ratesExtra = Vector(0, 0, 0);
+		if (m.type_mask & ~ATTITUDE_TARGET_TYPEMASK_SUPPORTED) return;
+		const bool ignoreRollRate = m.type_mask & ATTITUDE_TARGET_TYPEMASK_BODY_ROLL_RATE_IGNORE;
+		const bool ignorePitchRate = m.type_mask & ATTITUDE_TARGET_TYPEMASK_BODY_PITCH_RATE_IGNORE;
+		const bool ignoreYawRate = m.type_mask & ATTITUDE_TARGET_TYPEMASK_BODY_YAW_RATE_IGNORE;
+		const bool anyRateIgnored = ignoreRollRate || ignorePitchRate || ignoreYawRate;
+		const bool allRatesIgnored = ignoreRollRate && ignorePitchRate && ignoreYawRate;
+		if (anyRateIgnored && !allRatesIgnored) return;
+		if (m.type_mask & ATTITUDE_TARGET_TYPEMASK_THROTTLE_IGNORE) return;
 
-		if (m.type_mask & ATTITUDE_TARGET_TYPEMASK_ATTITUDE_IGNORE) attitudeTarget.invalidate();
-		if (m.thrust <= 0.0f) disarm();
+		AutoAttitudeCommand target;
+		target.useAttitude = !(m.type_mask & ATTITUDE_TARGET_TYPEMASK_ATTITUDE_IGNORE);
+		target.useRates = !allRatesIgnored;
+		if (!target.useAttitude && !target.useRates) return;
+		target.attitude = Quaternion(m.q[0], m.q[1], -m.q[2], -m.q[3]); // FRD -> FLU
+		target.rates = Vector(m.body_roll_rate, -m.body_pitch_rate, -m.body_yaw_rate);
+		target.thrust = m.thrust;
+		submitAutoAttitudeTarget(target);
 	}
 
 	if (msg.msgid == MAVLINK_MSG_ID_SET_ACTUATOR_CONTROL_TARGET) {
-		if (mode != AUTO) return;
-
 		mavlink_set_actuator_control_target_t m;
 		mavlink_msg_set_actuator_control_target_decode(&msg, &m);
 		if (m.target_system && m.target_system != mavlinkSysId) return;
+		if (m.target_component && m.target_component != MAV_COMP_ID_AUTOPILOT1) return;
+		if (m.group_mlx != 0) return;
 
-		attitudeTarget.invalidate();
-		ratesTarget.invalidate();
-		torqueTarget.invalidate();
-		bool wantsOutput = false;
-		for (int i = 0; i < 4; ++i) wantsOutput = wantsOutput || m.controls[i] > 0.0f;
-		if (wantsOutput && !requestArm()) {
-			disarm();
-			return;
-		}
-		for (int i = 0; i < 4; ++i) motors[i] = constrain(m.controls[i], 0.0f, 1.0f);
-		if (!wantsOutput) disarm();
+		AutoActuatorCommand target;
+		for (int i = 0; i < 4; ++i) target.motors[i] = m.controls[i];
+		submitAutoActuatorTarget(target);
 	}
 
 	if (msg.msgid == MAVLINK_MSG_ID_LOG_REQUEST_DATA) {
@@ -259,10 +276,11 @@ void handleMavlink(const void *_msg) {
 		}
 
 		if (m.command == MAV_CMD_DO_SET_MODE) {
-			if (m.param2 < 0 || m.param2 > AUTO) return; // incorrect mode
-			accepted = true;
-			result = MAV_RESULT_ACCEPTED;
-			mode = m.param2;
+			if (isfinite(m.param2) && floorf(m.param2) == m.param2 &&
+				m.param2 >= RAW && m.param2 <= AUTO) {
+				accepted = setFlightMode((int)m.param2);
+			}
+			result = accepted ? MAV_RESULT_ACCEPTED : MAV_RESULT_DENIED;
 		}
 
 		// send command ack

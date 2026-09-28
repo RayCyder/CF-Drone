@@ -12,6 +12,7 @@ enum DiagnosticFault : uint32_t {
 	DIAG_BATTERY_LOW    = 1UL << 6,
 	DIAG_LOOP_OVERRUN   = 1UL << 7,
 	DIAG_PARAMETER      = 1UL << 8,
+	DIAG_AUTO_TARGET_TIMEOUT = 1UL << 9,
 };
 
 void setDiagnosticFault(DiagnosticFault fault, bool active);

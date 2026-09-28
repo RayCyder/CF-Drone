@@ -12,6 +12,6 @@ if not compiler:
 with tempfile.TemporaryDirectory(prefix='cf-drone-tests-') as tmp:
     for test in sorted(root.glob('test_*.cpp')):
         binary = str(Path(tmp) / test.stem)
-        subprocess.run([compiler, '-std=c++17', '-Wall', '-Wextra', '-Werror',
+        subprocess.run([compiler, '-std=c++17', '-Wall', '-Wextra', '-Werror', '-Wno-vla',
                         '-I', str(root / 'stubs'), str(test), '-o', binary], check=True)
         subprocess.run([binary], check=True)

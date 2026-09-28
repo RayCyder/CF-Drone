@@ -27,6 +27,7 @@ extern Rate telemetrySlow, telemetryFast;
 #endif
 extern float rcLossTimeout, descendTime, descendThrust;
 extern int flightModes[3];
+extern const int ALTHOLD;
 extern Vector accBias, accScale;
 extern Vector imuRotation;
 extern LowPassFilter<Vector> gyroBiasFilter;
@@ -99,7 +100,7 @@ Parameter parameters[] = {
 
 	// ===== 控制（飞行模式）=====
 	// 遥控器模式通道（RC_MODE）将摇杆三挡位映射到对应飞行模式枚举值：
-	// 0=RAW（直通），1=ACRO（特技），2=STAB（自稳），3=ALTHOLD（气压计定高），4=AUTO
+	// 0=RAW（直通），1=ACRO（特技），2=STAB（自稳），4=AUTO；3=ALTHOLD需气压计，当前六轴硬件不支持
 	{"CTL_FLT_MODE_0", &flightModes[0]}, // 模式通道第 0 挡对应的飞行模式
 	{"CTL_FLT_MODE_1", &flightModes[1]}, // 模式通道第 1 挡对应的飞行模式
 	{"CTL_FLT_MODE_2", &flightModes[2]}, // 模式通道第 2 挡对应的飞行模式
@@ -226,7 +227,8 @@ static bool validParameterValue(const char *name, bool integer, float value) {
 	}
 	if (integer && (value < INT_MIN || value > INT_MAX || floorf(value) != value)) return false;
 
-	if (startsWith(name, "CTL_FLT_MODE_")) return within(value, 0, 4);
+	if (startsWith(name, "CTL_FLT_MODE_"))
+		return within(value, 0, 4) && floorf(value) == value && (int)value != ALTHOLD;
 	if (!strcmp(name, "RC_ROLL") || !strcmp(name, "RC_PITCH") || !strcmp(name, "RC_THROTTLE") ||
 		!strcmp(name, "RC_YAW") || !strcmp(name, "RC_MODE"))
 		return within(value, 0, 15) && floorf(value) == value;

@@ -31,6 +31,7 @@ extern int mode;
 extern bool armed;
 extern bool requestArm();
 extern void disarm();
+extern bool setFlightMode(int requestedMode);
 
 const char* motd =
 "CLI命令菜单，输入相应命令，回车后执行:\n"
@@ -172,13 +173,13 @@ void doCommand(String str, bool echo = false) {
 	} else if (command == "disarm") {
 		disarm();
 	} else if (command == "raw") {
-		mode = RAW;
+		if (!setFlightMode(RAW)) print("模式切换被拒绝\n");
 	} else if (command == "stab") {
-		mode = STAB;
+		if (!setFlightMode(STAB)) print("模式切换被拒绝\n");
 	} else if (command == "acro") {
-		mode = ACRO;
+		if (!setFlightMode(ACRO)) print("模式切换被拒绝\n");
 	} else if (command == "auto") {
-		mode = AUTO;
+		if (!setFlightMode(AUTO)) print("AUTO未就绪：需外部目标流至少3包且持续100ms\n");
 	} else if (command == "rc") {
 		print("channels: ");
 		for (int i = 0; i < 16; i++) {
