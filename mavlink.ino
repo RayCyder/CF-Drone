@@ -53,9 +53,19 @@ void processMavlink() {
 }
 
 void sendMavlink() {
-	sendMavlinkPrint();
-	serviceMavlinkLogTransfer();
-	serviceMavlinkParameterList();
+	// Bulk responses (log fragments and parameter-list entries) used to send
+	// one datagram on every control-loop pass. A parameter-list request could
+	// therefore flood UDP and stall the loop in the Wi-Fi stack for tens of ms.
+	// Share a bounded 50 Hz budget across console output and bulk transfers.
+	static Rate bulkTransferRate(50);
+	if (armed || motorsActive()) {
+		sendMavlinkPrint();
+	} else if (bulkTransferRate) {
+		if (mavlinkLogTransfer.active) serviceMavlinkLogTransfer();
+		else if (mavlinkParameterCursor >= 0 && mavlinkParameterCursor < parametersCount())
+			serviceMavlinkParameterList();
+		else sendMavlinkPrint();
+	}
 
 	mavlink_message_t msg;
 	uint32_t time = (uint32_t)(uint64_t)(t * 1000.0);
