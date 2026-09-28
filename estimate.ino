@@ -7,6 +7,7 @@
 #include "util.h"
 
 float accWeight = 0.003;
+static const float ESTIMATE_NOMINAL_DT = 0.001f;
 
 // ============== 水平修正 P 项 ==============
 float levelWeight = 0;  // 水平修正 P 项权重（关闭，无法区分陀螺温漂与机械不对称时会起负作用）
@@ -31,7 +32,7 @@ float levelBiasGain = 0;  // Mahony I 项增益（关闭，无法区分陀螺温
 Vector levelGyroBias(0, 0, 0); // 由 applyLevel() 估计的虚拟陀螺偏置（rad/s）
 
 extern float controlRoll, controlPitch; // 飞手摇杆输入，定义于 CF-Drone.ino
-LowPassFilter<Vector> ratesFilter(0.2); // cutoff frequency ~ 40 Hz
+LowPassFilter<Vector> ratesFilter(0.2f); // 1 ms reference coefficient; about 35.5 Hz
 
 void estimate() {
 	applyGyro();
@@ -42,7 +43,7 @@ void estimate() {
 void applyGyro() {
 	// Mahony 风格水平修正 I 项 从陀螺读数中减去 Mahony I 项估计的虚拟偏置，再滤波积分
 	// 这样水平修正的长期影响通过偏置路径而非 attitude 直接反映，PID 不感知
-	rates = ratesFilter.update(gyro - levelGyroBias);
+	rates = ratesFilter.update(gyro - levelGyroBias, dt, ESTIMATE_NOMINAL_DT);
 
 	// apply rates to attitude
 	attitude = Quaternion::rotate(attitude, Quaternion::fromRotationVector(rates * dt));
@@ -57,7 +58,7 @@ void applyAcc() {
 
 	// calculate accelerometer correction
 	Vector up = Quaternion::rotateVector(Vector(0, 0, 1), attitude);
-	Vector correction = Vector::rotationVectorBetween(acc, up) * accWeight;
+	Vector correction = Vector::rotationVectorBetween(acc, up) * (accWeight * (dt / ESTIMATE_NOMINAL_DT));
 
 	// apply correction
 	attitude = Quaternion::rotate(attitude, Quaternion::fromRotationVector(correction));
@@ -74,6 +75,8 @@ void applyLevel() {
 		levelGyroBias = Vector(0, 0, 0); // 落地后清零偏置，下次起飞重新学习
 		return;
 	}
+	if (levelWeight == 0.0f && levelBiasGain == 0.0f &&
+		levelGyroBias.x == 0.0f && levelGyroBias.y == 0.0f && levelGyroBias.z == 0.0f) return;
 
 	Vector up = Quaternion::rotateVector(Vector(0, 0, 1), attitude);
 	float tilt = acos(constrain(up.z, -1.0f, 1.0f));
@@ -82,7 +85,8 @@ void applyLevel() {
 	if (tilt < radians(0.1f)) return;
 
 	// P 项权重：倾角越接近 levelMaxTilt，权重越小
-	float dynamicWeight = levelWeight * constrain(1.0f - tilt / levelMaxTilt, 0.0f, 1.0f);
+	float dynamicWeight = levelWeight * constrain(1.0f - tilt / levelMaxTilt, 0.0f, 1.0f) *
+		(dt / ESTIMATE_NOMINAL_DT);
 
 	// ---- 摇杆感知门控 ----
 	float stickDeflection = max(abs(controlRoll), abs(controlPitch));
@@ -98,7 +102,7 @@ void applyLevel() {
 
 	// I 项：积分进虚拟陀螺偏置（Mahony 风格）
 	// 打杆期间（stickGate=0）暂停积分，避免积分方向因主动操纵而错误累积
-	levelGyroBias += error * (levelBiasGain * stickGate);
+	levelGyroBias += error * (levelBiasGain * stickGate * (dt / ESTIMATE_NOMINAL_DT));
 
 	// 限幅：等效最大补偿 3 deg/s，防止偏置发散
 	float biasNorm = levelGyroBias.norm();

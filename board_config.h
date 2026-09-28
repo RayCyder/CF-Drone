@@ -41,7 +41,7 @@
 #define BOARD_LED_INVERTED 1               // 低电平点亮
 
 // ---- 性能与资源配置（C3 轻量化）----
-#define BOARD_VBAT_ADC_SAMPLES       8    // ADC采样次数 减少 ADC 阻塞时间，ESP32/S3 默认 16
+#define BOARD_VBAT_ADC_SAMPLES       8    // 每次电压均值样本数；样本分散到多个主循环
 #define BOARD_LOG_DURATION           4    // 日志 4 秒缓冲，节省约 22 KB RAM，ESP32/S3 默认 8 秒
 #define BOARD_CONSOLE_LINES          20   // 控制台行数，节省约 7 KB RAM，ESP32/S3 默认 50
 #define BOARD_CONSOLE_LINE_LEN       160  // 每行字符数，ESP32/S3 默认 240
@@ -88,7 +88,7 @@
 #define BOARD_LED_INVERTED 0
 
 // ---- 性能与资源配置（S3 标准）----
-#define BOARD_VBAT_ADC_SAMPLES       16 // ADC采样次数 
+#define BOARD_VBAT_ADC_SAMPLES       16 // 每次电压均值样本数；样本分散到多个主循环
 #define BOARD_LOG_DURATION           4  // 加入诊断字段后保留最近4秒日志，控制RAM占用
 #define BOARD_CONSOLE_LINES          50  // 控制台行数
 #define BOARD_CONSOLE_LINE_LEN       240  // 每行字符数
@@ -127,7 +127,7 @@
 #define BOARD_LED_INVERTED 0               // 高电平点亮
 
 // ---- 性能与资源配置（ESP32 标准）----
-#define BOARD_VBAT_ADC_SAMPLES       16 // ADC采样次数 
+#define BOARD_VBAT_ADC_SAMPLES       16 // 每次电压均值样本数；样本分散到多个主循环
 #define BOARD_LOG_DURATION           4  // 加入诊断字段后保留最近4秒日志，控制RAM占用
 #define BOARD_CONSOLE_LINES          48  // 控制台行数；为静态 DRAM 留出余量
 #define BOARD_CONSOLE_LINE_LEN       240  // 每行字符数

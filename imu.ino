@@ -124,7 +124,7 @@ void calibrateGyroOnce() {
 	static Delay landedDelay(2);
 	if (!landedDelay.update(landed)) return; // calibrate only if definitely stationary
 
-	gyroBias = gyroBiasFilter.update(gyro);
+	gyroBias = gyroBiasFilter.update(gyro, dt, 0.001f);
 }
 
 void calibrateAccel() {
