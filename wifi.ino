@@ -13,6 +13,7 @@
 #include "flight_log.h"
 
 extern Preferences storage;
+extern bool armed;
 
 const int W_DISABLED = 0, W_STA = 1, W_AP = 2;
 int wifiMode = W_STA;
@@ -219,7 +220,10 @@ void setupWiFi() {
 }
 
 void serviceWiFi() {
-	if (configPortalActive) wifiDnsServer.processNextRequest();
+	// Captive-DNS servicing can block for tens of milliseconds on a slow UDP
+	// request. The AP and HTTP/Web RC remain available while armed; DNS portal
+	// work can safely wait until disarm instead of stalling the control loop.
+	if (configPortalActive && !armed) wifiDnsServer.processNextRequest();
 	if (wifiRestartScheduled && (int32_t)(millis() - wifiRestartAtMs) >= 0) {
 		print("WIFI_STATE state=RESTARTING reason=credentials_saved\n");
 		recordSystemLogEvent("WIFI", "state=RESTARTING reason=credentials_saved");
