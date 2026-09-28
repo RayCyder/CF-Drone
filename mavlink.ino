@@ -58,50 +58,71 @@ void sendMavlink() {
 	// therefore flood UDP and stall the loop in the Wi-Fi stack for tens of ms.
 	// Share a bounded 50 Hz budget across console output and bulk transfers.
 	static Rate bulkTransferRate(50);
+	bool deferTelemetry = false;
 	if (armed || motorsActive()) {
 		sendMavlinkPrint();
 	} else if (bulkTransferRate) {
+		deferTelemetry = true;
 		if (mavlinkLogTransfer.active) serviceMavlinkLogTransfer();
 		else if (mavlinkParameterCursor >= 0 && mavlinkParameterCursor < parametersCount())
 			serviceMavlinkParameterList();
 		else sendMavlinkPrint();
 	}
 
-	mavlink_message_t msg;
-	uint32_t time = (uint32_t)(uint64_t)(t * 1000.0);
-
+	// Spread telemetry message packing across loop iterations. Keeping a burst
+	// of five packets in one pass made the MAVLink stage itself approach 1 ms.
+	static uint8_t pendingSlowTelemetry = 0;
+	static uint8_t pendingFastTelemetry = 0;
 	if (telemetrySlow) {
+		pendingSlowTelemetry |= 0x01; // heartbeat
+		if (mavlinkConnected) pendingSlowTelemetry |= 0x02; // extended state
+	}
+	if (!mavlinkConnected) {
+		pendingSlowTelemetry &= (uint8_t)~0x02;
+		pendingFastTelemetry = 0;
+	} else if (telemetryFast) {
+		pendingFastTelemetry |= 0x0f;
+	}
+
+	if (deferTelemetry) return;
+	mavlink_message_t msg;
+	const uint32_t time = (uint32_t)(uint64_t)(t * 1000.0);
+	if (pendingSlowTelemetry & 0x01) {
+		pendingSlowTelemetry &= (uint8_t)~0x01;
 		mavlink_msg_heartbeat_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &msg, MAV_TYPE_QUADROTOR, MAV_AUTOPILOT_GENERIC,
 			(armed ? MAV_MODE_FLAG_SAFETY_ARMED : 0) |
 			((mode == STAB) ? MAV_MODE_FLAG_STABILIZE_ENABLED : 0) |
 			((mode == AUTO) ? MAV_MODE_FLAG_AUTO_ENABLED : MAV_MODE_FLAG_MANUAL_INPUT_ENABLED),
 			mode, MAV_STATE_STANDBY);
 		sendMessage(&msg);
-
-		if (!mavlinkConnected) return; // send only heartbeat until connected
-
+	} else if (pendingSlowTelemetry & 0x02) {
+		pendingSlowTelemetry &= (uint8_t)~0x02;
 		mavlink_msg_extended_sys_state_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &msg,
 			MAV_VTOL_STATE_UNDEFINED, landed ? MAV_LANDED_STATE_ON_GROUND : MAV_LANDED_STATE_IN_AIR);
 		sendMessage(&msg);
-	}
-
-	if (telemetryFast && mavlinkConnected) {
+	} else if (pendingFastTelemetry & 0x01) {
+		pendingFastTelemetry &= (uint8_t)~0x01;
 		const float offset[] = {0, 0, 0, 0};
 		mavlink_msg_attitude_quaternion_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &msg,
-			time, attitude.w, attitude.x, -attitude.y, -attitude.z, rates.x, -rates.y, -rates.z, offset); // convert to frd
+			time, attitude.w, attitude.x, -attitude.y, -attitude.z, rates.x, -rates.y, -rates.z, offset);
 		sendMessage(&msg);
-
-		mavlink_msg_rc_channels_raw_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &msg, controlTime * 1000, 0,
-			channels[0], channels[1], channels[2], channels[3], channels[4], channels[5], channels[6], channels[7], UINT8_MAX);
-		if (channels[0] != 0) sendMessage(&msg); // 0 means no RC input
-
+	} else if (pendingFastTelemetry & 0x02) {
+		pendingFastTelemetry &= (uint8_t)~0x02;
+		if (channels[0] != 0) {
+			mavlink_msg_rc_channels_raw_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &msg, controlTime * 1000, 0,
+				channels[0], channels[1], channels[2], channels[3], channels[4], channels[5], channels[6], channels[7], UINT8_MAX);
+			sendMessage(&msg);
+		}
+	} else if (pendingFastTelemetry & 0x04) {
+		pendingFastTelemetry &= (uint8_t)~0x04;
 		float controls[8] = {};
 		memcpy(controls, motors, sizeof(motors));
 		mavlink_msg_actuator_control_target_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &msg, time, 0, controls);
 		sendMessage(&msg);
-
+	} else if (pendingFastTelemetry & 0x08) {
+		pendingFastTelemetry &= (uint8_t)~0x08;
 		mavlink_msg_scaled_imu_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &msg, time,
-			acc.x / ONE_G * 1000, -acc.y / ONE_G * 1000, -acc.z / ONE_G * 1000, // convert to frd
+			acc.x / ONE_G * 1000, -acc.y / ONE_G * 1000, -acc.z / ONE_G * 1000,
 			gyro.x * 1000, -gyro.y * 1000, -gyro.z * 1000,
 			0, 0, 0, 0);
 		sendMessage(&msg);
