@@ -4,13 +4,20 @@
 
 #include <WebServer.h>
 #include <WiFi.h>
+#include <ctype.h>
+#include <stdlib.h>
 #include "web_rc_html.h"
 #include "board_config.h"
+#include "diagnostics.h"
+#include "system_log.h"
+#include "web_rc_input.h"
 
 // 飞控统一控制变量（供协议适配层写入，与 SBUS/MAVLink 共用）
 extern float t;
 extern float controlTime;
 extern float controlRoll, controlPitch, controlYaw, controlThrottle, controlMode;
+extern float batteryVoltage;
+extern const char* motd;
 
 // ==================== 配置常量 ====================
 #define WEB_RC_TIMEOUT_MS    10000          // 连接超时：最后一次收包超过此时间(ms)视为断连；需大于心跳间隔
@@ -35,7 +42,137 @@ float webRCPitch    = 0.0f;
 float webRCYaw      = 0.0f;
 float webRCThrottle = 0.0f;
 uint16_t webRCButtons    = 0;       // 16位按钮位掩码，bit0=解锁 bit1=上锁 bit2=急停 bit6=STAB bit7=ACRO bit8=ALTHOLD
+static uint16_t webRCButtonPressEdges = 0;
 unsigned long webRCLastUpdate = 0;  // 最后一次收包的 millis() 时间戳
+
+// Browser-uploaded open-loop sequence. The bounded RAM queue lets the flight
+// controller execute it locally without a continuous browser connection.
+#define OPEN_LOOP_MAX_STEPS 128
+#define OPEN_LOOP_MAX_BODY  4096
+static OpenLoopStep *openLoopSteps = nullptr;
+static portMUX_TYPE openLoopMux = portMUX_INITIALIZER_UNLOCKED;
+static uint16_t openLoopCount = 0;
+static uint16_t openLoopIndex = 0;
+static unsigned long openLoopStepStarted = 0;
+static bool openLoopRunning = false;
+static bool openLoopLandingStarted = false;
+static uint8_t openLoopState = 0; // 0=empty, 1=ready, 2=running, 3=landing, 4=complete, 5=aborted
+static float openLoopTotalSeconds = 0.0f;
+
+extern int mode;
+extern const int STAB, AUTO;
+extern bool armed;
+extern void descend();
+
+static void skipRouteSeparators(char *&cursor) {
+    while (*cursor && (isspace((unsigned char)*cursor) || *cursor == ',')) cursor++;
+}
+
+static bool parseOpenLoopLine(char *line, OpenLoopStep &step) {
+    char *cursor = line;
+    skipRouteSeparators(cursor);
+    if (!*cursor || *cursor == '#') return false;
+
+    float values[5];
+    for (int i = 0; i < 5; i++) {
+        skipRouteSeparators(cursor);
+        if (!*cursor) return false;
+        char *end = nullptr;
+        values[i] = strtof(cursor, &end);
+        if (end == cursor || isnan(values[i]) || isinf(values[i])) return false;
+        cursor = end;
+        if (*cursor && !isspace((unsigned char)*cursor) && *cursor != ',') return false;
+    }
+    skipRouteSeparators(cursor);
+    if (*cursor) return false;
+    if (values[0] < 0.1f || values[0] > 600.0f || values[1] < 0.0f || values[1] > 100.0f ||
+        fabsf(values[2]) > 100.0f || fabsf(values[3]) > 100.0f || fabsf(values[4]) > 100.0f) return false;
+    step = {values[0], values[1], values[2], values[3], values[4]};
+    return true;
+}
+
+static bool parseOpenLoopSequence(const String &body, OpenLoopStep *staging, uint16_t &count, float &duration) {
+    if (body.isEmpty() || body.length() > OPEN_LOOP_MAX_BODY) return false;
+    count = 0;
+    duration = 0.0f;
+    char line[128];
+    size_t lineLength = 0;
+    const char *text = body.c_str();
+    for (size_t i = 0; i <= body.length(); i++) {
+        const char c = i == body.length() ? '\n' : text[i];
+        if (c == '\n') {
+            line[lineLength] = '\0';
+            char *trim = line;
+            while (isspace((unsigned char)*trim)) trim++;
+            if (*trim && *trim != '#') {
+                if (count >= OPEN_LOOP_MAX_STEPS || !parseOpenLoopLine(trim, staging[count])) return false;
+                duration += staging[count].duration;
+                if (duration > 1800.0f) return false;
+                count++;
+            }
+            lineLength = 0;
+        } else {
+            if (lineLength >= sizeof(line) - 1) return false;
+            line[lineLength++] = c;
+        }
+    }
+    return count > 0;
+}
+
+static const char *openLoopStateName(uint8_t state) {
+    switch (state) {
+        case 1: return "ready";
+        case 2: return "running";
+        case 3: return "landing";
+        case 4: return "complete";
+        case 5: return "aborted";
+        default: return "empty";
+    }
+}
+
+static void stepOpenLoopSequence() {
+    bool applyStep = false;
+    bool beginLanding = false;
+    OpenLoopStep step;
+    const unsigned long now = millis();
+
+    portENTER_CRITICAL(&openLoopMux);
+    if (openLoopState == 3) {
+        if (!openLoopLandingStarted) {
+            openLoopLandingStarted = true;
+            beginLanding = true;
+        } else if (!armed) {
+            openLoopState = 4;
+        } else if (mode != AUTO) {
+            openLoopState = 5;
+        }
+    } else if (openLoopRunning) {
+        if (!armed || mode != STAB) {
+            openLoopRunning = false;
+            openLoopState = armed ? 5 : 4;
+        } else {
+            if (now - openLoopStepStarted >= (unsigned long)(openLoopSteps[openLoopIndex].duration * 1000.0f)) {
+                openLoopIndex++;
+                if (openLoopIndex >= openLoopCount) {
+                    openLoopRunning = false;
+                    openLoopState = 3;
+                    openLoopLandingStarted = true;
+                    beginLanding = true;
+                } else {
+                    openLoopStepStarted = now;
+                }
+            }
+            if (openLoopRunning) {
+                step = openLoopSteps[openLoopIndex];
+                applyStep = true;
+            }
+        }
+    }
+    portEXIT_CRITICAL(&openLoopMux);
+
+    if (beginLanding) descend();
+    if (applyStep) setWebRCInput(step.roll, step.pitch, step.yaw, step.throttle * 2.0f - 100.0f);
+}
 
 // ==================== 灵敏度缩放 ====================
 // 最终输出 = 处理后角度 × scale / STICK_MAX，结果写入 control* ([-1,1])
@@ -66,6 +203,12 @@ static unsigned long lastDataErrorTime = 0; // 上次数据异常时间，用于
 // ==================== Web 服务器 ====================
 WebServer webRCServer(80);          // 主服务器：80端口（标准HTTP，无需在URL中写端口）
 
+#if WIFI_ENABLED
+extern bool isWiFiConfigPortalActive();
+extern bool configWiFi(bool ap, const char *ssid, const char *password);
+extern void scheduleWiFiRestart();
+#endif
+
 // ------旧PCB印刷地址访问 :8080 → 301跳转到80端口；旧地址全部淘汰后可删除------------
 // 8080端口兼容重定向：堆指针，setupWebRC()中动态构造，BSS仅占4字节
 // ESP32-C3无旧用户，条件编译去除以避免单核上200ms自旋阻塞和额外socket占用
@@ -81,6 +224,7 @@ static char consoleBuf[CONSOLE_LINES][CONSOLE_LINE_LEN];
 static int  consoleTail   = 0;
 static int  consoleFilled = 0;
 static int  consoleTotal  = 0;   // 单调递增总行数，用于增量拉取
+static portMUX_TYPE consoleMux = portMUX_INITIALIZER_UNLOCKED;
 
 #define CONSOLE_CMD_QUEUE_SIZE 4
 #define CONSOLE_CMD_LEN 64
@@ -88,24 +232,92 @@ static char consoleCmdQueue[CONSOLE_CMD_QUEUE_SIZE][CONSOLE_CMD_LEN];
 static int  consoleCmdHead  = 0;
 static int  consoleCmdTail  = 0;
 static int  consoleCmdCount = 0;
+static portMUX_TYPE consoleCmdMux = portMUX_INITIALIZER_UNLOCKED;
 
-bool enqueueConsoleCmd(const char* cmd) {
-    if (!cmd || !*cmd) return false;
-    if (consoleCmdCount >= CONSOLE_CMD_QUEUE_SIZE) return false;
-    strncpy(consoleCmdQueue[consoleCmdTail], cmd, CONSOLE_CMD_LEN - 1);
-    consoleCmdQueue[consoleCmdTail][CONSOLE_CMD_LEN - 1] = '\0';
-    consoleCmdTail = (consoleCmdTail + 1) % CONSOLE_CMD_QUEUE_SIZE;
-    consoleCmdCount++;
+#define WEB_RC_INPUT_QUEUE_SIZE 3
+static WebRCInputEvent webRCInputQueue[WEB_RC_INPUT_QUEUE_SIZE];
+static int webRCInputHead = 0;
+static int webRCInputTail = 0;
+static int webRCInputCount = 0;
+static portMUX_TYPE webRCInputMux = portMUX_INITIALIZER_UNLOCKED;
+static portMUX_TYPE webRCStateMux = portMUX_INITIALIZER_UNLOCKED;
+static portMUX_TYPE webRCWarnMux = portMUX_INITIALIZER_UNLOCKED;
+extern void setWebConsoleCommandOutput(bool enabled);
+
+uint16_t getWebRCButtons() {
+    portENTER_CRITICAL(&webRCStateMux);
+    const uint16_t buttons = webRCButtons;
+    portEXIT_CRITICAL(&webRCStateMux);
+    return buttons;
+}
+
+uint16_t takeWebRCButtonPressEdges(uint16_t *buttons) {
+    portENTER_CRITICAL(&webRCStateMux);
+    if (buttons) *buttons = webRCButtons;
+    const uint16_t edges = webRCButtonPressEdges;
+    webRCButtonPressEdges = 0;
+    portEXIT_CRITICAL(&webRCStateMux);
+    return edges;
+}
+
+static bool enqueueWebRCInput(const WebRCInputEvent &event) {
+    portENTER_CRITICAL(&webRCInputMux);
+    // Keep the newest control input if HTTP requests briefly outpace the loop.
+    if (webRCInputCount == WEB_RC_INPUT_QUEUE_SIZE) {
+        webRCInputHead = (webRCInputHead + 1) % WEB_RC_INPUT_QUEUE_SIZE;
+        webRCInputCount--;
+    }
+    webRCInputQueue[webRCInputTail] = event;
+    webRCInputTail = (webRCInputTail + 1) % WEB_RC_INPUT_QUEUE_SIZE;
+    webRCInputCount++;
+    portEXIT_CRITICAL(&webRCInputMux);
     return true;
 }
 
-void processConsoleCommandQueue() {
-    if (consoleCmdCount <= 0) return;
+static bool dequeueWebRCInput(WebRCInputEvent &event) {
+    bool dequeued = false;
+    portENTER_CRITICAL(&webRCInputMux);
+    if (webRCInputCount > 0) {
+        event = webRCInputQueue[webRCInputHead];
+        webRCInputHead = (webRCInputHead + 1) % WEB_RC_INPUT_QUEUE_SIZE;
+        webRCInputCount--;
+        dequeued = true;
+    }
+    portEXIT_CRITICAL(&webRCInputMux);
+    return dequeued;
+}
 
-    String cmd = consoleCmdQueue[consoleCmdHead];
+bool enqueueConsoleCmd(const char* cmd) {
+    if (!cmd || !*cmd) return false;
+    bool enqueued = false;
+    portENTER_CRITICAL(&consoleCmdMux);
+    if (consoleCmdCount < CONSOLE_CMD_QUEUE_SIZE) {
+        strncpy(consoleCmdQueue[consoleCmdTail], cmd, CONSOLE_CMD_LEN - 1);
+        consoleCmdQueue[consoleCmdTail][CONSOLE_CMD_LEN - 1] = '\0';
+        consoleCmdTail = (consoleCmdTail + 1) % CONSOLE_CMD_QUEUE_SIZE;
+        consoleCmdCount++;
+        enqueued = true;
+    }
+    portEXIT_CRITICAL(&consoleCmdMux);
+    return enqueued;
+}
+
+void processConsoleCommandQueue() {
+    char command[CONSOLE_CMD_LEN];
+    portENTER_CRITICAL(&consoleCmdMux);
+    if (consoleCmdCount <= 0) {
+        portEXIT_CRITICAL(&consoleCmdMux);
+        return;
+    }
+    strncpy(command, consoleCmdQueue[consoleCmdHead], sizeof(command) - 1);
+    command[sizeof(command) - 1] = '\0';
     consoleCmdHead = (consoleCmdHead + 1) % CONSOLE_CMD_QUEUE_SIZE;
     consoleCmdCount--;
+    portEXIT_CRITICAL(&consoleCmdMux);
+    String cmd = command;
+    setWebConsoleCommandOutput(true);
     doCommand(cmd, false);
+    setWebConsoleCommandOutput(false);
 }
 
 void webLog(const char* msg) {
@@ -116,11 +328,13 @@ void webLog(const char* msg) {
         int len = end ? (int)(end - start) : (int)strlen(start);
         if (len > 0) {
             int copy = (len < CONSOLE_LINE_LEN - 1) ? len : (CONSOLE_LINE_LEN - 1);
+            portENTER_CRITICAL(&consoleMux);
             strncpy(consoleBuf[consoleTail], start, copy);
             consoleBuf[consoleTail][copy] = '\0';
             consoleTail = (consoleTail + 1) % CONSOLE_LINES;
             if (consoleFilled < CONSOLE_LINES) consoleFilled++;
             consoleTotal++;
+            portEXIT_CRITICAL(&consoleMux);
         }
         if (!end) break;
         start = end + 1;
@@ -166,20 +380,21 @@ float processThrottle(float raw) {
 
 // ==================== 核心数据处理 ====================
 
-void setWebRCInput(float roll, float pitch, float yaw, float throttle, uint16_t buttons) {
+void setWebRCInput(float roll, float pitch, float yaw, float throttle) {
     float pThrottle = processThrottle(throttle);
     float pYaw      = processAxis(yaw,   lastValidYaw);
     float pPitch    = processAxis(pitch, lastValidPitch);
     float pRoll     = processAxis(roll,  lastValidRoll);
 
     // 暂存处理后的值（供状态端点读取）
+    portENTER_CRITICAL(&webRCStateMux);
     webRCThrottle = pThrottle;
     webRCYaw      = pYaw;
     webRCPitch    = pPitch;
     webRCRoll     = pRoll;
-    webRCButtons  = buttons;
     webRCLastUpdate = millis();
     webRCUpdated  = true;
+    portEXIT_CRITICAL(&webRCStateMux);
 
     // 写入统一控制变量（与 SBUS/MAVLink 同路径）
     controlRoll     = constrain(pRoll  * webRCStickScale / STICK_MAX, -1.0f, 1.0f);
@@ -192,7 +407,7 @@ void setWebRCInput(float roll, float pitch, float yaw, float throttle, uint16_t 
     static float lastPrintedThrottle = -1.0f;
     if (fabsf(pThrottle - lastPrintedThrottle) > 5.0f) {
         print("WebRC T=%.0f%% R=%.1f P=%.1f Y=%.1f Btn=0x%04X\n",
-              pThrottle, pRoll, pPitch, pYaw, buttons);
+              pThrottle, pRoll, pPitch, pYaw, getWebRCButtons());
         lastPrintedThrottle = pThrottle;
     }
 }
@@ -230,7 +445,8 @@ bool handleJSONProtocol(String& body) {
             if ((v = findJsonValue(json, "\"p\"")))  p  = atof(v);
             if ((v = findJsonValue(json, "\"y\"")))  y  = atof(v);
             if ((v = findJsonValue(json, "\"ts\""))) ts = atol(v);
-            setWebRCInput(r, p, y, th, webRCButtons);
+            WebRCInputEvent event = {type, r, p, y, th, -1, 0, millis()};
+            enqueueWebRCInput(event);
             break;
         }
         case 2: { // 按钮事件
@@ -240,26 +456,67 @@ bool handleJSONProtocol(String& body) {
             if ((v = findJsonValue(json, "\"s\"")))  state = atoi(v);
             if ((v = findJsonValue(json, "\"ts\""))) ts    = atol(v);
             if (idx >= 0 && idx < 16) {
-                if (state) webRCButtons |=  (1 << idx);
-                else       webRCButtons &= ~(1 << idx);
+                const uint16_t buttonMask = (uint16_t)(1U << idx);
+                portENTER_CRITICAL(&webRCStateMux);
+                if (state) {
+                    webRCButtons |= buttonMask;
+                    webRCButtonPressEdges |= buttonMask;
+                } else {
+                    webRCButtons &= (uint16_t)~buttonMask;
+                }
                 webRCLastUpdate = millis();
-                webRCUpdated    = true;
+                webRCUpdated = true;
+                portEXIT_CRITICAL(&webRCStateMux);
                 lastProcButtonIdx   = idx;
                 lastProcButtonState = state;
             }
             break;
         }
         case 4: // 心跳
-            webRCLastUpdate = millis();
-            webRCUpdated    = true;
+            enqueueWebRCInput({type, 0, 0, 0, 0, -1, 0, millis()});
             break;
     }
     return true;
 }
 
+static void processWebRCInputQueue() {
+    WebRCInputEvent event;
+    while (dequeueWebRCInput(event)) {
+        if (event.type == 1) {
+            setWebRCInput(event.roll, event.pitch, event.yaw, event.throttle);
+        } else {
+            portENTER_CRITICAL(&webRCStateMux);
+            webRCLastUpdate = event.receivedAt;
+            webRCUpdated = true;
+            portEXIT_CRITICAL(&webRCStateMux);
+        }
+    }
+}
+
 void setWebRCWarn(const char* msg) {
+    portENTER_CRITICAL(&webRCWarnMux);
     strncpy(webRCWarnMsg, msg, sizeof(webRCWarnMsg) - 1);
     webRCWarnMsg[sizeof(webRCWarnMsg) - 1] = '\0';
+    portEXIT_CRITICAL(&webRCWarnMux);
+}
+
+void clearWebRCWarn() {
+    portENTER_CRITICAL(&webRCWarnMux);
+    webRCWarnMsg[0] = '\0';
+    portEXIT_CRITICAL(&webRCWarnMux);
+}
+
+static bool consumeWebRCWarn(char *destination, size_t capacity) {
+    if (!destination || capacity == 0) return false;
+    portENTER_CRITICAL(&webRCWarnMux);
+    const bool hasWarning = webRCWarnMsg[0] != '\0';
+    if (hasWarning) {
+        strncpy(destination, webRCWarnMsg, capacity - 1);
+        destination[capacity - 1] = '\0';
+        webRCWarnMsg[0] = '\0';
+    }
+    portEXIT_CRITICAL(&webRCWarnMux);
+    return hasWarning;
 }
 
 // ==================== 最后处理的请求上下文（供响应构造使用）====================
@@ -277,18 +534,18 @@ void handleWebRCRequest() {
         //   rt=2：用户主动操作（解锁被拒等），需要即时反馈
         //   rt=4：系统自动触发（低电自动上锁等），心跳周期≈2s，延迟可接受
         // 摇杆包（rt=1）不消费 warn，避免摇杆包抢在 state=0 响应之前把 warn 清掉
-        bool deliverWarn = (lastProcType == 2 || lastProcType == 4) && webRCWarnMsg[0];
+        char warning[sizeof(webRCWarnMsg)];
+        bool deliverWarn = (lastProcType == 2 || lastProcType == 4) && consumeWebRCWarn(warning, sizeof(warning));
         if (deliverWarn) {
             if (lastProcButtonIdx >= 0) {
                 snprintf(resp, sizeof(resp),
                     "{\"s\":\"ok\",\"m\":%d,\"arm\":%d,\"rt\":%d,\"bi\":%d,\"bs\":%d,\"warn\":\"%s\"}",
-                    mode, (int)armed, lastProcType, lastProcButtonIdx, lastProcButtonState, webRCWarnMsg);
+                    mode, (int)armed, lastProcType, lastProcButtonIdx, lastProcButtonState, warning);
             } else {
                 snprintf(resp, sizeof(resp),
                     "{\"s\":\"ok\",\"m\":%d,\"arm\":%d,\"rt\":%d,\"warn\":\"%s\"}",
-                    mode, (int)armed, lastProcType, webRCWarnMsg);
+                    mode, (int)armed, lastProcType, warning);
             }
-            webRCWarnMsg[0] = '\0'; // 发送后立即清空
         } else {
             if (lastProcButtonIdx >= 0) {
                 snprintf(resp, sizeof(resp),
@@ -309,7 +566,13 @@ void handleWebRCRequest() {
 // ==================== 连接状态 ====================
 
 bool isWebRCEnabled() {
-    return webRCUpdated && (millis() - webRCLastUpdate < WEB_RC_TIMEOUT_MS);
+    bool updated;
+    unsigned long lastUpdate;
+    portENTER_CRITICAL(&webRCStateMux);
+    updated = webRCUpdated;
+    lastUpdate = webRCLastUpdate;
+    portEXIT_CRITICAL(&webRCStateMux);
+    return updated && (millis() - lastUpdate < WEB_RC_TIMEOUT_MS);
 }
 
 bool isUsingWebRC() {
@@ -368,10 +631,170 @@ void setupWebRC() {
     lastValidRoll = lastValidPitch = lastValidYaw = 0.0f;
 
     webRCServer.on("/", HTTP_GET, []() {
+#if WIFI_ENABLED
+        if (isWiFiConfigPortalActive()) {
+            webRCServer.send_P(200, "text/html; charset=utf-8", wifiConfigHtml);
+            return;
+        }
+#endif
         webRCServer.send(200, "text/html", webRCIndexHtml);
     });
+#if WIFI_ENABLED
+    webRCServer.on("/wifi", HTTP_GET, []() {
+        webRCServer.send_P(200, "text/html; charset=utf-8", wifiConfigHtml);
+    });
+    webRCServer.on("/telemetry", HTTP_GET, []() {
+        webRCServer.send_P(200, "text/html; charset=utf-8", telemetryHtml);
+    });
+    webRCServer.on("/wifi/scan", HTTP_GET, []() {
+        int16_t scanState = WiFi.scanComplete();
+        if (webRCServer.hasArg("refresh") || scanState == WIFI_SCAN_FAILED) {
+            if (scanState == WIFI_SCAN_RUNNING) {
+                webRCServer.send(200, "application/json", "{\"state\":\"scanning\"}");
+                return;
+            }
+            WiFi.scanDelete();
+            WiFi.scanNetworks(true, true, false, 250); // 异步扫描，不阻塞飞控主循环
+            scanState = WiFi.scanComplete();
+        }
+        if (scanState == WIFI_SCAN_RUNNING) {
+            webRCServer.send(200, "application/json", "{\"state\":\"scanning\"}");
+            return;
+        }
+        if (scanState < 0) {
+            webRCServer.send(503, "application/json", "{\"state\":\"error\",\"message\":\"无法启动 Wi-Fi 扫描\"}");
+            return;
+        }
+
+        String json;
+        json.reserve(1800);
+        json = "{\"state\":\"done\",\"networks\":[";
+        bool first = true;
+        const int count = scanState < 20 ? scanState : 20;
+        for (int i = 0; i < count; ++i) {
+            const String ssid = WiFi.SSID(i);
+            if (ssid.isEmpty()) continue; // 隐藏网络由手工输入
+            if (!first) json += ',';
+            first = false;
+            json += "{\"ssid\":\"";
+            for (size_t j = 0; j < ssid.length(); ++j) {
+                const char c = ssid[j];
+                if (c == '\"' || c == '\\\\') json += '\\\\';
+                if ((uint8_t)c >= 0x20) json += c;
+            }
+            json += "\",\"rssi\":";
+            json += WiFi.RSSI(i);
+            json += ",\"open\":";
+            json += WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "true" : "false";
+            json += '}';
+        }
+        json += "]}";
+        webRCServer.send(200, "application/json", json);
+    });
+    webRCServer.on("/wifi/save", HTTP_POST, []() {
+        const String ssid = webRCServer.arg("ssid");
+        const String password = webRCServer.arg("password");
+        if (ssid.isEmpty() || ssid.length() > 32 || password.length() > 63 ||
+            (!password.isEmpty() && password.length() < 8)) {
+            webRCServer.send(400, "application/json", "{\"ok\":0,\"message\":\"SSID无效或密码长度不符合要求\"}");
+            return;
+        }
+        if (!configWiFi(false, ssid.c_str(), password.c_str())) {
+            webRCServer.send(500, "application/json", "{\"ok\":0,\"message\":\"保存失败：飞控未能验证配置写入，请重试；本次不会重启。\"}");
+            return;
+        }
+        webRCServer.send(200, "application/json", "{\"ok\":1,\"message\":\"配置已保存，飞控即将重启。请稍后将手机连接到同一路由器。\"}");
+        scheduleWiFiRestart();
+    });
+#endif
     webRCServer.on("/web_rc",           HTTP_POST, handleWebRCRequest);
     webRCServer.on("/web_rc/heartbeat", HTTP_POST, handleWebRCRequest);
+
+    webRCServer.on("/route/upload", HTTP_POST, []() {
+        uint16_t count = 0;
+        float duration = 0.0f;
+        if (!webRCServer.hasArg("plain")) {
+            webRCServer.send(400, "application/json", "{\"ok\":0,\"error\":\"missing sequence\"}");
+            return;
+        }
+        const String body = webRCServer.arg("plain");
+        OpenLoopStep *staging = (OpenLoopStep *)malloc(sizeof(OpenLoopStep) * OPEN_LOOP_MAX_STEPS);
+        if (!staging) {
+            webRCServer.send(503, "application/json", "{\"ok\":0,\"error\":\"out of memory\"}");
+            return;
+        }
+        if (!parseOpenLoopSequence(body, staging, count, duration)) {
+            free(staging);
+            webRCServer.send(400, "application/json", "{\"ok\":0,\"error\":\"invalid sequence: 5 numeric fields per row; max 128 rows and 30 minutes\"}");
+            return;
+        }
+        portENTER_CRITICAL(&openLoopMux);
+        if (openLoopState == 2 || openLoopState == 3) {
+            portEXIT_CRITICAL(&openLoopMux);
+            free(staging);
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"route busy\"}");
+            return;
+        }
+        OpenLoopStep *previousSteps = openLoopSteps;
+        openLoopSteps = staging;
+        staging = nullptr;
+        openLoopCount = count;
+        openLoopIndex = 0;
+        openLoopTotalSeconds = duration;
+        openLoopRunning = false;
+        openLoopLandingStarted = false;
+        openLoopState = 1;
+        portEXIT_CRITICAL(&openLoopMux);
+        free(previousSteps);
+        webRCServer.send(200, "application/json", "{\"ok\":1,\"state\":\"ready\"}");
+    });
+    webRCServer.on("/route/start", HTTP_POST, []() {
+        portENTER_CRITICAL(&openLoopMux);
+        const bool hasSequence = openLoopState == 1 && openLoopCount > 0;
+        portEXIT_CRITICAL(&openLoopMux);
+        if (!hasSequence) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"no uploaded sequence\"}");
+            return;
+        }
+        if (!isWebRCEnabled() || !armed || mode != STAB) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires connected Web RC, armed, STAB mode\"}");
+            return;
+        }
+        portENTER_CRITICAL(&openLoopMux);
+        openLoopIndex = 0;
+        openLoopStepStarted = millis();
+        openLoopRunning = true;
+        openLoopState = 2;
+        portEXIT_CRITICAL(&openLoopMux);
+        webRCServer.send(200, "application/json", "{\"ok\":1,\"state\":\"running\"}");
+    });
+    webRCServer.on("/route/stop", HTTP_POST, []() {
+        portENTER_CRITICAL(&openLoopMux);
+        if (openLoopRunning) {
+            openLoopRunning = false;
+            openLoopLandingStarted = false;
+            openLoopState = armed ? 3 : 4;
+        }
+        portEXIT_CRITICAL(&openLoopMux);
+        webRCServer.send(200, "application/json", "{\"ok\":1}");
+    });
+    webRCServer.on("/route/status", HTTP_GET, []() {
+        uint8_t state;
+        uint16_t count, index;
+        float duration;
+        portENTER_CRITICAL(&openLoopMux);
+        state = openLoopState;
+        count = openLoopCount;
+        index = openLoopIndex;
+        duration = openLoopTotalSeconds;
+        portEXIT_CRITICAL(&openLoopMux);
+        char response[192];
+        snprintf(response, sizeof(response),
+            "{\"state\":\"%s\",\"count\":%u,\"step\":%u,\"duration_s\":%.1f,\"arm\":%d,\"mode\":%d}",
+            openLoopStateName(state), (unsigned)count,
+            (unsigned)(index < count ? index + 1 : count), duration, (int)armed, mode);
+        webRCServer.send(200, "application/json", response);
+    });
 
     webRCServer.on("/console", HTTP_GET, []() {
         int since = -1;
@@ -380,15 +803,31 @@ void setupWebRC() {
         if (webRCServer.hasArg("limit")) limit = webRCServer.arg("limit").toInt();
         if (limit <= 0) limit = 20;
         if (limit > CONSOLE_LINES) limit = CONSOLE_LINES;
+        char (*responseLines)[CONSOLE_LINE_LEN] = (char (*)[CONSOLE_LINE_LEN])malloc((size_t)limit * CONSOLE_LINE_LEN);
+        if (!responseLines) {
+            webRCServer.send(503, "application/json", "{\"e\":\"out of memory\"}");
+            return;
+        }
 
-        int availableFrom = max(0, consoleTotal - consoleFilled);
-        int sendFrom = (since >= 0) ? since : availableFrom;
-        if (sendFrom < availableFrom) sendFrom = availableFrom;
-        if (sendFrom > consoleTotal) sendFrom = consoleTotal;
-        int sendTo = min(consoleTotal, sendFrom + limit);
+        int availableFrom, total, filled;
+        portENTER_CRITICAL(&consoleMux);
+        total = consoleTotal;
+        filled = consoleFilled;
+        int availableFromSnapshot = max(0, total - filled);
+        int sendFrom = (since >= 0) ? since : availableFromSnapshot;
+        if (sendFrom < availableFromSnapshot) sendFrom = availableFromSnapshot;
+        if (sendFrom > total) sendFrom = total;
+        int sendTo = min(total, sendFrom + limit);
+        availableFrom = availableFromSnapshot;
+        for (int i = sendFrom; i < sendTo; ++i) {
+            int idx = i % CONSOLE_LINES;
+            strncpy(responseLines[i - sendFrom], consoleBuf[idx], CONSOLE_LINE_LEN - 1);
+            responseLines[i - sendFrom][CONSOLE_LINE_LEN - 1] = '\0';
+        }
+        portEXIT_CRITICAL(&consoleMux);
 
         String json = "{\"total\":";
-        json += consoleTotal;
+        json += total;
         json += ",\"next\":";
         json += sendTo;
         json += ",\"has_more\":";
@@ -397,11 +836,10 @@ void setupWebRC() {
 
         bool first = true;
         for (int i = sendFrom; i < sendTo; i++) {
-            int idx = i % CONSOLE_LINES;
             if (!first) json += ",";
             first = false;
             json += "\"";
-            String line = consoleBuf[idx];
+            String line = responseLines[i - sendFrom];
             line.replace("\\", "\\\\");  // \ → \\
             line.replace("\"", "\\\"");  // " → \"
             line.replace("\n", "\\n");    // 兜底：换行 → \n
@@ -409,6 +847,7 @@ void setupWebRC() {
             json += line + "\"";
         }
         json += "]}";
+        free(responseLines);
         webRCServer.send(200, "application/json", json);
     });
 
@@ -435,6 +874,7 @@ void setupWebRC() {
 
     webRCServer.on("/console/enable", HTTP_POST, []() {
         webConsoleEnabled = true;
+        webLog(motd);
         webRCServer.send(200, "application/json", "{\"ok\":1}");
     });
 
@@ -444,21 +884,58 @@ void setupWebRC() {
     });
 
     webRCServer.on("/web_rc/status", HTTP_GET, []() {
-        float vbat = readBatteryVoltage();
+        bool updated;
+        unsigned long lastUpdate;
+        float throttle, roll, pitch, yaw;
+        portENTER_CRITICAL(&webRCStateMux);
+        updated = webRCUpdated;
+        lastUpdate = webRCLastUpdate;
+        throttle = webRCThrottle; roll = webRCRoll; pitch = webRCPitch; yaw = webRCYaw;
+        portEXIT_CRITICAL(&webRCStateMux);
+        const bool enabled = updated && (millis() - lastUpdate < WEB_RC_TIMEOUT_MS);
+        float vbat = batteryVoltage;
         if (isnan(vbat) || vbat < 0.0f) vbat = 0.0f;
-        char json[384];
+        char json[448];
         snprintf(json, sizeof(json),
             "{\"enabled\":%s,\"active\":%s,"
             "\"voltage\":%.2f,"
-            "\"throttle\":%.1f,\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f}",
-            isWebRCEnabled() ? "true" : "false",
-            isUsingWebRC()   ? "true" : "false",
+            "\"throttle\":%.1f,\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,\"faults\":%lu}",
+            enabled ? "true" : "false",
+            (useWebRC && enabled) ? "true" : "false",
             vbat,
-            webRCThrottle, webRCRoll, webRCPitch, webRCYaw);
+            throttle, roll, pitch, yaw,
+            (unsigned long)getActiveDiagnosticFaults());
         webRCServer.send(200, "application/json", json);
     });
 
+    webRCServer.onNotFound([]() {
+#if WIFI_ENABLED
+        if (isWiFiConfigPortalActive()) {
+            webRCServer.sendHeader("Location", "/wifi", true);
+            webRCServer.send(302, "text/plain", "Wi-Fi configuration");
+            return;
+        }
+#endif
+        webRCServer.send(404, "text/plain", "Not found");
+    });
+
     webRCServer.begin();
+
+    if (xTaskCreatePinnedToCore([](void*) {
+            for (;;) {
+                webRCServer.handleClient();
+#ifndef CONFIG_IDF_TARGET_ESP32C3
+                handleRedirect8080();
+#endif
+                vTaskDelay(pdMS_TO_TICKS(1));
+            }
+        }, "web_rc_http", 8192, nullptr, 1, nullptr, 0) != pdPASS) {
+        print("WEB_RC_HTTP state=DISABLED reason=task_create_failed\n");
+        recordSystemLogEvent("WEB_RC", "http_task_create_failed");
+    } else {
+        print("WEB_RC_HTTP state=READY core=0 priority=1\n");
+        recordSystemLogEvent("WEB_RC", "http_task_ready core=0 priority=1");
+    }
 
     // ------旧PCB印刷地址访问 :8080 → 301跳转到80端口；旧地址全部淘汰后可删除------------
 #ifndef CONFIG_IDF_TARGET_ESP32C3
@@ -467,7 +944,15 @@ void setupWebRC() {
 #endif
     // ------旧PCB印刷地址访问 :8080 → 301跳转到80端口；旧地址全部淘汰后可删除------------
 
-    print("✓ Web RC 已启动，访问地址: http://192.168.4.1\n");
+#if WIFI_ENABLED
+    if (isWiFiConfigPortalActive()) {
+        print("✓ Web RC / Wi-Fi 配置: http://%s/wifi\n", WiFi.softAPIP().toString().c_str());
+    } else {
+        print("✓ Web RC 已启动；STA连接后访问 http://<飞控IP>/\n");
+    }
+#else
+    print("✓ Web RC 已启动\n");
+#endif
     print("  死区 摇杆=%.0f%% 油门=%.0f%% | 缩放 摇杆=%.2f 偏航=%.2f\n",
           stickDeadzone * 100.0f, throttleDeadzone * 100.0f,
           webRCStickScale, webRCYawScale);
@@ -476,19 +961,15 @@ void setupWebRC() {
 // ==================== 主循环函数 ====================
 
 void readWebRC() {
-    webRCServer.handleClient();
-
-    // ------旧PCB印刷地址访问 :8080 → 301跳转到80端口；旧地址全部淘汰后可删除------------
-#ifndef CONFIG_IDF_TARGET_ESP32C3
-    handleRedirect8080(); // 处理8080重定向，兼容旧PCB访问
-#endif
-    // ------旧PCB印刷地址访问 :8080 → 301跳转到80端口；旧地址全部淘汰后可删除------------
+    processWebRCInputQueue();
+    stepOpenLoopSequence();
     
     if (isWebRCEnabled()) {
         webRCEnabled = useWebRC = true;
     } else {
         webRCEnabled = useWebRC = false;
     }
+	if (isUsingWebRC()) setDiagnosticFault(DIAG_WEB_RC_LOSS, false);
 }
 
 #else

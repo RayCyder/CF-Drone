@@ -261,8 +261,7 @@ void calibrateRCChannel(float *channel, uint16_t in[16], uint16_t out[16], const
 		channelMax[ch] = out[ch];
 		print("  -> 识别成功：通道 %d（变化量 %d，zero=%u max=%u）\n", ch, diff, in[ch], out[ch]);
 	} else {
-		*channel = NAN;
-		print("  -> 识别失败！最大变化量仅 %d（需 > 10），请确认已按提示动作摇杆/开关，且遥控信号正常（可先用 rc 命令确认拨动摇杆时数值有变化）\n", diff);
+		print("  -> 识别失败！最大变化量仅 %d（需 > 10），原通道配置保持不变；请确认遥控信号正常后重试。\n", diff);
 	}
 }
 

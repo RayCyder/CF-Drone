@@ -2,20 +2,30 @@
 // Parameters storage in flash memory
 
 #include <Preferences.h>
-#include <nvs_flash.h> // nvs_flash_init()/nvs_flash_erase()：当 Preferences.begin() 失败时用于擦除重建 NVS
+#include <limits.h>
+#include <stdlib.h>
+#include <string.h>
 #include "util.h"
+#include "board_config.h"
+#include "diagnostics.h"
+#include "system_log.h"
 
 extern float channelZero[16];
 extern float channelMax[16];
 extern float rollChannel, pitchChannel, throttleChannel, yawChannel, modeChannel;
+#if BOARD_WIFI_ENABLED
 extern int wifiMode, udpLocalPort, udpRemotePort;
+#endif
 extern int motorPins[4];
 extern int pwmFrequency, pwmResolution, pwmStop, pwmMin, pwmMax;
 extern float motThrMin;
 extern float motThrMax;
+extern bool armed;
+#if BOARD_WIFI_ENABLED
 extern int mavlinkSysId;
 extern Rate telemetrySlow, telemetryFast;
-extern float rcLossTimeout, descendTime;
+#endif
+extern float rcLossTimeout, descendTime, descendThrust;
 extern int flightModes[3];
 extern Vector accBias, accScale;
 extern Vector imuRotation;
@@ -30,6 +40,7 @@ extern float levelBiasGain;              // Mahony I 项增益，定义于 estim
 extern Vector levelGyroBias;             // Mahony 虚拟陀螺偏置，定义于 estimate.ino
 
 Preferences storage;
+static bool parameterStorageReady = false;
 
 struct Parameter {
 	const char *name; // max length is 15 (Preferences key limit)
@@ -106,7 +117,7 @@ Parameter parameters[] = {
 
 	// ===== IMU（加速度计标定）=====
 	// 出厂或重新安装后需对加速度计进行六面标定，结果存入以下参数。
-	// 标定公式：acc_corrected = (acc_raw - bias) * scale
+	// 标定公式：acc_corrected = (acc_raw - bias) / scale
 	{"IMU_ACC_BIAS_X", &accBias.x},  // 加速度计 X 轴零偏（m/s²）
 	{"IMU_ACC_BIAS_Y", &accBias.y},  // 加速度计 Y 轴零偏（m/s²）
 	{"IMU_ACC_BIAS_Z", &accBias.z},  // 加速度计 Z 轴零偏（m/s²）
@@ -178,8 +189,9 @@ Parameter parameters[] = {
 	{"RC_TX_PIN",   &rcTxPin,    setupRC}, // 遥测回传 GPIO 引脚（UART TX）；-1=不启用回传
 	{"RC_BAUD",     &rcBaud,     setupRC}, // 遥控串口波特率（bps）；SBUS=100000，CRSF=420000
 
+#if BOARD_WIFI_ENABLED
 	// ===== WiFi =====
-	{"WIFI_MODE",     &wifiMode},      // WiFi 工作模式：0=关闭，1=STA（连接已有热点），2=AP（自建热点）
+	{"WIFI_MODE",     &wifiMode},      // WiFi 工作模式：0=关闭，1=STA（连接已有热点），2=AP（自建配网热点）
 	{"WIFI_LOC_PORT", &udpLocalPort},  // 本地 UDP 监听端口（地面站发送到此端口）
 	{"WIFI_REM_PORT", &udpRemotePort}, // 远端 UDP 目标端口（飞控主动发送到此端口）
 
@@ -187,41 +199,178 @@ Parameter parameters[] = {
 	{"MAV_SYS_ID",    &mavlinkSysId},       // MAVLink 系统 ID（1~254），区分多机时需唯一
 	{"MAV_RATE_SLOW", &telemetrySlow.rate}, // 慢速遥测发送频率（Hz），用于心跳、电池等低频数据
 	{"MAV_RATE_FAST", &telemetryFast.rate}, // 快速遥测发送频率（Hz），用于姿态、角速率等高频数据
+#endif
 
 	// ===== 故障保护 =====
 	{"SF_RC_LOSS_TIME",  &rcLossTimeout}, // RC 信号丢失超时阈值（秒），超时后进入自动下降模式
-	{"SF_DESCEND_TIME",  &descendTime},   // 自动下降至油门归零所需时间（秒），越小下降越快
+	{"SF_DESCEND_TIME",  &descendTime},   // 自动下降时过渡到目标推力的时间（秒）
+	{"SF_DESCEND_THRUST", &descendThrust}, // 自动下降目标推力（归一化指令，需按机体验证）
 };
+
+static bool startsWith(const char *value, const char *prefix) {
+	return strncmp(value, prefix, strlen(prefix)) == 0;
+}
+
+static bool within(float value, float low, float high) {
+	return isfinite(value) && value >= low && value <= high;
+}
+
+static bool validParameterValue(const char *name, bool integer, float value) {
+	if (!isfinite(value)) {
+		// Channel indices start as NaN until RC calibration. This is an intentional
+		// "unassigned" sentinel, so it must not be reported as corrupted config.
+		if (isnan(value) && (!strcmp(name, "RC_ROLL") || !strcmp(name, "RC_PITCH") ||
+			!strcmp(name, "RC_THROTTLE") || !strcmp(name, "RC_YAW") || !strcmp(name, "RC_MODE")))
+			return true;
+		return false;
+	}
+	if (integer && (value < INT_MIN || value > INT_MAX || floorf(value) != value)) return false;
+
+	if (startsWith(name, "CTL_FLT_MODE_")) return within(value, 0, 4);
+	if (!strcmp(name, "RC_ROLL") || !strcmp(name, "RC_PITCH") || !strcmp(name, "RC_THROTTLE") ||
+		!strcmp(name, "RC_YAW") || !strcmp(name, "RC_MODE"))
+		return within(value, 0, 15) && floorf(value) == value;
+	if (startsWith(name, "RC_ZERO_")) {
+		int channel = atoi(name + 8);
+		if (!within(value, 0, 2047) || channel < 0 || channel >= 16) return false;
+		return channelMax[channel] == 0 || fabsf(value - channelMax[channel]) > 10;
+	}
+	if (startsWith(name, "RC_MAX_")) {
+		int channel = atoi(name + 7);
+		if (!within(value, 0, 2047) || channel < 0 || channel >= 16) return false;
+		return value == 0 || fabsf(value - channelZero[channel]) > 10;
+	}
+	if (startsWith(name, "MOT_PIN_")) return within(value, 0, 48) && floorf(value) == value;
+	if (!strcmp(name, "MOT_PWM_FREQ")) return within(value, 100, 80000) && floorf(value) == value;
+	if (!strcmp(name, "MOT_PWM_RES")) return within(value, 1, 20) && floorf(value) == value;
+	if (!strcmp(name, "MOT_PWM_STOP"))
+		return within(value, 0, 10000) && (pwmMax < 0 || value <= pwmMax);
+	if (!strcmp(name, "MOT_PWM_MIN"))
+		return within(value, 0, 10000) && (pwmMax < 0 || value < pwmMax);
+	if (!strcmp(name, "MOT_PWM_MAX"))
+		return value == -1 || (within(value, 1, 10000) && value > pwmMin && value >= pwmStop);
+	if (!strcmp(name, "MOT_THR_MIN")) return within(value, 0, 1) && value <= motThrMax;
+	if (!strcmp(name, "MOT_THR_MAX")) return within(value, 0, 1) && value >= motThrMin;
+	if (strstr(name, "_RATE_MAX")) return within(value, 0.1f, 20);
+	if (startsWith(name, "CTL_TRIM_")) return within(value, -0.5f, 0.5f);
+	if (startsWith(name, "CTL_") && (strstr(name, "_RATE_") || strstr(name, "_WU")))
+		return within(value, 0, strstr(name, "_WU") ? 20 : 100);
+	if (startsWith(name, "CTL_") && (strstr(name, "_P") || strstr(name, "_I") || strstr(name, "_D")))
+		return within(value, 0, 100);
+	if (!strcmp(name, "CTL_TILT_MAX")) return within(value, 0.05f, 1.3963f);
+	if (startsWith(name, "IMU_ROT_")) return within(value, -PI, PI);
+	if (!strcmp(name, "IMU_GYRO_BIAS_A") || !strcmp(name, "EST_RATES_LPF_A")) return within(value, 0, 1);
+	if (startsWith(name, "IMU_ACC_SCALE_")) return within(value, 0.8f, 1.2f);
+	if (startsWith(name, "IMU_ACC_BIAS_")) return within(value, -2, 2);
+	if (!strcmp(name, "EST_ACC_WEIGHT") || !strcmp(name, "EST_LVL_GATE_THR")) return within(value, 0, 1);
+	if (!strcmp(name, "EST_LVL_BIAS_GAIN")) return within(value, 0, 0.01f);
+	if (!strcmp(name, "RC_RX_PIN") || !strcmp(name, "RC_TX_PIN"))
+		return within(value, -1, 48) && floorf(value) == value;
+	if (!strcmp(name, "RC_PROTOCOL")) return within(value, 0, 1) && floorf(value) == value;
+	if (!strcmp(name, "RC_BAUD")) return within(value, 9600, 1000000) && floorf(value) == value;
+	if (!strcmp(name, "WIFI_MODE")) return within(value, 0, 2) && floorf(value) == value;
+	if (!strcmp(name, "WIFI_LOC_PORT") || !strcmp(name, "WIFI_REM_PORT"))
+		return within(value, 1, 65535) && floorf(value) == value;
+	if (!strcmp(name, "MAV_SYS_ID")) return within(value, 1, 254) && floorf(value) == value;
+	if (!strcmp(name, "MAV_RATE_SLOW") || !strcmp(name, "MAV_RATE_FAST")) return within(value, 0.1f, 100);
+	if (!strcmp(name, "SF_RC_LOSS_TIME")) return within(value, 0.1f, 10);
+	if (!strcmp(name, "SF_DESCEND_TIME")) return within(value, 1, 120);
+	if (!strcmp(name, "SF_DESCEND_THRUST")) return within(value, 0.05f, 0.5f);
+	return true;
+}
+
+static bool allParametersValid() {
+	for (auto &parameter : parameters)
+		if (!validParameterValue(parameter.name, parameter.integer, parameter.getValue())) return false;
+	return true;
+}
+
+static void reportInvalidParameters(const char *phase) {
+	for (auto &parameter : parameters) {
+		const float value = parameter.getValue();
+		if (validParameterValue(parameter.name, parameter.integer, value)) continue;
+		print("PARAM_INVALID phase=%s name=%s value=%.7g integer=%u\n",
+			phase, parameter.name, value, parameter.integer ? 1 : 0);
+		char message[48];
+		snprintf(message, sizeof(message), "%s %s=%.6g", phase, parameter.name, value);
+		recordSystemLogEvent("PARAM_BAD", message);
+	}
+}
+
+void printInvalidParameterValues() {
+	bool found = false;
+	for (auto &parameter : parameters) {
+		const float value = parameter.getValue();
+		if (validParameterValue(parameter.name, parameter.integer, value)) continue;
+		print("PARAM_INVALID name=%s value=%.7g integer=%u\n",
+			parameter.name, value, parameter.integer ? 1 : 0);
+		found = true;
+	}
+	if (!found) print("PARAMETER active but all current parameter values pass validation.\n");
+}
 
 void setupParameters() {
 	print("Setup parameters\n");
-	if (!storage.begin("flix", false)) {
-		// Preferences.begin() 内部 nvs_flash_init() 失败会直接返回 false（常见于分区表变更/NVS数据版本不兼容/异常断电导致的NVS损坏），
-		// 此时按 ESP-IDF 标准做法擦除分区后重试，否则会永久静默失败（所有参数都无法持久化）。
-		print("[NVS] Preferences.begin 失败，尝试擦除 NVS 分区并重新初始化...\n");
-		nvs_flash_erase();
-		esp_err_t err = nvs_flash_init();
-		print("[NVS] nvs_flash_init 重试结果: err=%d\n", err);
-		if (!storage.begin("flix", false)) {
-			print("[NVS] 二次初始化仍然失败，参数将无法持久化，请检查分区表/硬件！\n");
-		} else {
-			print("[NVS] 擦除重建成功，参数将从代码默认值重新开始（旧数据已丢失，需重新执行 ca/cr 等标定）\n");
-		}
+	parameterStorageReady = storage.begin("flix", false);
+	if (!parameterStorageReady) {
+		// Never erase the full NVS partition here: it also contains Wi-Fi credentials
+		// and persistent system logs. Keep the existing data and run with defaults.
+		print("[NVS] Preferences.begin 失败；为保护 Wi-Fi 凭据和日志，本次启动不擦除 NVS。参数无法持久化。\n");
 	}
+	recordSystemLogEvent("NVS", parameterStorageReady ? "preferences=ready" : "preferences=failed");
+	// Earlier firmware used the inverse WIFI_MODE numbering (1=AP, 2=STA).
+	// Convert existing values once while retaining the user's effective mode.
+#if BOARD_WIFI_ENABLED
+	// NVS key names allow at most 15 characters; WIFI_MODE_SCHEMA was 16,
+	// so it was never stored and the legacy conversion ran after every reboot.
+	static const char *wifiModeVersionKey = "WIFI_MODE_VER";
+	static const uint8_t wifiModeVersion = 1;
+	if (storage.getUChar(wifiModeVersionKey, 0) != wifiModeVersion) {
+		int legacyMode = -1;
+		int migratedMode = -1;
+		if (storage.isKey("WIFI_MODE")) {
+			legacyMode = (int)storage.getFloat("WIFI_MODE", 0);
+			migratedMode = legacyMode == 1 ? 2 : legacyMode == 2 ? 1 : legacyMode;
+			if (migratedMode != legacyMode &&
+				storage.putFloat("WIFI_MODE", (float)migratedMode) != sizeof(float)) {
+				migratedMode = -1;
+			}
+		}
+		const bool modeReady = legacyMode < 0 || migratedMode >= 0;
+		const bool versionWritten = modeReady && storage.putUChar(wifiModeVersionKey, wifiModeVersion) > 0;
+		const bool versionVerified = versionWritten && storage.getUChar(wifiModeVersionKey, 0) == wifiModeVersion;
+		if (!versionVerified && legacyMode >= 0 && migratedMode != legacyMode) {
+			// Leave the old value intact if the version marker cannot be committed,
+			// so a later boot can retry the same one-time conversion.
+			storage.putFloat("WIFI_MODE", (float)legacyMode);
+		}
+		print("WIFI_MODE_MIGRATION old=%d new=%d version=%u result=%s\n", legacyMode, migratedMode,
+			(unsigned)storage.getUChar(wifiModeVersionKey, 0), versionVerified ? "OK" : "FAIL");
+		char migrationEvent[48];
+		snprintf(migrationEvent, sizeof(migrationEvent), "old=%d new=%d ver=%u result=%s", legacyMode,
+			migratedMode, (unsigned)storage.getUChar(wifiModeVersionKey, 0), versionVerified ? "OK" : "FAIL");
+		recordSystemLogEvent("WIFI_MIG", migrationEvent);
+	}
+#endif
 	// Read parameters from storage
 	for (auto &parameter : parameters) {
 		if (!storage.isKey(parameter.name)) {
 			storage.putFloat(parameter.name, parameter.getValue()); // store default value
 		}
 		float stored = storage.getFloat(parameter.name, parameter.getValue());
-		// 整型参数若读到 NaN（flash 损坏），回退到代码默认值并重写
-		if (parameter.integer && !isfinite(stored)) {
-			stored = (float)parameter.getValue();
+		if (!validParameterValue(parameter.name, parameter.integer, stored)) {
+			stored = parameter.getValue();
 			storage.putFloat(parameter.name, stored);
+			setDiagnosticFault(DIAG_PARAMETER, true);
+			print("[参数诊断] %s 存储值无效或越界，已回退默认值。\n", parameter.name);
 		}
 		parameter.setValue(stored);
 		parameter.cache = parameter.getValue();
 	}
+	// 存储异常值已回退默认值后，当前参数集若全部有效则清除活动故障；历史次数仍保留。
+	const bool parametersValid = allParametersValid();
+	if (!parametersValid) reportInvalidParameters("load");
+	setDiagnosticFault(DIAG_PARAMETER, !parametersValid);
 }
 
 int parametersCount() {
@@ -250,9 +399,10 @@ float getParameter(const char *name) {
 bool setParameter(const char *name, const float value) {
 	for (auto &parameter : parameters) {
 		if (strcasecmp(parameter.name, name) == 0) {
-			if (parameter.integer && !isfinite(value)) return false; // can't set integer to NaN or Inf
+			if (!validParameterValue(parameter.name, parameter.integer, value)) return false;
 			parameter.setValue(value);
 			if (parameter.callback) parameter.callback();
+			setDiagnosticFault(DIAG_PARAMETER, !allParametersValid());
 			return true;
 		}
 	}
@@ -262,15 +412,42 @@ bool setParameter(const char *name, const float value) {
 void syncParameters() {
 	static Rate rate(1);
 	if (!rate) return; // sync once per second
-	if (motorsActive()) return; // don't use flash while flying, it may cause a delay
+	if (armed || motorsActive() || !parameterStorageReady) return; // don't write flash while armed or NVS is unavailable
 
+	bool hasInvalidParameter = false;
 	for (auto &parameter : parameters) {
+		if (!validParameterValue(parameter.name, parameter.integer, parameter.getValue())) {
+			hasInvalidParameter = true;
+			continue;
+		}
 		if (parameter.getValue() == parameter.cache) continue;
 		if (isnan(parameter.getValue()) && isnan(parameter.cache)) continue; // handle NAN != NAN
 		size_t written = storage.putFloat(parameter.name, parameter.getValue());
 		if (written != sizeof(float)) continue; // 写入失败时不更新cache，保留旧值，下一轮 1Hz 周期自动重试
 		parameter.cache = parameter.getValue();
 	}
+	if (hasInvalidParameter) {
+		if (!(getActiveDiagnosticFaults() & DIAG_PARAMETER)) reportInvalidParameters("runtime");
+		setDiagnosticFault(DIAG_PARAMETER, true);
+	} else {
+		setDiagnosticFault(DIAG_PARAMETER, !allParametersValid());
+	}
+}
+
+bool saveParameterNow(const char *name) {
+	if (!name || armed || motorsActive() || !parameterStorageReady) return false;
+	for (auto &parameter : parameters) {
+		if (strcasecmp(parameter.name, name) != 0) continue;
+		const float value = parameter.getValue();
+		if (!validParameterValue(parameter.name, parameter.integer, value)) return false;
+		const size_t written = storage.putFloat(parameter.name, value);
+		if (written != sizeof(float)) return false;
+		const float stored = storage.getFloat(parameter.name, NAN);
+		if (!isfinite(stored) || stored != value) return false;
+		parameter.cache = value;
+		return true;
+	}
+	return false;
 }
 
 void printParameters() {
@@ -280,6 +457,8 @@ void printParameters() {
 }
 
 void resetParameters() {
-	storage.clear();
+	// Reset only registered flight parameters. Wi-Fi credentials, migration
+	// metadata, and persistent system logs share this namespace and must survive.
+	for (auto &parameter : parameters) storage.remove(parameter.name);
 	ESP.restart();
 }

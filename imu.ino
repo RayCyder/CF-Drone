@@ -7,10 +7,12 @@
 #include "lpf.h"
 #include "util.h"
 #include "board_config.h"
+#include "diagnostics.h"
 
 MPU9250 imu(SPI, BOARD_SPI_CS);
 
 bool imuOK = false; // IMU 初始化是否成功；false 时禁止解锁，readIMU() 跳过等待
+extern bool saveParameterNow(const char *name);
 
 // IMU 安装方向（欧拉角，单位 rad）。默认值 (0, 0, -PI/2) 对应本 PCB 的安装方式：
 // 芯片正面朝上，X 丝印→飞行器右侧，Y 丝印→飞行器前方 → 转换公式 Vector(data.y, -data.x, data.z)
@@ -22,30 +24,82 @@ Vector accScale(1, 1, 1);
 Vector gyroBias;
 LowPassFilter<Vector> gyroBiasFilter(0.001); // 陀螺仪偏置低通估计滤波器
 
+static Vector calibrationRawAcc;
+static uint32_t calibrationRawAccSequence;
+static Vector calibrationFaces[6];
+static Vector calibrationSum;
+static int calibrationFace;
+static int calibrationSampleCount;
+static uint32_t calibrationLastSequence;
+static uint32_t calibrationPhaseStarted;
+static bool calibrationProgressShown;
+enum AccelCalibrationPhase { CAL_IDLE, CAL_SETTLE, CAL_SAMPLE, CAL_GAP };
+static AccelCalibrationPhase calibrationPhase = CAL_IDLE;
+static const char *calibrationInstructions[6] = {
+	"水平放置：机头朝前，底部朝下，确保水平且静止。",
+	"机头朝上：机头指向天空，机身与地面垂直。",
+	"机头朝下：机头指向地面，机身与地面垂直。",
+	"右侧朝下：机身右侧接触支撑面。",
+	"左侧朝下：机身左侧接触支撑面。",
+	"倒置放置：顶部朝下，底部朝上。"
+};
+
+static void printCalibrationFace();
+static void abortAccelCalibration(const char *reason);
+static bool finishAccelCalibration();
+bool isAccelCalibrationActive();
+void updateAccelCalibration();
+
 void setupIMU() {
 	print("Setup IMU\n");
 	SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI, BOARD_SPI_CS);
 	if (!imu.begin()) {
+		print("IMU_INIT_DETAIL result=FAIL driver_status=%d whoami=0x%02X model=%s\n",
+			imu.status(), imu.whoAmI(), imu.getModel());
 		print("⚠ IMU初始化失败！请检查 IMU 硬件连接！\n");
+		setDiagnosticFault(DIAG_IMU_INIT, true);
 		return; // 不调用 configureIMU()，不启动定时器中断，imuOK 保持 false
 	}
-	imuOK = true;
-	configureIMU();
+	imuOK = configureIMU();
+	if (!imuOK) {
+		setDiagnosticFault(DIAG_IMU_INIT, true);
+		print("IMU_CONFIG_DETAIL result=FAIL driver_status=%d whoami=0x%02X model=%s\n",
+			imu.status(), imu.whoAmI(), imu.getModel());
+		print("⚠ IMU配置失败，禁止解锁。\n");
+	}
 }
 
-void configureIMU() {
-	imu.setAccelRange(imu.ACCEL_RANGE_4G);
-	imu.setGyroRange(imu.GYRO_RANGE_2000DPS);
-	imu.setDLPF(imu.DLPF_MAX);
-	imu.setRate(imu.RATE_1KHZ_APPROX);
-	imu.setupInterrupt();
+bool configureIMU() {
+	bool ok = imu.setAccelRange(imu.ACCEL_RANGE_4G);
+	ok = imu.setGyroRange(imu.GYRO_RANGE_2000DPS) && ok;
+	ok = imu.setDLPF(imu.DLPF_MAX) && ok;
+	ok = imu.setRate(imu.RATE_1KHZ_APPROX) && ok;
+	ok = imu.setupInterrupt() && ok;
+	return ok;
 }
 
 void readIMU() {
 	if (!imuOK) return; // IMU 故障时跳过，gyro/acc 保持零值，主循环继续运行
-	imu.waitForData();
+	static uint8_t consecutiveGoodFrames = 0;
+	if (!imu.waitForData(5)) {
+		consecutiveGoodFrames = 0;
+		setDiagnosticFault(DIAG_IMU_TIMEOUT, true);
+		return;
+	}
 	imu.getGyro(gyro.x, gyro.y, gyro.z);
 	imu.getAccel(acc.x, acc.y, acc.z);
+	if (!gyro.valid() || !acc.valid()) {
+		consecutiveGoodFrames = 0;
+		setDiagnosticFault(DIAG_IMU_INVALID, true);
+		return;
+	}
+	calibrationRawAcc = acc;
+	++calibrationRawAccSequence;
+	if (consecutiveGoodFrames < 100) ++consecutiveGoodFrames;
+	if (consecutiveGoodFrames >= 100) {
+		setDiagnosticFault(DIAG_IMU_TIMEOUT, false);
+		setDiagnosticFault(DIAG_IMU_INVALID, false);
+	}
 	calibrateGyroOnce();
 	// apply scale and bias
 	acc = (acc - accBias) / accScale;
@@ -74,74 +128,157 @@ void calibrateGyroOnce() {
 }
 
 void calibrateAccel() {
-	print("校准陀螺仪加速计 Calibrating accelerometer\n");
-	imu.setAccelRange(imu.ACCEL_RANGE_2G); // the most sensitive mode
-
-	print("1/6 水平放置：机头朝前（正常飞行方向），底部朝下水平放置在平坦表面，确保完全水平无倾斜。保持不动，8秒后开始校准；\n");
-	pause(8);
-	calibrateAccelOnce();
-	print("水平校准完成。请继续。\n");
-	pause(1);
-	print("2/6 机头朝上：保持机头朝前,将机头指向天空，尾部朝下并接触支撑面，与地面垂直。保持不动，8秒后开始校准；\n");
-	pause(8);
-	calibrateAccelOnce();
-	print("机头向上校准完成。请继续。\n");
-	pause(1);
-	print("3/6 机头朝下：保持机头朝前,将机头指向地面并接触支撑面，尾部朝上，与地面垂直。保持不动，8秒后开始校准；\n");
-	pause(8);
-	calibrateAccelOnce();
-	print("机头向下校准完成。请继续。\n");
-	pause(1);
-	print("4/6 右侧朝下：保持机头朝前,将飞行器右侧朝下并接触支撑面，左侧机臂朝上，与地面垂直。保持不动，8秒后开始校准；\n");
-	pause(8);
-	calibrateAccelOnce();
-	print("右侧向下校准完成。请继续。\n");
-	pause(1);
-	print("5/6 左侧朝下：保持机头朝前,将飞行器左侧朝下并接触支撑面，右侧机臂朝上，与地面垂直。保持不动，8秒后开始校准；\n");
-	pause(8);
-	calibrateAccelOnce();
-	print("左侧向下校准完成。请继续。\n");
-	pause(1);
-	print("6/6 倒置放置：保持机头朝前,将飞行器完全翻转，顶部朝下、底部朝上，整体呈水平倒置状态。保持不动，8秒后开始校准；\n");
-	pause(8);
-	calibrateAccelOnce();
-
-	printIMUCalibration();
-	print("✓全部校准完成！将机身放正，执行ps命令查看校准结果。\n");
-	configureIMU();
+	print("六面校准加速度计 Calibrating accelerometer\n");
+	extern bool armed;
+	extern bool motorsActive();
+	if (calibrationPhase != CAL_IDLE) {
+		print("六面校准已在进行中，请按当前提示操作。\n");
+		return;
+	}
+	if (armed || motorsActive() || !imuOK) {
+		print("电机必须停止且 IMU 正常，才能执行加速度计校准。\n");
+		return;
+	}
+	if (!imu.setAccelRange(imu.ACCEL_RANGE_2G)) {
+		imuOK = configureIMU();
+		setDiagnosticFault(DIAG_IMU_INIT, !imuOK);
+		print("无法切换 IMU 加速度量程，校准已取消。\n");
+		return;
+	}
+	memset(calibrationFaces, 0, sizeof(calibrationFaces));
+	calibrationFace = 0;
+	calibrationPhase = CAL_SETTLE;
+	calibrationPhaseStarted = millis();
+	calibrationLastSequence = calibrationRawAccSequence;
+	printCalibrationFace();
 }
 
-void calibrateAccelOnce() {
-	const int samples = 1000;
-	static Vector accMax(-INFINITY, -INFINITY, -INFINITY);
-	static Vector accMin(INFINITY, INFINITY, INFINITY);
+bool isAccelCalibrationActive() {
+	return calibrationPhase != CAL_IDLE;
+}
 
-	// Compute the average of the accelerometer readings
-	acc = Vector(0, 0, 0);
-	for (int i = 0; i < samples; i++) {
-		imu.waitForData();
-		Vector sample;
-		imu.getAccel(sample.x, sample.y, sample.z);
-		acc = acc + sample;
+static void printCalibrationFace() {
+	print("%d/6 %s 放稳后等待8秒，随后采样；期间飞控循环继续运行。\n",
+		calibrationFace + 1, calibrationInstructions[calibrationFace]);
+}
 
-	#ifdef CONFIG_IDF_TARGET_ESP32C3
-		// 每10帧主动让出1ms，防止单核ESP32-C3上WiFi任务因连续采样而饿死导致Beacon丢失
-		if (i % 10 == 0) delay(1);
-	#endif
-	
+static void abortAccelCalibration(const char *reason) {
+	calibrationPhase = CAL_IDLE;
+	if (!configureIMU()) {
+		imuOK = false;
+		setDiagnosticFault(DIAG_IMU_INIT, true);
 	}
-	acc = acc / samples;
+	print("加速度计校准取消：%s；原校准参数未更改。\n", reason);
+}
 
-	// Update the maximum and minimum values
-	if (acc.x > accMax.x) accMax.x = acc.x;
-	if (acc.y > accMax.y) accMax.y = acc.y;
-	if (acc.z > accMax.z) accMax.z = acc.z;
-	if (acc.x < accMin.x) accMin.x = acc.x;
-	if (acc.y < accMin.y) accMin.y = acc.y;
-	if (acc.z < accMin.z) accMin.z = acc.z;
-	// Compute scale and bias
-	accScale = (accMax - accMin) / 2 / ONE_G;
-	accBias = (accMax + accMin) / 2;
+static bool finishAccelCalibration() {
+	Vector accMin = calibrationFaces[0];
+	Vector accMax = calibrationFaces[0];
+	for (int i = 1; i < 6; ++i) {
+		accMin.x = min(accMin.x, calibrationFaces[i].x);
+		accMin.y = min(accMin.y, calibrationFaces[i].y);
+		accMin.z = min(accMin.z, calibrationFaces[i].z);
+		accMax.x = max(accMax.x, calibrationFaces[i].x);
+		accMax.y = max(accMax.y, calibrationFaces[i].y);
+		accMax.z = max(accMax.z, calibrationFaces[i].z);
+	}
+	Vector newScale = (accMax - accMin) / (2.0f * ONE_G);
+	Vector newBias = (accMax + accMin) / 2.0f;
+	if (!newScale.valid() || !newBias.valid() ||
+		newScale.x < 0.8f || newScale.x > 1.2f ||
+		newScale.y < 0.8f || newScale.y > 1.2f ||
+		newScale.z < 0.8f || newScale.z > 1.2f ||
+		fabsf(newBias.x) > 2.0f || fabsf(newBias.y) > 2.0f || fabsf(newBias.z) > 2.0f) {
+		print("六面结果异常：bias=(%.3f,%.3f,%.3f) scale=(%.3f,%.3f,%.3f)。\n",
+			newBias.x, newBias.y, newBias.z, newScale.x, newScale.y, newScale.z);
+		abortAccelCalibration("结果异常，请检查六个面的方向与静止状态后重新运行 ca 校准");
+		return false;
+	}
+	if (!configureIMU()) {
+		imuOK = false;
+		setDiagnosticFault(DIAG_IMU_INIT, true);
+		calibrationPhase = CAL_IDLE;
+		print("IMU重新配置失败，原校准参数未更改并禁止解锁。\n");
+		return false;
+	}
+	accScale = newScale;
+	accBias = newBias;
+	setDiagnosticFault(DIAG_IMU_INIT, false);
+	printIMUCalibration();
+	bool saved = true;
+	saved = saveParameterNow("IMU_ACC_BIAS_X") && saved;
+	saved = saveParameterNow("IMU_ACC_BIAS_Y") && saved;
+	saved = saveParameterNow("IMU_ACC_BIAS_Z") && saved;
+	saved = saveParameterNow("IMU_ACC_SCALE_X") && saved;
+	saved = saveParameterNow("IMU_ACC_SCALE_Y") && saved;
+	saved = saveParameterNow("IMU_ACC_SCALE_Z") && saved;
+	calibrationPhase = CAL_IDLE;
+	if (saved) print("✓加速度计六面校准完成，参数已写入并读回验证。放正机身后执行 ps 查看姿态。\n");
+	else print("⚠加速度计校准已应用于本次运行，但 NVS 保存未完全验证；重新运行 ca 并确认成功提示后再断电。\n");
+	return true;
+}
+
+void updateAccelCalibration() {
+	if (calibrationPhase == CAL_IDLE) return;
+	extern bool armed;
+	extern bool motorsActive();
+	if (armed || motorsActive()) {
+		abortAccelCalibration("检测到电机已启动");
+		return;
+	}
+	const uint32_t now = millis();
+	switch (calibrationPhase) {
+	case CAL_SETTLE:
+		if ((uint32_t)(now - calibrationPhaseStarted) >= 8000) {
+			calibrationPhase = CAL_SAMPLE;
+			calibrationPhaseStarted = now;
+			calibrationLastSequence = calibrationRawAccSequence;
+			calibrationSum = Vector(0, 0, 0);
+			calibrationSampleCount = 0;
+			calibrationProgressShown = false;
+			print("第%d面开始采样。\n", calibrationFace + 1);
+		}
+		break;
+	case CAL_SAMPLE:
+		if (calibrationRawAccSequence != calibrationLastSequence) {
+			calibrationLastSequence = calibrationRawAccSequence;
+			if (calibrationRawAcc.valid()) {
+				calibrationSum = calibrationSum + calibrationRawAcc;
+				++calibrationSampleCount;
+				if (!calibrationProgressShown && calibrationSampleCount >= 500) {
+					print("第%d面采样进度：%d/1000。\n", calibrationFace + 1, calibrationSampleCount);
+					calibrationProgressShown = true;
+				}
+			}
+		}
+		if (calibrationSampleCount >= 1000 || (uint32_t)(now - calibrationPhaseStarted) >= 2500) {
+			if (calibrationSampleCount < 950) {
+				char reason[64];
+				snprintf(reason, sizeof(reason), "第%d面有效样本不足（%d/1000）",
+					calibrationFace + 1, calibrationSampleCount);
+				abortAccelCalibration(reason);
+				return;
+			}
+			calibrationFaces[calibrationFace] = calibrationSum / (float)calibrationSampleCount;
+			print("第%d面采样完成（%d个有效样本）。\n", calibrationFace + 1, calibrationSampleCount);
+			if (calibrationFace == 5) finishAccelCalibration();
+			else {
+				calibrationPhase = CAL_GAP;
+				calibrationPhaseStarted = now;
+			}
+		}
+		break;
+	case CAL_GAP:
+		if ((uint32_t)(now - calibrationPhaseStarted) >= 1000) {
+			++calibrationFace;
+			calibrationPhase = CAL_SETTLE;
+			calibrationPhaseStarted = now;
+			printCalibrationFace();
+		}
+		break;
+	case CAL_IDLE:
+		break;
+	}
 }
 
 void printIMUCalibration() {
@@ -157,7 +294,10 @@ void printIMUInfo() {
 	print("rate: %.0f\n", loopRate);
 	print("gyro: %f %f %f\n", gyro.x, gyro.y, gyro.z);
 	print("acc: %f %f %f\n", acc.x, acc.y, acc.z);
-	imu.waitForData();
+	if (!imu.waitForData(10)) {
+		print("IMU无新数据，无法读取原始值。\n");
+		return;
+	}
 	Vector rawGyro, rawAcc;
 	imu.getGyro(rawGyro.x, rawGyro.y, rawGyro.z);
 	imu.getAccel(rawAcc.x, rawAcc.y, rawAcc.z);

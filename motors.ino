@@ -5,6 +5,8 @@
 
 #include "util.h"
 #include "board_config.h"
+#include "diagnostics.h"
+#include <string.h>
 
 float motors[4]; // normalized motor thrusts in range [0..1]
 
@@ -18,6 +20,9 @@ int pwmResolution = 10;
 int pwmStop = 0;
 int pwmMin = 0;
 int pwmMax = -1; // -1 表示纯占空比模式（接 MOSFET 直驱）；接 ESC 时设为实际 PWM 最大值（μs）
+bool motorOutputsOK = false;
+bool motorTestActive = false;
+bool motorTestArmInhibit = false;
 
 // Motors array indexes:
 const int MOTOR_REAR_LEFT = 0;
@@ -27,6 +32,7 @@ const int MOTOR_FRONT_LEFT = 3;
 
 void setupMotors() {
 	print("Setup Motors\n");
+	motorOutputsOK = true;
 
 	// 先解绑所有引脚（重复调用时清理旧 LEDC 通道），再拉低防止误转
 	for (int i = 0; i < 4; i++) {
@@ -37,13 +43,22 @@ void setupMotors() {
 
 	// configure pins
 	for (int i = 0; i < 4; i++) {
+		bool duplicatePin = false;
+		for (int j = 0; j < i; ++j) duplicatePin = duplicatePin || (motorPins[i] == motorPins[j]);
+		if (motorPins[i] < 0 || duplicatePin) {
+			motorOutputsOK = false;
+			print("  motor%d pin=%d invalid or duplicated\n", i, motorPins[i]);
+			continue;
+		}
 		bool ok = ledcAttach(motorPins[i], pwmFrequency, pwmResolution);
+		if (!ok) motorOutputsOK = false;
 		if (ok) {
 			double actual = ledcChangeFrequency(motorPins[i], pwmFrequency, pwmResolution);
 			if (actual > 0) pwmFrequency = (int)round(actual); // 用 double 接收返回值，避免精度损失
 		}
 		print("  motor%d pin=%d ledcAttach=%s\n", i, motorPins[i], ok ? "OK" : "FAIL");
 	}
+	setDiagnosticFault(DIAG_MOTOR_INIT, !motorOutputsOK);
 
 	sendMotors();
 	print("Motors initialized\n");
@@ -72,12 +87,27 @@ bool motorsActive() {
 }
 
 void testMotor(int n) {
-	print("Testing motor %d\n", n);
+	extern bool armed;
+	extern bool isAccelCalibrationActive();
+	if (!motorOutputsOK || n < 0 || n >= 4) {
+		print("电机输出未就绪或编号无效，拒绝测试。\n");
+		return;
+	}
+	if (armed || motorTestActive || isAccelCalibrationActive()) {
+		print("电机测试仅允许在已上锁时执行；当前状态不安全，拒绝测试。\n");
+		return;
+	}
+	// 电机测试期间清空所有输出，只给目标电机输出，避免遗留控制量带动其他电机。
+	memset(motors, 0, sizeof(motors));
+	motorTestActive = true;
+	motorTestArmInhibit = true;
+	print("电机 %d 将以 30%% 输出运行 3 秒。确认已拆桨并固定机体。\n", n);
 	motors[n] = 0.3;
 	delay(50); // ESP32 may need to wait until the end of the current cycle to change duty https://github.com/espressif/arduino-esp32/issues/5306
 	sendMotors();
 	pause(3);
-	motors[n] = 0;
+	memset(motors, 0, sizeof(motors));
 	sendMotors();
-	print("Done\n");
+	motorTestActive = false;
+	print("电机测试结束，全部输出已归零。请人工确认目标电机是否正常转动。\n");
 }

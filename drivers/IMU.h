@@ -49,7 +49,7 @@ public:
 	virtual int status() const = 0; // 0 - success, otherwise error
 	virtual uint8_t whoAmI() = 0;
 	virtual bool read() = 0;
-	virtual void waitForData() = 0;
+	virtual bool waitForData(uint32_t timeoutMs = 10) = 0;
 	virtual void getAccel(float& x, float& y, float& z) const = 0;
 	virtual void getGyro(float& x, float& y, float& z) const = 0;
 	virtual void getMag(float& x, float& y, float& z) const = 0;
@@ -127,16 +127,31 @@ protected:
 	}
 
 public:
-	void waitForData() override {
-		if (this->status() && interruptPin != -1) return; // don't hang if error and interrupt pin is used
+	bool waitForData(uint32_t timeoutMs = 10) override {
+		if (this->status() && interruptPin != -1) return false;
 
 		if (usingInterrupt) {
 #ifdef ESP32
-			xSemaphoreTake(interruptSemaphore, portMAX_DELAY); // wait using interrupt
-			this->read();
+			const uint32_t started = millis();
+			do {
+				const uint32_t elapsed = (uint32_t)(millis() - started);
+				if (elapsed >= timeoutMs) return false;
+				const uint32_t remaining = timeoutMs - elapsed;
+				if (xSemaphoreTake(interruptSemaphore, pdMS_TO_TICKS(remaining)) != pdTRUE) return false;
+				// The ESP32 board has no wired MPU data-ready pin, so the software
+				// timer can fire just before the sensor sets RAW_DATA_RDY. Keep
+				// waiting within the timeout window instead of reporting a false miss.
+				if (this->read()) return true;
+			} while ((uint32_t)(millis() - started) < timeoutMs);
+			return false;
 #endif
 		} else {
-			while (!this->read()); // wait using polling
+			const uint32_t started = millis();
+			do {
+				if (this->read()) return true;
+				delay(0);
+			} while ((uint32_t)(millis() - started) < timeoutMs);
 		}
+		return false;
 	}
 };

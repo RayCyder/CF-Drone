@@ -3,6 +3,8 @@
 #include "pid.h"
 #include "vector.h"
 #include "util.h"
+#include "diagnostics.h"
+#include "system_log.h"
 #include "lpf.h"
 
 extern LowPassFilter<Vector> gyroBiasFilter;
@@ -10,6 +12,11 @@ extern LowPassFilter<Vector> gyroBiasFilter;
 #if WEB_RC_ENABLED
 extern bool webConsoleEnabled;
 extern void webLog(const char* msg);
+static TaskHandle_t webConsoleCommandTask = nullptr;
+
+void setWebConsoleCommandOutput(bool enabled) {
+	webConsoleCommandTask = enabled ? xTaskGetCurrentTaskHandle() : nullptr;
+}
 #endif
 
 extern const int MOTOR_REAR_LEFT, MOTOR_REAR_RIGHT, MOTOR_FRONT_RIGHT, MOTOR_FRONT_LEFT;
@@ -21,6 +28,8 @@ extern float controlRoll, controlPitch, controlThrottle, controlYaw, controlMode
 extern float motors[4];
 extern int mode;
 extern bool armed;
+extern bool requestArm();
+extern void disarm();
 
 const char* motd =
 "CLI命令菜单，输入相应命令，回车后执行:\n"
@@ -29,9 +38,9 @@ const char* motd =
 "p <name> - 显示指定参数\n"
 "p <name> <value> - 设置参数\n"
 "p MOT_PIN_FL 14 - 参数设置示例，前左电机引脚为14\n"
-"preset - 重置参数存储，设置参数后运行此命令\n"
+"preset - 重置飞控参数（保留Wi-Fi凭据和系统日志）\n"
 "mfr, mfl, mrr, mrl - 测试马达 (马达不受算法影响运转，为了安全不要装桨叶！！！)\n"
-"ca - 校准陀螺仪加速度计\n"
+"ca - 六面校准加速度计\n"
 "ps - 显示pitch/roll/yaw姿态\n"
 "cr - 校准RC遥控器\n"
 "rc - 显示RC遥控数据\n"
@@ -46,7 +55,9 @@ const char* motd =
 "time - 显示时间信息\n"
 "mot - 显示motor输出\n"
 "sys - 显示系统info信息\n"
-"log [dump] - 打印日志\n"
+"diag - 显示故障诊断\n"
+"diag clear - 清理诊断历史计数\n"
+"log [dump|clear] - 打印日志或清理持久历史\n"
 "reboot - 重启无人机\n"
 "reset - 重置无人机\n";
 
@@ -75,12 +86,23 @@ void print(const char* format, ...) {
 	}
 	va_end(args);
 
+#if WEB_RC_ENABLED
+	// Web console commands execute on the flight loop. Keep their output in the
+	// web ring buffer instead of blocking the control loop on the UART TX buffer.
+	if (webConsoleCommandTask == xTaskGetCurrentTaskHandle()) {
+		webLog(buf);
+	} else {
+		Serial.print(buf);
+#if WIFI_ENABLED
+		mavlinkPrint(buf);
+#endif
+		if (webConsoleEnabled) webLog(buf);
+	}
+#else
 	Serial.print(buf);
 #if WIFI_ENABLED
 	mavlinkPrint(buf);
 #endif
-#if WEB_RC_ENABLED
-	if (webConsoleEnabled) webLog(buf);
 #endif
 	if (heapAllocated) free(buf);
 }
@@ -127,7 +149,7 @@ void doCommand(String str, bool echo = false) {
 		if (success) {
 			print("%s = %g\n", arg0.c_str(), getParameter(arg0.c_str()));
 		} else {
-			print("Parameter not found: %s\n", arg0.c_str());
+			print("参数不存在或数值无效/越界: %s\n", arg0.c_str());
 		}
 	} else if (command == "preset") {
 		resetParameters();
@@ -145,11 +167,9 @@ void doCommand(String str, bool echo = false) {
 		printIMUCalibration();
 		print("landed: %d\n", landed);
 	} else if (command == "arm") {
-		extern bool imuOK;
-		if (!imuOK) { print("IMU故障，禁止解锁！\n"); }
-		else armed = true;
+		if (!requestArm()) print("系统未满足解锁条件，请检查油门、电池、IMU、故障和电机测试状态。\n");
 	} else if (command == "disarm") {
-		armed = false;
+		disarm();
 	} else if (command == "raw") {
 		mode = RAW;
 	} else if (command == "stab") {
@@ -184,8 +204,13 @@ void doCommand(String str, bool echo = false) {
 		print("front-right %g front-left %g rear-right %g rear-left %g\n",
 			motors[MOTOR_FRONT_RIGHT], motors[MOTOR_FRONT_LEFT], motors[MOTOR_REAR_RIGHT], motors[MOTOR_REAR_LEFT]);
 	} else if (command == "log") {
-		printLogHeader();
-		if (arg0 == "dump") printLogData();
+		if (arg0 == "clear") {
+			print(clearSystemLogHistory() ? "系统日志历史已清理，将在锁定状态写入。\n" :
+				"清理失败：需保持锁定、停止电机测试且存储可用。\n");
+		} else {
+			printLogHeader();
+			if (arg0 == "dump") printLogData();
+		}
 	} else if (command == "cr") {
 		calibrateRC();
 	} else if (command == "ca") {
@@ -217,6 +242,11 @@ void doCommand(String str, bool echo = false) {
 		}
 		delete[] systemState;
 #endif
+	} else if (command == "diag" && arg0 == "clear") {
+		clearDiagnosticHistory();
+		printDiagnostics();
+	} else if (command == "diag") {
+		printDiagnostics();
 	} else if (command == "reset") {
 		attitude = Quaternion();
 		gyroBiasFilter.reset();
@@ -229,11 +259,21 @@ void doCommand(String str, bool echo = false) {
 
 void handleInput() {
 	static bool showMotd = true;
+	static size_t motdOffset = 0;
 	static String input;
 
 	if (showMotd) {
-		print("%s\n", motd);
-		showMotd = false;
+		const size_t motdLength = strlen(motd);
+		const size_t writable = Serial.availableForWrite();
+		const size_t chunk = writable < 32 ? writable : 32;
+		if (chunk > 0) {
+			motdOffset += Serial.write((const uint8_t *)motd + motdOffset,
+				(chunk < motdLength - motdOffset) ? chunk : motdLength - motdOffset);
+		}
+		if (motdOffset >= motdLength) {
+			Serial.write('\n');
+			showMotd = false;
+		}
 	}
 
 	while (Serial.available()) {

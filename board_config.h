@@ -89,7 +89,7 @@
 
 // ---- 性能与资源配置（S3 标准）----
 #define BOARD_VBAT_ADC_SAMPLES       16 // ADC采样次数 
-#define BOARD_LOG_DURATION           8  // 日志缓冲秒数
+#define BOARD_LOG_DURATION           4  // 加入诊断字段后保留最近4秒日志，控制RAM占用
 #define BOARD_CONSOLE_LINES          50  // 控制台行数
 #define BOARD_CONSOLE_LINE_LEN       240  // 每行字符数
 #define BOARD_MAVLINK_TELEM_FAST_HZ  10  // MAVLink 快速遥测降速
@@ -128,8 +128,8 @@
 
 // ---- 性能与资源配置（ESP32 标准）----
 #define BOARD_VBAT_ADC_SAMPLES       16 // ADC采样次数 
-#define BOARD_LOG_DURATION           8  // 日志缓冲秒数
-#define BOARD_CONSOLE_LINES          50  // 控制台行数
+#define BOARD_LOG_DURATION           4  // 加入诊断字段后保留最近4秒日志，控制RAM占用
+#define BOARD_CONSOLE_LINES          48  // 控制台行数；为静态 DRAM 留出余量
 #define BOARD_CONSOLE_LINE_LEN       240  // 每行字符数
 #define BOARD_MAVLINK_TELEM_FAST_HZ  10  // MAVLink 快速遥测降速
 #define BOARD_WIFI_ENABLED           1  // WIFI开关

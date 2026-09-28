@@ -17,6 +17,15 @@
 extern float t;
 float batteryVoltage = 0.0f;  // 全局最新电压，由 updateBatteryVoltage() 定期刷新
 
+bool batteryBlocksArming() {
+	return batteryVoltage > VBAT_ABSENT_THRESHOLD && batteryVoltage < VBAT_WARN_THRESHOLD;
+}
+
+bool batteryAlertActiveForFlight(bool flying) {
+	if (batteryVoltage <= VBAT_ABSENT_THRESHOLD || !isfinite(batteryVoltage)) return false;
+	return flying ? batteryVoltage < VBAT_LOW_THRESHOLD : batteryVoltage < VBAT_WARN_THRESHOLD;
+}
+
 void updateBatteryVoltage() {
 	static float lastCheck = 0;
 	if (t - lastCheck < 0.5f) return;  // 每 0.5 秒采样一次

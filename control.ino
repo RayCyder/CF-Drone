@@ -5,6 +5,8 @@
 #include "pid.h"
 #include "lpf.h"
 #include "util.h"
+#include "diagnostics.h"
+#include "system_log.h"
 
 #if WEB_RC_ENABLED
 #include "control.h"
@@ -78,7 +80,7 @@ bool armed = false;
 int flightModes[] = {STAB, STAB, STAB}; // RC模式拨杆三挡对应的飞行模式，可通过参数 CTL_FLT_MODE_0/1/2 配置
 
 #if WEB_RC_ENABLED
-extern uint16_t webRCButtons;
+extern uint16_t takeWebRCButtonPressEdges(uint16_t *buttons);
 #endif
 
 PID rollRatePID(ROLLRATE_P, ROLLRATE_I, ROLLRATE_D, ROLLRATE_I_LIM, RATES_D_LPF_ALPHA);
@@ -117,8 +119,36 @@ float trimPitch = 0.0f; // 俯仰配平角（rad），参数名：CTL_TRIM_PITCH
 
 extern const int MOTOR_REAR_LEFT, MOTOR_REAR_RIGHT, MOTOR_FRONT_RIGHT, MOTOR_FRONT_LEFT;
 extern float motors[4];
+extern void sendMotors();
 extern float controlRoll, controlPitch, controlThrottle, controlYaw, controlMode;
 extern float batteryVoltage;  // battery.ino
+extern bool batteryBlocksArming();
+extern bool motorTestActive;
+extern bool motorTestArmInhibit;
+extern bool imuOK;
+extern void descend();
+extern void clearControlledLanding();
+extern bool isAccelCalibrationActive();
+
+bool requestArm() {
+	if (armed) return true;
+	if (motorTestArmInhibit) return false;
+	updateDiagnostics();
+	if (motorTestActive || isAccelCalibrationActive() || controlThrottle > ARM_THROTTLE_LIMIT || !imuOK ||
+		batteryBlocksArming() || hasBlockingDiagnosticFault()) return false;
+	return tryArmWithSystemLog();
+}
+
+void disarm() {
+	bool outputWasActive = armed;
+	for (int i = 0; i < 4; ++i) outputWasActive = outputWasActive || motors[i] != 0.0f;
+	armed = false;
+	clearControlledLanding();
+	thrustTarget = 0.0f;
+	memset(motors, 0, sizeof(float) * 4);
+	torqueTarget.invalidate();
+	if (outputWasActive) sendMotors();
+}
 
 void control() {
 	interpretControls();
@@ -132,6 +162,8 @@ void control() {
 }
 
 void interpretControls() {
+	if (motorTestArmInhibit && (controlThrottle >= 0.05f || controlYaw <= 0.95f))
+		motorTestArmInhibit = false;
 	if (controlMode < 0.25) mode = flightModes[0];
 	else if (controlMode <= 0.75) mode = flightModes[1];
 	else if (controlMode > 0.75) mode = flightModes[2];
@@ -153,7 +185,7 @@ void interpretControls() {
 #endif
 				armWarnNotified = true;
 			}
-		} else if (batteryVoltage > VBAT_ABSENT_THRESHOLD && batteryVoltage < VBAT_WARN_THRESHOLD) {
+		} else if (batteryBlocksArming()) {
 			// L1 及以下：禁止解锁，状态变化时提示
 			if (!armWarnNotified) {
 				print("电量低(%.2fV)，禁止解锁\n", batteryVoltage);
@@ -165,11 +197,20 @@ void interpretControls() {
 				armWarnNotified = true;
 			}
 		} else {
-			armed = true;
-			armWarnNotified = false; // 解锁成功后重置
+			if (hasBlockingDiagnosticFault()) {
+				if (!armWarnNotified) print("系统诊断存在阻止解锁的故障，请运行 diag 查看。\n");
+				armWarnNotified = true;
+			} else {
+				if (requestArm()) {
+					armWarnNotified = false;
+				} else {
+					if (!armWarnNotified) print("系统未满足解锁条件，检查油门、电池、IMU、故障和电机测试状态。\n");
+					armWarnNotified = true;
+				}
+			}
 		}
 	}
-	if (controlThrottle < 0.05 && controlYaw < -0.95) armed = false; // disarm gesture
+	if (controlThrottle < 0.05 && controlYaw < -0.95) disarm(); // disarm gesture
 #if WEB_RC_ENABLED
 	}
 #endif
@@ -234,12 +275,11 @@ void controlRates() {
 }
 
 void controlTorque() {
-	if (!torqueTarget.valid()) return; // skip torque control
-
 	if (!armed) {
 		memset(motors, 0, sizeof(motors)); // stop motors if disarmed
 		return;
 	}
+	if (!torqueTarget.valid()) return; // skip torque control
 
 	if (thrustTarget < motThrMin) {
 		for (int i = 0; i < 4; i++) motors[i] = motThrMin; // idle thrust
@@ -299,8 +339,10 @@ void interpretWebRC() {
 
 	// 处理解锁/上锁按钮（上升沿检测，避免每个控制周期重复触发）
 	static uint16_t lastWebRCButtons = 0;
-	uint16_t risingEdge = webRCButtons & ~lastWebRCButtons;
-	lastWebRCButtons = webRCButtons;
+	uint16_t currentButtons = 0;
+	uint16_t risingEdge = takeWebRCButtonPressEdges(&currentButtons) | (currentButtons & ~lastWebRCButtons);
+	lastWebRCButtons = currentButtons;
+	if (motorTestArmInhibit && !(currentButtons & 0x0001)) motorTestArmInhibit = false;
 
 	// 处理解锁/上锁状态变化日志
 	static bool lastArmedState = false;
@@ -312,10 +354,13 @@ void interpretWebRC() {
 	// 按鈕。0：解锁（上升沿）
 	if (risingEdge & 0x0001) {
 		extern bool imuOK;
-		extern char webRCWarnMsg[];
-		if (!imuOK) {
+		if (motorTestArmInhibit) {
+			setWebRCWarn("电机测试后请先释放解锁输入");
+		} else if (hasBlockingDiagnosticFault()) {
+			setWebRCWarn("系统故障 禁止解锁，请查看diag");
+		} else if (!imuOK) {
 			setWebRCWarn("IMU故障 禁止解锁");
-		} else if (batteryVoltage > VBAT_ABSENT_THRESHOLD && batteryVoltage < VBAT_WARN_THRESHOLD) {
+		} else if (batteryBlocksArming()) {
 			// 低电量：禁止解锁（与 SBUS 路径 interpretControls() 对齐）
 			char warnBuf[64];
 			snprintf(warnBuf, sizeof(warnBuf), "电量低(%.2fV) 禁止解锁", batteryVoltage);
@@ -323,20 +368,32 @@ void interpretWebRC() {
 		} else if (controlThrottle > ARM_THROTTLE_LIMIT) {
 			setWebRCWarn("油门过高，无法解锁");
 		} else {
-			armed = true;
-			webRCWarnMsg[0] = '\0'; // 解锁成功，清除上次遗留的警告
+			if (requestArm()) {
+				clearWebRCWarn(); // 解锁成功，清除上次遗留的警告
+			} else {
+				setWebRCWarn("系统未满足解锁条件，请检查自检状态");
+			}
 		}
 	}
 
 	// 按钮1：上锁（上升沿）
 	if (risingEdge & 0x0002) {
-		armed = false;
+		disarm();
 	}
 
 	// 按钮2：急停（上升沿）
 	if (risingEdge & 0x0004) {
-		armed = false;
-		thrustTarget = 0.0f;
+		disarm();
+	}
+
+	// 按钮3：迫降（上升沿）；复用 RC 失联/低电时的受控下降流程。
+	if (risingEdge & 0x0008) {
+		if (armed) {
+			descend();
+			clearWebRCWarn();
+		} else {
+			setWebRCWarn("迫降未启动：飞控当前已上锁");
+		}
 	}
 
 	// 按钮6：STAB模式（上升沿）

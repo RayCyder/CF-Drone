@@ -1,10 +1,15 @@
 // 故障安全保护
 // Fail-safe functions
 
+#include "diagnostics.h"
+
 bool isInverted = false;  // 当前机身是否处于倒置（Z轴cos < INVERTED_COS_THRESHOLD）
 
 float rcLossTimeout = 1;        // RC丢失超时时间（秒），可通过参数 SF_RC_LOSS_TIME 配置
-float descendTime = 10;         // 下降至停机的时间（秒），可通过参数 SF_DESCEND_TIME 配置
+float descendTime = 3;          // 过渡到目标下降推力的时间（秒）
+float descendThrust = 0.35f;     // 自动下降目标推力（归一化指令，需按机体实测调整）
+static bool controlledLandingActive = false;
+static float lastDescendUpdateTime = NAN;
 #define WEB_RC_LOSS_TIMEOUT_MS 8000UL  // Web遥控器失联阈值(ms)，必须大于心跳间隔2000ms
 
 // 倒置保护参数
@@ -23,6 +28,7 @@ bool isUsingWebRC();
 #endif
 
 extern bool armed;
+extern void disarm();
 extern int mode;
 extern float dt;
 extern float thrustTarget;
@@ -36,6 +42,14 @@ extern PID rollPID, pitchPID, yawPID;              // control.ino
 extern float motThrMin;        // control.ino
 
 void failsafe() {
+	updateDiagnostics();
+	if (armed && (getActiveDiagnosticFaults() &
+		(DIAG_IMU_INIT | DIAG_IMU_TIMEOUT | DIAG_IMU_INVALID | DIAG_MOTOR_INIT))) {
+		// 关键传感器或输出异常时立即停止输出，不能继续依赖常规控制计算。
+		disarm();
+		extern float motors[4];
+		print("严重故障，立即停机；运行 diag 查看原因。\n");
+	}
 	rcLossFailsafe();
 #if WEB_RC_ENABLED
 	webRCLossFailsafe();
@@ -43,6 +57,7 @@ void failsafe() {
 	autoFailsafe();
 	invertedFailsafe();
 	batteryFailsafe();
+	if (armed && controlledLandingActive) descend();
 }
 
 // RC loss failsafe
@@ -57,8 +72,10 @@ void rcLossFailsafe() {
 	}
 }
 
-// Smooth descend on RC lost
+// Smooth descend on RC lost. Without a height/vertical-speed sensor this is
+// only a conservative fixed-thrust descent, not closed-loop speed control.
 void descend() {
+	controlledLandingActive = true;
 	if (mode != AUTO) {
 		// 首次进入：保持当前偏航（仅强制机体水平），清零速率前馈，重置PID积分
 		float currentYaw = attitude.getYaw();
@@ -70,19 +87,27 @@ void descend() {
 		rollPID.reset();
 		pitchPID.reset();
 		yawPID.reset();
-		// 钳制推力上限至悬停推力，避免高油门触发时降落时间过长
-		if (thrustTarget > ALTHOLD_HOVER_THRUST) thrustTarget = ALTHOLD_HOVER_THRUST;
 		mode = AUTO;
 	}
 	// 每帧跟随实际偏航，防止偏航PID在降落过程中重新累积误差
 	float currentYaw = attitude.getYaw();
 	attitudeTarget = Quaternion::fromEuler(Vector(0, 0, currentYaw));
+	if (!isfinite(t) || !isfinite(dt) || dt <= 0 || lastDescendUpdateTime == t) return;
+	lastDescendUpdateTime = t;
 
-	thrustTarget -= dt / descendTime;
-	if (thrustTarget < 0) {
-		thrustTarget = 0;
-		armed = false;
-	}
+	float targetThrust = max(motThrMin, min(descendThrust, ALTHOLD_HOVER_THRUST));
+	float maxStep = dt / max(descendTime, 0.1f) * ALTHOLD_HOVER_THRUST;
+	if (thrustTarget > targetThrust) thrustTarget = max(targetThrust, thrustTarget - maxStep);
+	else if (thrustTarget < targetThrust) thrustTarget = min(targetThrust, thrustTarget + maxStep);
+}
+
+bool isControlledLandingActive() {
+	return controlledLandingActive;
+}
+
+void clearControlledLanding() {
+	controlledLandingActive = false;
+	lastDescendUpdateTime = NAN;
 }
 
 // Allow pilot to interrupt automatic flight
@@ -90,8 +115,9 @@ void autoFailsafe() {
 	static float roll, pitch, yaw, throttle;
 	
 	// control*已统一涳盖SBUS/MAVLink/WebRC输入，直接检查即可
-	if (roll != controlRoll || pitch != controlPitch || yaw != controlYaw || abs(throttle - controlThrottle) > 0.05) {
-		if (mode == AUTO) mode = STAB;
+	if ((roll != controlRoll || pitch != controlPitch || yaw != controlYaw || abs(throttle - controlThrottle) > 0.05) &&
+		mode == AUTO && !controlledLandingActive) {
+		mode = STAB;
 	}
 	
 	roll = controlRoll;
@@ -103,16 +129,26 @@ void autoFailsafe() {
 #if WEB_RC_ENABLED
 // Web遥控器丢失保护
 void webRCLossFailsafe() {
+	static bool timeoutHandled = false;
 	if (!webRCEnabled || !useWebRC) return;
 	if (!armed) return;
 
 	// 使用毫秒直接比较，避免整数除法引入的最大1秒误差
-	if (millis() - webRCLastUpdate > WEB_RC_LOSS_TIMEOUT_MS) {
-		print("Web RC连接丢失，启动下降\n");
-		descend();
-		webRCEnabled = false;
-		useWebRC = false;
+	const unsigned long linkAgeMs = millis() - webRCLastUpdate;
+	if (linkAgeMs <= WEB_RC_LOSS_TIMEOUT_MS) {
+		timeoutHandled = false;
+		return;
 	}
+	// WEB_RC_TIMEOUT_MS is longer than this failsafe threshold. Without a latch,
+	// readWebRC() re-enables the stale link in that gap and repeats this work
+	// on every control-loop iteration until the longer timeout expires.
+	if (timeoutHandled) return;
+	timeoutHandled = true;
+	print("Web RC连接丢失，启动下降\n");
+	setDiagnosticFault(DIAG_WEB_RC_LOSS, true);
+	descend();
+	webRCEnabled = false;
+	useWebRC = false;
 }
 #endif
 
@@ -131,8 +167,7 @@ void invertedFailsafe() {
 		isInverted = true;
 		if (invertedStartTime == 0) invertedStartTime = t;
 		if (t - invertedStartTime > INVERTED_TIMEOUT) {
-			armed = false;
-			thrustTarget = 0.0f;
+			disarm();
 			invertedStartTime = 0;
 			print("倒置保护：停机\n");
 		}
@@ -145,7 +180,7 @@ void invertedFailsafe() {
 // 电池电压保护
 // L1（3.4V）：未解锁禁止解锁（在 control.ino 处理），怠速时自动上锁
 // L2（2.8V）：飞行中仅 LED 快闪告警
-// L3（2.6V）：飞行中自动降落（复用 descend()，速度由 SF_DESCEND_TIME 控制）
+// L3（2.6V）：飞行中自动降落（复用固定目标推力的 descend()）
 void batteryFailsafe() {
 	static bool l3Latched = false;
 	static float lowSince = 0.0f;
@@ -219,8 +254,7 @@ void batteryFailsafe() {
 		return;
 	}
 
-	armed = false;
-	thrustTarget = 0.0f;
+	disarm();
 	print("电量低(%.2fV)，自动上锁\n", batteryVoltage);
 #if WEB_RC_ENABLED
 	char warnBuf[64];

@@ -2,6 +2,65 @@
 
 #if WEB_RC_ENABLED
 
+const char wifiConfigHtml[] PROGMEM = R"rawliteral(
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CF-Drone Wi-Fi 配置</title>
+<style>
+body{margin:0;background:#252525;color:#fff;font:16px Arial,"Microsoft YaHei",sans-serif;padding:24px}
+main{max-width:440px;margin:7vh auto;background:#333;padding:24px;border-radius:14px;box-shadow:0 8px 30px #111}
+h1{font-size:1.35rem;margin-top:0}p{color:#ccc;line-height:1.55;font-size:.92rem}
+label{display:block;margin:18px 0 6px}input{box-sizing:border-box;width:100%;padding:12px;border-radius:8px;border:1px solid #777;background:#222;color:#fff;font-size:1rem}
+select{box-sizing:border-box;width:100%;padding:12px;border-radius:8px;border:1px solid #777;background:#222;color:#fff;font-size:1rem}
+button{margin-top:12px;width:100%;padding:13px;border:0;border-radius:8px;background:#147efb;color:#fff;font-size:1rem;font-weight:bold}
+a{display:inline-block;margin-top:18px;color:#9fc7ff}#status{min-height:1.5em;color:#ffd27a}
+#events{margin-top:22px;padding-top:14px;border-top:1px solid #555}#events h2{font-size:1rem;margin:0 0 8px}#event-state{color:#aaa;font-size:.85rem}#event-list{max-height:220px;overflow:auto;padding:8px;background:#222;border-radius:8px;font:12px/1.5 monospace;white-space:pre-wrap;overflow-wrap:anywhere}.event-actions{display:flex;gap:8px}.event-actions button{flex:1;padding:9px;font-size:.88rem}
+</style></head><body><main>
+<h1>无人机 Wi-Fi 配置</h1>
+<p>扫描附近的 2.4 GHz Wi-Fi 并选择网络，或手动输入名称（隐藏网络）。保存后无人机将连接该网络并重启。请稍后让手机也连接到同一网络，再打开无人机显示的地址进行遥控。</p>
+<form id="wifi-form"><label for="ssid">Wi-Fi 名称（SSID）</label>
+<select id="networks" aria-label="附近的 Wi-Fi 网络"><option value="">点击扫描附近网络…</option></select>
+<button id="scan" type="button">扫描 Wi-Fi</button>
+<input id="ssid" name="ssid" maxlength="32" autocomplete="off" required>
+<label for="password">Wi-Fi 密码</label>
+<input id="password" name="password" type="password" maxlength="63" autocomplete="new-password">
+<button type="submit">保存并连接</button></form><div id="status" role="status"></div>
+<section id="events"><h2>启动与 Wi-Fi 自检日志</h2><div id="event-state">正在连接事件流…</div><pre id="event-list" aria-live="polite"></pre><div class="event-actions"><button id="download-events" type="button" disabled>下载日志</button><button id="clear-events" type="button">清空显示</button></div></section>
+<a href="/">返回遥控页面</a></main>
+<script>
+const statusEl=document.getElementById('status'), networkList=document.getElementById('networks');
+networkList.addEventListener('change',()=>{if(networkList.value)document.getElementById('ssid').value=networkList.value;});
+document.getElementById('scan').addEventListener('click',async()=>{const button=document.getElementById('scan');button.disabled=true;networkList.replaceChildren(new Option('正在扫描附近网络…',''));statusEl.textContent='';try{let data;do{const r=await fetch(data?'/wifi/scan':'/wifi/scan?refresh=1');data=await r.json();if(data.state==='scanning')await new Promise(resolve=>setTimeout(resolve,700));}while(data.state==='scanning');networkList.replaceChildren();if(data.state!=='done')throw new Error(data.message||'扫描失败');if(!data.networks.length){networkList.add(new Option('未发现网络，请手动输入 SSID',''));}else{networkList.add(new Option('选择附近的 Wi-Fi 网络…',''));for(const n of data.networks){const suffix=(n.open?'开放':'需密码')+' · '+n.rssi+' dBm';networkList.add(new Option(n.ssid+' ('+suffix+')',n.ssid));}}statusEl.textContent='扫描完成；隐藏网络请手动填写 SSID。';}catch(_){networkList.replaceChildren(new Option('扫描失败，请重试或手动输入',''));statusEl.textContent='无法扫描网络，请重试或手动输入 SSID。';}finally{button.disabled=false;}});
+document.getElementById('wifi-form').addEventListener('submit',async e=>{e.preventDefault();statusEl.textContent='正在保存…';try{const r=await fetch('/wifi/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(new FormData(e.target))});const d=await r.json();statusEl.textContent=d.message||'保存失败';statusEl.style.color=r.ok?'#8fe3a0':'#ff8b8b';}catch(_){statusEl.textContent='连接中断；请查看下方事件日志，确认飞控是否正在重启。';statusEl.style.color='#ffd27a';}});
+const eventState=document.getElementById('event-state'),eventList=document.getElementById('event-list'),downloadEvents=document.getElementById('download-events');let events=[],seenEvents=new Set();
+const eventSource=new EventSource(location.protocol+'//'+location.hostname+':81/stream');
+eventSource.onopen=()=>eventState.textContent='事件流已连接；启动和 Wi-Fi 状态会实时显示';eventSource.onerror=()=>eventState.textContent='事件流断开，浏览器正在自动重连；已收到的日志仍保留在此页面';
+eventSource.addEventListener('system-log',e=>{if(e.lastEventId&&seenEvents.has(e.lastEventId))return;if(e.lastEventId)seenEvents.add(e.lastEventId);const parts=e.data.split('|');const line=(parts[0]||'?')+' ms  ['+(parts[1]||'SYSTEM')+'] '+parts.slice(2).join('|');events.push(line);if(events.length>500)events.shift();eventList.textContent=events.join('\n');eventList.scrollTop=eventList.scrollHeight;downloadEvents.disabled=events.length===0;});
+downloadEvents.onclick=()=>{if(!events.length)return;const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([events.join('\n')+'\n'],{type:'text/plain;charset=utf-8'}));link.download='cf-drone-system-log.txt';link.click();URL.revokeObjectURL(link.href);};
+document.getElementById('clear-events').onclick=()=>{events=[];seenEvents.clear();eventList.textContent='';downloadEvents.disabled=true;};
+</script>
+</body></html>
+)rawliteral";
+
+const char telemetryHtml[] PROGMEM = R"rawliteral(
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>飞行实时日志</title>
+<style>body{margin:0;padding:20px;background:#20242a;color:#eef2f6;font:16px Arial,"Microsoft YaHei",sans-serif}main{max-width:720px;margin:auto}h1{font-size:1.4rem}.state{padding:10px;border-radius:8px;background:#343b44}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:14px 0}.card{background:#343b44;padding:12px;border-radius:8px}.label{color:#aeb9c5;font-size:.85rem}.value{font:1.15rem monospace;margin-top:6px;overflow-wrap:anywhere}button{padding:11px 14px;border:0;border-radius:7px;background:#1683ff;color:white;font-weight:bold;margin:4px}button:disabled{opacity:.5}a{color:#9dcaff}.note{color:#bdc7d2;font-size:.9rem;line-height:1.5}</style></head>
+<body><main><h1>飞行实时日志</h1><div id="state" class="state">正在连接飞控…</div>
+<div class="grid" id="values"></div><p>已收到 <span id="received">0</span> 条 · 捕获 <span id="captured">0</span> 条</p>
+<button id="capture">开始捕获</button><button id="download" disabled>下载 CSV</button>
+<p class="note">遥测以 10 Hz 推送。网页捕获数据保存在当前浏览器内存中；飞控本机仍保留 100 Hz 环形日志。电机数据是输出指令，不是转速反馈。</p><a href="/">返回遥控页面</a></main>
+<script>
+const stateEl=document.getElementById('state'),valuesEl=document.getElementById('values');let headers=[],rows=[],capturing=false,received=0;
+const source=new EventSource(location.protocol+'//'+location.hostname+':81/stream');
+source.onopen=()=>stateEl.textContent='已连接 · 实时接收中';source.onerror=()=>stateEl.textContent='连接中断，浏览器正在自动重连…';
+source.addEventListener('schema',e=>{headers=e.data.split(',');});
+source.addEventListener('sample',e=>{const values=e.data.split(',');received++;document.getElementById('received').textContent=received;if(capturing&&rows.length<10000)rows.push(e.lastEventId+','+e.data);document.getElementById('captured').textContent=rows.length;const selected=['attitude.x','attitude.y','attitude.z','rates.x','rates.y','rates.z','gyro_x','gyro_y','gyro_z','acc_x','acc_y','acc_z','battery_v','motor_rl','motor_rr','motor_fr','motor_fl'];valuesEl.replaceChildren();for(const name of selected){const i=headers.indexOf(name);if(i<0)continue;const card=document.createElement('div');card.className='card';const label=document.createElement('div');label.className='label';label.textContent=name;const value=document.createElement('div');value.className='value';value.textContent=values[i]??'—';card.append(label,value);valuesEl.append(card);}});
+document.getElementById('capture').onclick=()=>{capturing=!capturing;document.getElementById('capture').textContent=capturing?'停止捕获':'继续捕获';document.getElementById('download').disabled=rows.length===0;};
+document.getElementById('download').onclick=()=>{if(!headers.length||!rows.length)return;const csv='sequence,'+headers.join(',')+'\n'+rows.join('\n')+'\n';const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));link.download='flight-telemetry.csv';link.click();URL.revokeObjectURL(link.href);};
+</script></body></html>
+)rawliteral";
+
 const char webRCIndexHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -19,8 +78,11 @@ const char webRCIndexHtml[] PROGMEM = R"rawliteral(
 }
 /*======== 通用样式 ========*/
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;touch-action:none;user-select:none}
+html,body,.container{touch-action:pan-y}
+ .container *{touch-action:pan-y}
+ .joystick,.joystick *{touch-action:none}
 body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c3c3c;color:#fff;overflow:hidden;height:100vh;height:100dvh;width:100vw}
-.container{width:100%;height:100%;display:flex;flex-direction:column;padding:var(--pad);gap:var(--gap);max-width:1200px;margin:0 auto;overflow:hidden}
+.container{width:100%;height:100%;display:flex;flex-direction:column;padding:var(--pad);gap:var(--gap);max-width:1200px;margin:0 auto;overflow-x:hidden;overflow-y:auto;overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch}
 
 /*======== 顶部状态栏 ========*/
 .header {
@@ -73,6 +135,33 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
 .status-dot.connected { background: #0f8; box-shadow: 0 0 8px #0f8; }
 .status-dot.disconnected { background: #f33; box-shadow: 0 0 8px #f33; }
 .status-dot.warning { background: #ff9; box-shadow: 0 0 8px #ff9; }
+.self-check-button{position:absolute;right:10px;top:9px;border:1px solid rgba(0,255,136,.55);border-radius:8px;background:rgba(0,255,136,.12);color:#aaffd4;padding:6px 10px;font-size:.75rem;font-weight:bold;cursor:pointer;touch-action:manipulation}
+.self-check-button.has-fault{border-color:rgba(255,80,80,.7);background:rgba(255,50,50,.18);color:#ffb0b0}
+.header{position:relative;padding-right:150px}
+.diagnostic-page{position:fixed;inset:0;z-index:1000;display:none;background:#252525;overflow-y:auto;padding:clamp(14px,4vw,28px);touch-action:pan-y}
+.diagnostic-shell{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.diagnostic-top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.diagnostic-top h2{font-size:1.2rem}
+.diagnostic-actions{display:flex;gap:8px}
+.diagnostic-actions button{border:1px solid rgba(255,255,255,.2);border-radius:8px;background:#3b3b3b;color:#fff;padding:8px 12px;font-size:.85rem;cursor:pointer;touch-action:manipulation}
+.diagnostic-summary{border:1px solid rgba(255,255,255,.14);border-radius:12px;padding:14px;background:rgba(0,0,0,.25)}
+.diagnostic-summary.ok{border-color:rgba(0,255,136,.45)}
+.diagnostic-summary.fault{border-color:rgba(255,80,80,.65);background:rgba(100,15,15,.25)}
+.diagnostic-summary.offline{border-color:rgba(255,210,80,.55)}
+.diagnostic-summary strong{display:block;font-size:1rem;margin-bottom:5px}
+.diagnostic-summary small{color:#bbb;line-height:1.5}
+.diagnostic-active{border:1px solid rgba(255,80,80,.75);border-radius:10px;padding:12px;background:rgba(100,15,15,.3);color:#ffe1e1}
+.diagnostic-active strong{display:block;margin-bottom:6px}
+.diagnostic-active ul{margin:0;padding-left:20px;line-height:1.6}
+.diagnostic-active code{color:#ffc4c4}
+.diagnostic-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:9px}
+.diagnostic-item{background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:11px}
+.diagnostic-item.active{border-color:rgba(255,80,80,.65)}
+.diagnostic-item-title{display:flex;justify-content:space-between;gap:8px;font-weight:bold;margin-bottom:6px}
+.diagnostic-item-state{font-size:.75rem;color:#8fdaae;white-space:nowrap}
+.diagnostic-item.active .diagnostic-item-state{color:#ff9a9a}
+.diagnostic-item p{font-size:.78rem;color:#c5c5c5;line-height:1.45}
+.diagnostic-updated{text-align:right;font-size:.7rem;color:#999}
 
 /*======== 内容区 ========*/
 .content{display:flex;flex:1;gap:var(--gap);overflow:hidden;min-height:0}
@@ -86,9 +175,14 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
 
 /*======== 按钮区 ========*/
 .buttons-container{flex:.55;display:flex;flex-direction:column;gap:10px;padding:12px;background:rgba(0,0,0,.4);border-radius:20px;border:2px solid rgba(150,150,150,.3);box-shadow:inset 0 0 20px rgba(0,0,0,.5)}
+#route-page-button{right:92px}
+.route-page{position:fixed;inset:0;z-index:1001;display:none;background:#252525;overflow-y:auto;padding:clamp(14px,4vw,28px);touch-action:pan-y}
+.route-shell{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+.route-editor{width:100%;min-height:48vh;padding:12px;border:1px solid #777;border-radius:9px;background:#17191c;color:#e9f1ff;font: .9rem/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;overflow:auto;touch-action:auto;user-select:text;-webkit-user-select:text}
+.route-help{color:#c4cbd3;font-size:.85rem;line-height:1.5}.route-page-actions{display:flex;gap:8px;flex-wrap:wrap}.route-page-actions button{border:0;border-radius:8px;padding:10px 14px;background:#444;color:#fff;font-size:.9rem;touch-action:manipulation}.route-page-actions .run{background:#167c3a}.route-page-actions .stop{background:#a33}
+.route-status{font-size:.9rem;color:#9fc7ff;margin-top:6px}
 .buttons-grid{display:grid;grid-template-columns:repeat(6,1fr);grid-template-rows:repeat(2,1fr);gap:8px;flex:1}
 .buttons-grid>button{grid-column:span 2}
-.buttons-grid>button:nth-child(4),.buttons-grid>button:nth-child(5){grid-column:span 3}
 .button{background:linear-gradient(145deg,#484848,#383838);border:none;border-radius:10px;color:#fff;font-size:.85rem;font-weight:bold;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:10px 5px;cursor:pointer;transition:all .15s cubic-bezier(.4,0,.2,1);box-shadow:0 3px 10px rgba(0,0,0,.3),inset 0 1px 0 rgba(255,255,255,.1);position:relative}
 .button:hover{background:linear-gradient(145deg,#565656,#464646);transform:translateY(-1px)}
 .button.active{background:linear-gradient(145deg,#1a73e8,#0d47a1);box-shadow:0 0 15px rgba(26,115,232,.6),inset 0 1px 0 rgba(255,255,255,.2);transform:scale(.95)}
@@ -96,8 +190,9 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
 .button-icon{font-size:1.1rem;margin-bottom:4px}
 
 /*======== 调试控制台 ========*/
-.console-panel{background:rgba(10,10,10,.95);border-radius:12px;border:1px solid rgba(100,100,100,.4);padding:10px;flex-shrink:0;max-height:min(200px,35vh);display:flex;flex-direction:column;gap:6px}
-.console-output{flex:1;overflow-y:auto;font-family:'Courier New',monospace;font-size:0.7rem;color:#00ff88;min-height:80px;max-height:130px;word-break:break-all;-webkit-overflow-scrolling:touch}
+.console-panel{background:rgba(10,10,10,.95);border-radius:12px;border:1px solid rgba(100,100,100,.4);padding:10px;flex-shrink:0;max-height:min(200px,35vh);display:flex;flex-direction:column;gap:6px;touch-action:pan-y}
+.console-output{flex:1;overflow-y:auto;overscroll-behavior:contain;touch-action:pan-y;user-select:text;-webkit-user-select:text;font-family:'Courier New',monospace;font-size:0.7rem;color:#00ff88;min-height:80px;max-height:130px;word-break:break-all;-webkit-overflow-scrolling:touch}
+.console-output,.console-output *{touch-action:pan-y;user-select:text;-webkit-user-select:text}
 .console-output div{padding:1px 0;border-bottom:1px solid rgba(255,255,255,.03)}
 
 /*======== 动画 ========*/
@@ -108,6 +203,8 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
 
 /*======== 竖屏自适应 ========*/
 @media (orientation:portrait){
+  body{height:auto;min-height:100vh;min-height:100dvh;overflow-y:auto}
+  .container{height:auto;min-height:100vh;min-height:100dvh;overflow:visible}
   :root{--js-size:clamp(120px,40vw,240px);--knob-size:calc(var(--js-size)*0.25)}
   .content{
     display:grid;
@@ -121,6 +218,8 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   .content>.joystick-container:first-child{grid-column:1;grid-row:2;min-width:0;overflow:hidden}
   .content>.joystick-container:last-child{grid-column:2;grid-row:2;min-width:0;overflow:hidden}
   .header h1{font-size:clamp(0.85rem,3.5vw,1.1rem)}
+  #route-page-button{right:78px}
+  .self-check-button{top:6px;right:6px;padding:5px 7px;font-size:.68rem}
   .status-bar{gap:5px;flex-wrap:wrap;justify-content:center}
   .status-item{font-size:clamp(0.6rem,2.5vw,0.7rem);padding:2px 5px}
 }
@@ -130,7 +229,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   :root{--js-size:clamp(120px,min(42vw,44vh),240px);--knob-size:calc(var(--js-size)*0.25)}
   .joystick-title{font-size:0.72rem}
   .header h1{font-size:0.82rem}
-  .header{padding:3px 8px}
+  .header{padding:3px 150px 3px 8px}
   .header h1{margin-bottom:2px}
   .status-bar{margin-top:2px;gap:4px}
   .status-item{font-size:0.58rem;padding:2px 4px}
@@ -148,6 +247,8 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   <!-- 顶部状态栏 -->
   <div class="header">
     <h1>琛光无人机网页遥控器</h1>
+    <button id="self-check-button" class="self-check-button" onclick="openSelfCheck()">自检状态</button>
+    <button id="route-page-button" class="self-check-button" onclick="openRoutePage()">开环序列</button>
     <div class="status-bar">
       <div class="status-item"><span class="status-dot" id="status-dot"></span><span id="connection-text">连接中...</span></div>
       <div class="status-item" id="armed-status-item" style="background:rgba(255,51,51,0.15)"><span id="armed-status" style="color:#ff6666">已上锁</span></div>
@@ -188,14 +289,46 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   <!-- 调试控制台面板（默认隐藏，点击调试按钮打开） -->
   <div id="console-panel" class="console-panel" style="display:none">
     <div id="console-output" class="console-output"></div>
-    <div style="display:flex;gap:6px;touch-action:auto">
+    <div style="display:flex;gap:6px;touch-action:pan-y">
       <input id="console-input" placeholder="输入命令 (ps/imu/rc/arm/disarm/help)..."
         style="flex:1;background:rgba(0,0,0,.6);border:1px solid rgba(100,100,100,.5);border-radius:6px;color:#0f8;padding:4px 8px;font-size:0.7rem;font-family:'Courier New',monospace;touch-action:auto">
+      <button onclick="downloadConsoleLogs()" style="background:#444;border:1px solid #777;border-radius:6px;color:#fff;padding:4px 8px;font-size:0.7rem;cursor:pointer;touch-action:manipulation;white-space:nowrap">下载日志</button>
       <button onclick="sendConsoleCmd()" style="background:#1a73e8;border:none;border-radius:6px;color:#fff;padding:4px 10px;font-size:0.7rem;cursor:pointer;touch-action:auto">发送</button>
     </div>
   </div>
+  <section id="diagnostic-page" class="diagnostic-page" aria-hidden="true">
+    <div class="diagnostic-shell">
+      <div class="diagnostic-top">
+        <h2>飞控自检状态</h2>
+        <div class="diagnostic-actions">
+          <button onclick="refreshSelfCheck()">刷新</button>
+          <button onclick="closeSelfCheck()">关闭</button>
+        </div>
+      </div>
+      <div id="diagnostic-summary" class="diagnostic-summary offline">
+        <strong>正在读取诊断状态…</strong>
+        <small>数据来自飞控当前运行状态。</small>
+      </div>
+      <div id="diagnostic-active" class="diagnostic-active" style="display:none"></div>
+      <div id="diagnostic-list" class="diagnostic-list"></div>
+      <section class="diagnostic-summary offline">
+        <strong>电机人工检查（软件无法代替）</strong>
+        <small>拆下全部螺旋桨并固定机体后，通过控制台依次运行 mfr、mfl、mrr、mrl。每次应只有对应电机以 30% 输出转动 3 秒；确认位置正确、无卡滞和异常声响。电机测试期间禁止解锁。飞控没有转速反馈，不能自动判定电机本体是否正常。</small>
+      </section>
+      <div id="diagnostic-updated" class="diagnostic-updated">尚未获取</div>
+    </div>
+  </section>
+  <section id="route-page" class="route-page" aria-hidden="true">
+    <div class="route-shell">
+      <div class="diagnostic-top"><h2>开环控制序列</h2><div class="diagnostic-actions"><button onclick="closeRoutePage()">返回遥控器</button></div></div>
+      <p class="route-help">每行依次填写：持续秒数 油门百分比 横滚数值 俯仰数值 偏航数值，字段以空格分隔。三个姿态轴是遥控输入数值（-100 到 100），不是角度。空行和 # 开头的注释行会忽略。上传后由飞控本机逐段执行；序列结束或点“停止序列”会进入固件受控下降流程。无位置/高度反馈，不能保证实际航迹、半径或落点；须连接飞控、由操作者解锁，并处于自稳模式。</p>
+      <textarea id="route-editor" class="route-editor" spellcheck="false" aria-label="开环控制序列"></textarea>
+      <div class="route-page-actions"><button onclick="saveRoute()">保存序列</button><button class="run" onclick="startRoute()">开始发送</button><button class="stop" onclick="stopRoute()">停止序列</button></div>
+      <div class="route-status" id="route-status">序列未运行。开始前需连接、解锁并选择自稳模式；完成或停止后飞控将尝试受控下降。</div>
+    </div>
+  </section>
   <!-- 版权页脚 -->
-  <div class="footer"><a href="https://oshwhub.com/songge8/project_qqqyfdkm" target="_blank">琛光无人机开源项目</a></div>
+  <div class="footer"><a href="/wifi">Wi-Fi 设置</a> · <a href="/telemetry">实时日志</a> · <a href="https://oshwhub.com/songge8/project_qqqyfdkm" target="_blank">琛光无人机开源项目</a></div>
 </div>
 
 <script>
@@ -222,6 +355,7 @@ const DEADZONE = 3;   // 死区（已移至后端 stickDeadzone 统一处理，�
 const EXPO    = 40;   // 指数曲线 40%
 let consecutiveFails = 0; // 连续失败计数，>=3 才判定断连
 let currentFlightMode = 2; // 当前飞行模式编号（与后端同步：2=自稳）
+let currentArmed = false;
 
 let buttonStates     = new Array(16).fill(false);
 let lastButtonStates = new Array(16).fill(false);
@@ -230,15 +364,25 @@ let consolePollingTimer = null;
 let consoleLastTotal    = 0;   // 增量拉取游标：已展示到第 N 行
 let consoleFetchInFlight = false; // 防并发：上次 fetch 未返回时跳过本次
 let consolePanelOpen = false;
+let selfCheckOpen = false;
+let selfCheckRequestSequence = 0;
+let selfCheckHasData = false;
+let routeTimer = null;
+let flightRouteRunning = false;
+let routeStarting = false;
+let routeHold = false;
+let routeManualOverride = false;
 const CONSOLE_BASE_POLL_MS = 500;
 const CONSOLE_CATCHUP_POLL_MS = 80;
 const CONSOLE_PAGE_LIMIT = 20;
+const CONSOLE_REQUEST_TIMEOUT_MS = 3000;
 
 /*======================== 按钮配置（2×3 六宫格）========================*/
 const buttonConfigs = [
   {icon:"🔓",label:"解锁",   color:"#00ff88",desc:"解锁电机"},
   {icon:"🔒",label:"上锁",   color:"#ff3333",desc:"锁定电机"},
   {icon:"🛑",label:"急停",   color:"#ff0055",desc:"紧急停止"},
+  {icon:"🛬",label:"迫降",   color:"#ff8c00",desc:"保持水平并进入自动下降；无高度/速度反馈"},
   {icon:"🔄",label:"切换模式", color:"#00cfff",desc:"自稳→特技→定高 循环切换"},
   {icon:"🖥",label:"调试",   color:"#4a9eff",desc:"调试控制台"}
 ];
@@ -248,8 +392,129 @@ function init() {
   initButtons();
   initNetwork();
   initPointerEvents();
+  initConsoleTouchScrolling();
+  loadRoute();
+  refreshRouteStatus();
   requestAnimationFrame(animationLoop);
   requestAnimationFrame(initKnobPositions);
+}
+
+const defaultRouteText=`3.0 50.0 0.0 0.0 0
+3.0 49.5 11.53 0 0
+3.0 49.0 0 11.53 0
+3.0 48.5 -11.53 0 0
+3.0 48.0 0 -11.53 0
+3.0 47.5 11.14 0 0
+3.0 47.0 0 11.14 0
+3.0 46.5 -11.14 0 0
+3.0 46.0 0 -11.14 0
+3.0 45.5 10.75 0 0
+3.0 45.0 0 10.75 0
+3.0 44.5 -10.75 0 0
+3.0 44.0 0 -10.75 0
+3.0 43.5 10.35 0 0
+3.0 43.0 0 10.35 0
+3.0 42.5 -10.35 0 0
+3.0 42.0 0 -10.35 0
+3.0 41.5 9.96 0 0
+3.0 41.0 0 9.96 0
+3.0 40.5 -9.96 0 0
+3.0 40.0 0.0 0.0 0`;
+function parseRouteText(){
+  const points=[];const lines=document.getElementById('route-editor').value.split(/\r?\n/);
+  for(let i=0;i<lines.length;i++){
+    const line=lines[i].trim();if(!line||line.startsWith('#'))continue;
+    const fields=line.split(/[\s,]+/);
+    if(fields.length!==5||fields.some(v=>v===''||!Number.isFinite(Number(v))))throw new Error(`第 ${i+1} 行需包含 5 个数字`);
+    const [duration,throttle,roll,pitch,yaw]=fields.map(Number);
+    if(duration<0.1||duration>600||throttle<0||throttle>100||Math.abs(roll)>100||Math.abs(pitch)>100||Math.abs(yaw)>100)throw new Error(`第 ${i+1} 行参数超出范围`);
+    points.push({duration,throttle,roll,pitch,yaw});
+  }
+  if(!points.length)throw new Error('请至少填写一个有效航段');
+  if(points.reduce((sum,p)=>sum+p.duration,0)>1800)throw new Error('序列总时长不能超过 30 分钟');
+  return points;
+}
+function saveRoute(){
+  if(flightRouteRunning){showToast('执行中不能保存');return;}
+  try{localStorage.setItem('cfDroneOpenLoopSequence',document.getElementById('route-editor').value);document.getElementById('route-status').textContent='序列已保存在此浏览器。';}
+  catch(_){showToast('浏览器未允许本地保存');}
+}
+function loadRoute(){
+  let value='';try{value=localStorage.getItem('cfDroneOpenLoopSequence')||'';}catch(_){ }
+  if(!value){
+    try{const old=JSON.parse(localStorage.getItem('cfDroneOpenLoopRoute')||'[]');if(Array.isArray(old)&&old.length)value=old.map(p=>[p.duration,p.throttle,p.roll,p.pitch,p.yaw].join(' ')).join('\n');}catch(_){ }
+  }
+  document.getElementById('route-editor').value=value||defaultRouteText;
+}
+function openRoutePage(){document.getElementById('route-page').style.display='block';document.getElementById('route-page').setAttribute('aria-hidden','false');}
+function closeRoutePage(){document.getElementById('route-page').style.display='none';document.getElementById('route-page').setAttribute('aria-hidden','true');}
+function startRoute(){
+  if(flightRouteRunning||routeStarting)return;
+  if(!connectionOk||!currentArmed){showToast('请先连接飞控并由操作者解锁');return;}
+  if(currentFlightMode!==2){showToast('请先切换到自稳模式');return;}
+  let points;try{points=parseRouteText();}catch(error){document.getElementById('route-status').textContent=error.message;return;}
+  routeStarting=true;
+  const editor=document.getElementById('route-editor');
+  document.getElementById('route-status').textContent='正在上传并校验序列…';
+  fetch('/route/upload',{method:'POST',headers:{'Content-Type':'text/plain'},body:editor.value})
+    .then(async response=>{const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'序列上传失败');return fetch('/route/start',{method:'POST'});})
+    .then(async response=>{const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'飞控未能启动序列');flightRouteRunning=true;routeHold=true;routeManualOverride=false;startRouteMonitor();return refreshRouteStatus();})
+    .catch(error=>{document.getElementById('route-status').textContent=error.message;})
+    .finally(()=>{routeStarting=false;});
+}
+function startRouteMonitor(){
+  if(routeTimer)return;
+  routeTimer=setInterval(refreshRouteStatus,500);
+}
+async function refreshRouteStatus(){
+  try{
+    const response=await fetch('/route/status',{cache:'no-store'});if(!response.ok)return null;
+    const data=await response.json();
+    if(data.arm!==undefined)currentArmed=!!data.arm;
+    if(data.mode!==undefined){currentFlightMode=data.mode;document.getElementById('flight-mode').textContent=['直控','特技','自稳','定高','自动'][data.mode]||'未知';}
+    const status=document.getElementById('route-status');
+    if(data.state==='running'){
+      flightRouteRunning=true;routeHold=!routeManualOverride;
+      status.textContent=`飞控本机执行中：第 ${data.step}/${data.count} 段，共 ${Number(data.duration_s).toFixed(1)} 秒`;
+    }else if(data.state==='landing'){
+      flightRouteRunning=false;routeHold=!routeManualOverride;
+      status.textContent='序列已结束，飞控正在按受控下降流程着陆。';
+    }else if(data.state==='complete'){
+      flightRouteRunning=false;routeHold=!routeManualOverride;
+      status.textContent='下降流程结束，飞控已上锁；触碰摇杆可恢复手动控制。';
+    }else if(data.state==='aborted'){
+      flightRouteRunning=false;routeHold=!routeManualOverride;
+      status.textContent='序列已中止；触碰摇杆可接管控制。';
+    }
+    if(['complete','aborted','ready','empty'].includes(data.state)&&routeTimer){clearInterval(routeTimer);routeTimer=null;}
+    return data;
+  }catch(_){ return null; }
+}
+async function confirmArmButton(buttonIndex, warning){
+  const expectedArmed=buttonIndex===0;
+  let actual=null;
+  for(let i=0;i<6;i++){
+    const state=await refreshRouteStatus();
+    if(state&&state.arm!==undefined){
+      actual=!!state.arm;
+      if(actual===expectedArmed)break;
+    }
+    if(i<5)await new Promise(resolve=>setTimeout(resolve,150));
+  }
+  if(warning)showToast('⚠️ '+warning);
+  else if(actual===expectedArmed)showToast(expectedArmed?'✅ 已解锁':'🔒 已上锁');
+  else showToast(expectedArmed?'❌ 飞控仍显示上锁，请查看自检状态':'⚠️ 未能确认上锁状态');
+}
+function stopRoute(manualTakeover=false){
+  routeManualOverride=manualTakeover;
+  flightRouteRunning=false;routeHold=!manualTakeover;
+  fetch('/route/stop',{method:'POST'}).catch(()=>{});
+  document.getElementById('route-status').textContent=manualTakeover?'正在中止序列，交还摇杆控制…':'正在停止序列并进入受控下降…';
+  startRouteMonitor();
+}
+function takeManualControl(){
+  if(flightRouteRunning){stopRoute(true);return;}
+  if(routeHold){routeManualOverride=true;routeHold=false;}
 }
 
 function initKnobPositions() {
@@ -321,6 +586,7 @@ function applyCurve(value) {
 
 /*======================== 摇杆数据处理 ========================*/
 function processJoystickInput() {
+  if(flightRouteRunning||routeHold)return;
   // 发送原始值，后端统一完成映射（对齐SBUS/MAVLink模式，避免双重映射）
   // 油门：rawY∈[-100,+100]，后端 processThrottle: (raw+100)/(2*RAW_MAX)*100 → 0~100%
   // 姿态轴：归一化到[-1,1]做指数曲线后还原×100，后端除以RAW_MAX得[-1,1]
@@ -342,6 +608,7 @@ function hasSignificantChange(nv) {
 }
 
 function checkAndSendChanges() {
+  if(flightRouteRunning||routeHold)return;
   const now = performance.now();
   // 有变化立即发；或超过强制重发间隔时也发一次（保持飞控侧数据新鲜，避免超时断连）
   if (hasSignificantChange(currentValues) || (now - lastForceSentTime >= FORCE_SEND_INTERVAL)) {
@@ -378,6 +645,7 @@ function updateDisplayAll() {
 
 /*======================== Pointer Events 处理 ========================*/
 function handlePointerStart(e, side) {
+  takeManualControl();
   touches.set(e.pointerId, side);
   document.getElementById(`joystick-${side}`).classList.add('active');
   updateJoystickPosition(side, e.clientX, e.clientY);
@@ -432,18 +700,19 @@ function sendToESP(url, data) {
       const names = ['直控','特技','自稳','定高','自动'];
 
       // 模式切换结果
-      if (resp.m !== undefined) {
-        if (resp.m !== currentFlightMode) {
-          if (!resp.warn) showToast('✅ 已切换：' + (names[resp.m] || '未知'));
-          const leftTouched = [...touches.values()].includes('left');
-          if (!leftTouched) resetLeftStick(resp.m === 3 ? 0 : -100);
+      if (resp.m !== undefined && resp.rt !== 2) {
+      if (resp.m !== currentFlightMode) {
+        if (!resp.warn) showToast('✅ 已切换：' + (names[resp.m] || '未知'));
+        const leftTouched = [...touches.values()].includes('left');
+        if (!leftTouched && !flightRouteRunning && !routeHold) resetLeftStick(resp.m === 3 ? 0 : -100);
         }
         currentFlightMode = resp.m;
         document.getElementById('flight-mode').textContent = names[resp.m] || '自稳';
       }
 
       // ARM 状态更新（所有响应都同步显示）
-      if (resp.arm !== undefined) {
+      if (resp.arm !== undefined && resp.rt !== 2) {
+        currentArmed = !!resp.arm;
         const el   = document.getElementById('armed-status');
         const item = document.getElementById('armed-status-item');
         el.textContent = resp.arm ? '已解锁' : '已上锁';
@@ -453,15 +722,12 @@ function sendToESP(url, data) {
 
       // 按钮松开确认 toast（rt=2, bs=0）
       if (resp.rt === 2 && resp.bs === 0) {
-        if (!resp.warn) {
-          if (resp.bi === 0)
-            showToast(resp.arm ? '✅ 已解锁' : '❌ 解锁失败');
-          else if (resp.bi === 1)
-            showToast(resp.arm ? '⚠️ 上锁失败' : '🔒 已上锁');
-          else if (resp.bi === 2)
-            showToast('🛑 电机已停止');
+        if (resp.bi >= 0 && resp.bi <= 2) {
+          showToast('正在确认飞控状态…');
+          setTimeout(() => confirmArmButton(resp.bi, resp.warn), 120);
+        } else if (resp.bi === 3) {
+          showToast(resp.warn ? '⚠️ ' + resp.warn : '🛬 迫降流程已启动');
         }
-        if (resp.warn) showToast('⚠️ ' + resp.warn);
       }
       // 心跳包携带的系统警告（低电自动上锁等），不与按钮 toast 冲突
       if (resp.rt === 4 && resp.warn) showToast('⚠️ ' + resp.warn);
@@ -483,9 +749,100 @@ function updateLatency(latency) {
 function updateNetworkStatus() {
   const lr = packetStats.sent > 0 ? (packetStats.lost/packetStats.sent*100).toFixed(1) : '0';
   document.getElementById('packet-loss').textContent = lr + '%';
-  fetch('/web_rc/status').then(r=>r.json()).then(d => {
-    document.getElementById('battery').textContent = (d.voltage !== undefined && d.voltage !== null && d.voltage > 0.5) ? parseFloat(d.voltage).toFixed(2) + 'V' : '-';
-  }).catch(()=>{ document.getElementById('battery').textContent = '-'; });
+  loadSelfCheckStatus(false);
+}
+
+const diagnosticChecks = [
+  {bit:1,   name:'IMU 初始化',   advice:'检查 IMU 供电、SPI 接线和传感器型号。'},
+  {bit:2,   name:'IMU 数据超时', advice:'检查 IMU 通信、数据就绪信号和供电。'},
+  {bit:4,   name:'IMU 数据有效性', advice:'检查传感器数据、安装方向和校准参数。'},
+  {bit:8,   name:'电机输出初始化', advice:'拆下螺旋桨后检查电机引脚、PWM 配置和接线。'},
+  {bit:16,  name:'遥控链路', advice:'检查接收机供电、协议、串口引脚和遥控链路。'},
+  {bit:32,  name:'网页遥控链路', advice:'检查遥控页面连接和 Wi-Fi 链路。'},
+  {bit:64,  name:'电池电压', advice:'检查电池电量、分压电阻和 ADC 引脚。'},
+  {bit:128, name:'控制循环时序', advice:'检查循环负载、通信请求和日志输出是否过重。'},
+  {bit:256, name:'参数有效性', advice:'检查参数值；修正后重启并重新查看自检状态。'}
+];
+
+function openSelfCheck() {
+  selfCheckOpen = true;
+  const page = document.getElementById('diagnostic-page');
+  page.style.display = 'block';
+  page.setAttribute('aria-hidden', 'false');
+  refreshSelfCheck();
+}
+
+function closeSelfCheck() {
+  selfCheckOpen = false;
+  const page = document.getElementById('diagnostic-page');
+  page.style.display = 'none';
+  page.setAttribute('aria-hidden', 'true');
+}
+
+function refreshSelfCheck() {
+  loadSelfCheckStatus(true);
+}
+
+function loadSelfCheckStatus(showLoading) {
+  const requestId = ++selfCheckRequestSequence;
+  const summary = document.getElementById('diagnostic-summary');
+  if (showLoading && !selfCheckHasData) {
+    summary.className = 'diagnostic-summary offline';
+    summary.innerHTML = '<strong>正在读取诊断状态…</strong><small>数据来自飞控当前运行状态。</small>';
+  }
+  fetch('/web_rc/status', {cache:'no-store'}).then(r => {
+    if (!r.ok) throw new Error('status unavailable');
+    return r.json();
+  }).then(data => {
+    if (requestId !== selfCheckRequestSequence) return;
+    if (typeof data.faults !== 'number') throw new Error('diagnostics unsupported');
+    selfCheckHasData = true;
+    renderSelfCheckStatus(data.faults);
+    if (data.voltage !== undefined && data.voltage > 0.5)
+      document.getElementById('battery').textContent = Number(data.voltage).toFixed(2) + 'V';
+  }).catch(() => {
+    if (requestId !== selfCheckRequestSequence) return;
+    document.getElementById('battery').textContent = '-';
+    if (!selfCheckHasData) showSelfCheckUnavailable();
+    else document.getElementById('diagnostic-updated').textContent = '读取失败，保留上次故障结果';
+  });
+}
+
+function renderSelfCheckStatus(faults) {
+  if (typeof faults !== 'number') return;
+  const active = diagnosticChecks.filter(check => (faults & check.bit) !== 0);
+  const summary = document.getElementById('diagnostic-summary');
+  const button = document.getElementById('self-check-button');
+  button.classList.toggle('has-fault', active.length > 0);
+  summary.className = 'diagnostic-summary ' + (active.length ? 'fault' : 'ok');
+  summary.innerHTML = active.length
+    ? `<strong>检测到 ${active.length} 项活动故障</strong><small>如故障涉及 IMU 或电机输出，请勿解锁。处理建议见下方。</small>`
+    : '<strong>自动检查未报告活动故障</strong><small>这表示软件检测项当前正常，仍需完成下方逐电机人工检查；飞控没有转速反馈，无法确认电机本体状态。</small>';
+  const activePanel = document.getElementById('diagnostic-active');
+  activePanel.style.display = active.length ? 'block' : 'none';
+  activePanel.innerHTML = active.length
+    ? `<strong>当前活动故障（位掩码 0x${(faults >>> 0).toString(16).toUpperCase().padStart(8, '0')}）</strong><ul>${active.map(check => `<li><b>${check.name}</b>：${check.advice}</li>`).join('')}</ul>`
+    : '';
+  document.getElementById('diagnostic-list').innerHTML = diagnosticChecks.map(check => {
+    const isActive = (faults & check.bit) !== 0;
+    return `<article class="diagnostic-item${isActive ? ' active' : ''}">
+      <div class="diagnostic-item-title"><span>${check.name}</span><span class="diagnostic-item-state">${isActive ? '故障' : '未触发'}</span></div>
+      <p>${isActive ? check.advice : '当前没有检测到此项故障。'}</p>
+    </article>`;
+  }).join('');
+  document.getElementById('diagnostic-updated').textContent = '最近更新：' + new Date().toLocaleTimeString();
+}
+
+function showSelfCheckUnavailable() {
+  if (!selfCheckOpen) return;
+  const summary = document.getElementById('diagnostic-summary');
+  summary.className = 'diagnostic-summary offline';
+  summary.innerHTML = '<strong>暂时无法读取自检结果</strong><small>请检查与飞控的连接，或确认当前固件已提供诊断数据。</small>';
+  document.getElementById('diagnostic-list').innerHTML = '';
+  const activePanel = document.getElementById('diagnostic-active');
+  activePanel.style.display = 'none';
+  activePanel.innerHTML = '';
+  document.getElementById('diagnostic-updated').textContent = '读取失败';
 }
 
 function updateConnectionStatus(connected) {
@@ -512,8 +869,8 @@ function resetLeftStick(targetRawY) {
 }
 /*======================== 按钮处理 ========================*/
 function handleButton(idx) {
-  if (idx === 4) { toggleConsole(); return; }
-  if (idx === 3) {
+  if (idx === 5) { toggleConsole(); return; }
+  if (idx === 4) {
     // 模式循环：自稳(2)→特技(1)→定高(3)→自稳
     // 不在点击时弹 toast，结果完全依赖后端 resp.m 确认后触发
     let nextBit;
@@ -527,6 +884,15 @@ function handleButton(idx) {
   }
   // 解锁/上锁/急停：先发按下（state=1），100ms后发松开（state=0）
   // 后端响应中携带 rt/bi/bs，前端用这些字段判断 toast，无需 lastPressedButton
+  if (idx === 3) {
+    if (!connectionOk || !currentArmed) { showToast('请连接飞控并确认已解锁'); return; }
+    if (!window.confirm('确认启动迫降？飞控将保持水平并进入自动下降。当前没有高度/下降速度反馈。')) return;
+    showToast('🛬 迫降指令发送中…');
+    sendButtonData(idx, 1);
+    setTimeout(() => sendButtonData(idx, 0), 100);
+    if (navigator.vibrate) navigator.vibrate([40, 40, 80]);
+    return;
+  }
   if (idx === 0 || idx === 1 || idx === 2) {
     if (idx === 0)      showToast('🔓 解锁中...');
     else if (idx === 1) showToast('🔒 上锁中...');
@@ -572,10 +938,43 @@ function toggleConsole() {
   }
 }
 
+function initConsoleTouchScrolling() {
+  const output = document.getElementById('console-output');
+  let lastTouchY = 0;
+  output.addEventListener('touchstart', event => {
+    if (event.touches.length) lastTouchY = event.touches[0].clientY;
+  }, {passive:true});
+  output.addEventListener('touchmove', event => {
+    if (!consolePanelOpen || !event.touches.length) return;
+    const currentY = event.touches[0].clientY;
+    output.scrollTop -= currentY - lastTouchY;
+    lastTouchY = currentY;
+    event.preventDefault();
+  }, {passive:false});
+}
+
+function downloadConsoleLogs() {
+  const output = document.getElementById('console-output');
+  const lines = Array.from(output.children, line => line.textContent);
+  if (!lines.length) {
+    showToast('当前没有可下载的调试日志');
+    return;
+  }
+  const blob = new Blob([lines.join('\n') + '\n'], {type:'text/plain;charset=utf-8'});
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = 'cf-drone-console-' + new Date().toISOString().replace(/[:.]/g, '-') + '.txt';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
 function scheduleConsolePoll(delayMs) {
   if (!consolePanelOpen) return;
   clearTimeout(consolePollingTimer);
-  consolePollingTimer = setTimeout(fetchConsoleLogs, delayMs);
+  consolePollingTimer = setTimeout(() => {
+    consolePollingTimer = null;
+    fetchConsoleLogs();
+  }, delayMs);
 }
 
 function fetchConsoleLogs() {
@@ -585,10 +984,20 @@ function fetchConsoleLogs() {
     return;
   }
 
+  clearTimeout(consolePollingTimer);
+  consolePollingTimer = null;
   consoleFetchInFlight = true;
-  fetch('/console?since=' + consoleLastTotal + '&limit=' + CONSOLE_PAGE_LIMIT).then(r=>r.json()).then(data => {
+  let nextPollDelay = CONSOLE_BASE_POLL_MS;
+  const controller = new AbortController();
+  const requestTimeout = setTimeout(() => controller.abort(), CONSOLE_REQUEST_TIMEOUT_MS);
+  fetch('/console?since=' + consoleLastTotal + '&limit=' + CONSOLE_PAGE_LIMIT,
+    {signal:controller.signal, cache:'no-store'}).then(r=>{
+      if (!r.ok) throw new Error('console log request failed');
+      return r.json();
+    }).then(data => {
     const out = document.getElementById('console-output');
     if (data.lines && data.lines.length > 0) {
+      const stickToBottom = out.scrollTop + out.clientHeight >= out.scrollHeight - 12;
       const frag = document.createDocumentFragment();
       data.lines.forEach(l => {
         const div = document.createElement('div');
@@ -596,7 +1005,7 @@ function fetchConsoleLogs() {
         frag.appendChild(div);
       });
       out.appendChild(frag);
-      out.scrollTop = out.scrollHeight;
+      if (stickToBottom) out.scrollTop = out.scrollHeight;
       // 限制 DOM 行数，避免长时间运行内存泄漏
       while (out.children.length > 200) out.removeChild(out.firstChild);
     }
@@ -604,11 +1013,13 @@ function fetchConsoleLogs() {
     if (typeof data.next === 'number') consoleLastTotal = data.next;
     else if (typeof data.total === 'number') consoleLastTotal = data.total;
 
-    scheduleConsolePoll(data.has_more ? CONSOLE_CATCHUP_POLL_MS : CONSOLE_BASE_POLL_MS);
+    nextPollDelay = data.has_more ? CONSOLE_CATCHUP_POLL_MS : CONSOLE_BASE_POLL_MS;
   }).catch(()=>{
-    scheduleConsolePoll(CONSOLE_BASE_POLL_MS);
+    nextPollDelay = CONSOLE_BASE_POLL_MS;
   }).finally(() => {
+    clearTimeout(requestTimeout);
     consoleFetchInFlight = false;
+    if (consolePanelOpen) scheduleConsolePoll(nextPollDelay);
   });
 }
 

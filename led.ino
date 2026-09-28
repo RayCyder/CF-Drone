@@ -2,6 +2,7 @@
 // Board's LED control
 
 #include "board_config.h"
+#include "diagnostics.h"
 
 #if BOARD_LED_ENABLED
 
@@ -16,6 +17,7 @@ extern float controlTime;
 extern float rcLossTimeout;
 extern float thrustTarget;    // control.ino
 extern float batteryVoltage;  // battery.ino
+extern bool batteryAlertActiveForFlight(bool flying);
 extern bool isInverted; // safety.ino
 #if WEB_RC_ENABLED
 extern bool webRCEnabled;
@@ -45,14 +47,13 @@ void blinkLED() {
 // 飞行中（thrustTarget >= 0.15）→ L2（2.8V），L1 在飞行中不适用
 // 未解锁 / 解锁怠速 → L1（3.4V）
 bool batteryAlertActive() {
-	if (batteryVoltage <= VBAT_ABSENT_THRESHOLD) return false;
 	bool flying = armed && thrustTarget >= 0.15f;
-	if (flying) return batteryVoltage < VBAT_LOW_THRESHOLD;   // L2：飞行中
-	else        return batteryVoltage < VBAT_WARN_THRESHOLD;   // L1：未解锁/怠速
+	return batteryAlertActiveForFlight(flying);
 }
 
 // 检测是否有任意告警（低电 / 遥控失联 / 倒置）
 bool ledAlertActive() {
+	if (getActiveDiagnosticFaults() != 0) return true;
 	// 倒置检测
 	if (isInverted) return true;
 
@@ -72,7 +73,7 @@ bool ledAlertActive() {
 // 主循环调用：根据飞行状态驱动 LED
 void updateLED() {
 	if (!armed) {
-		if (batteryAlertActive()) {
+		if (batteryAlertActive() || getActiveDiagnosticFaults() != 0) {
 			setLED(micros() / BLINK_FAST_PERIOD % 2); // 解锁前低电：快闪
 		} else {
 			setLED(false); // 正常待机：常灭
