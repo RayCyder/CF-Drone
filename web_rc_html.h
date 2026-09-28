@@ -897,7 +897,6 @@ function handleButton(idx) {
   // 后端响应中携带 rt/bi/bs，前端用这些字段判断 toast，无需 lastPressedButton
   if (idx === 3) {
     if (!connectionOk || !currentArmed) { showToast('请连接飞控并确认已解锁'); return; }
-    if (!window.confirm('确认启动迫降？飞控将保持水平并进入自动下降。当前没有高度/下降速度反馈。')) return;
     showToast('🛬 迫降指令发送中…');
     sendButtonData(idx, 1);
     setTimeout(() => sendButtonData(idx, 0), 100);
