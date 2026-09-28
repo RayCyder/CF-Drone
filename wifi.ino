@@ -6,6 +6,8 @@
 #include <WiFiAP.h>
 #include <WiFiUdp.h>
 #include <DNSServer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 #include "Preferences.h"
 #include "system_log.h"
 #include "flight_log.h"
@@ -19,6 +21,15 @@ int udpRemotePort = 14550;
 IPAddress udpRemoteIP = "255.255.255.255";
 
 WiFiUDP udp;
+static WiFiUDP udpTx;
+static constexpr size_t WIFI_TX_PACKET_CAPACITY = 320;
+struct WifiTxPacket {
+	uint16_t length;
+	uint8_t data[WIFI_TX_PACKET_CAPACITY];
+};
+static QueueHandle_t wifiTxQueue = nullptr;
+static portMUX_TYPE udpRemoteMux = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t wifiTxDropped = 0;
 static WiFiServer telemetryServer(81);
 static DNSServer wifiDnsServer;
 static bool configPortalActive = false;
@@ -31,6 +42,26 @@ static const int TELEMETRY_LOG_COLUMNS_CAPACITY = 40;
 static const int TELEMETRY_FRAME_CAPACITY = 1024;
 static_assert(TELEMETRY_LOG_COLUMNS_CAPACITY >= FLIGHT_LOG_COLUMNS, "SSE telemetry capacity must cover all flight log columns");
 static_assert(TELEMETRY_FRAME_CAPACITY >= 1024, "SSE telemetry frame buffer must fit 40 CSV floats");
+
+static void wifiTransmitTask(void *argument) {
+	(void)argument;
+	udpTx.begin(0);
+	WifiTxPacket packet;
+	for (;;) {
+		if (xQueueReceive(wifiTxQueue, &packet, portMAX_DELAY) != pdTRUE) continue;
+		if (WiFi.softAPgetStationNum() == 0 && !WiFi.isConnected()) continue;
+		IPAddress destination;
+		int destinationPort;
+		portENTER_CRITICAL(&udpRemoteMux);
+		destination = udpRemoteIP;
+		destinationPort = udpRemotePort;
+		portEXIT_CRITICAL(&udpRemoteMux);
+		if (!udpTx.beginPacket(destination, destinationPort)) continue;
+		udpTx.write(packet.data, packet.length);
+		udpTx.endPacket();
+		vTaskDelay(1);
+	}
+}
 
 extern int getLogColumnCount();
 extern const char* getLogColumnName(int column);
@@ -169,6 +200,14 @@ void setupWiFi() {
 		}
 	}
 	udp.begin(udpLocalPort);
+	wifiTxQueue = xQueueCreate(8, sizeof(WifiTxPacket));
+	if (!wifiTxQueue || xTaskCreatePinnedToCore(wifiTransmitTask, "wifi_udp_tx", 4096,
+		nullptr, 1, nullptr, 0) != pdPASS) {
+		print("MAVLINK_TX state=DISABLED reason=task_create_failed\n");
+		if (wifiTxQueue) { vQueueDelete(wifiTxQueue); wifiTxQueue = nullptr; }
+	} else {
+		print("MAVLINK_TX state=READY queue=8 core=0\n");
+	}
 	telemetryServer.begin();
 	telemetryServer.setNoDelay(true);
 	if (xTaskCreate(telemetryStreamTask, "telemetry_sse", 4096, nullptr, 1, nullptr) != pdPASS) {
@@ -231,15 +270,22 @@ bool isWiFiConfigPortalActive() {
 }
 
 void sendWiFi(const uint8_t *buf, int len) {
-	if (WiFi.softAPgetStationNum() == 0 && !WiFi.isConnected()) return;
-	udp.beginPacket(udpRemoteIP, udpRemotePort);
-	udp.write(buf, len);
-	udp.endPacket();
+	if (!wifiTxQueue || !buf || len <= 0 || len > (int)WIFI_TX_PACKET_CAPACITY) return;
+	WifiTxPacket packet;
+	packet.length = (uint16_t)len;
+	memcpy(packet.data, buf, packet.length);
+	if (xQueueSend(wifiTxQueue, &packet, 0) != pdTRUE && wifiTxDropped < UINT32_MAX)
+		++wifiTxDropped;
 }
 
 int receiveWiFi(uint8_t *buf, int len) {
 	udp.parsePacket();
-	if (udp.remoteIP()) udpRemoteIP = udp.remoteIP();
+	IPAddress remote = udp.remoteIP();
+	if (remote) {
+		portENTER_CRITICAL(&udpRemoteMux);
+		udpRemoteIP = remote;
+		portEXIT_CRITICAL(&udpRemoteMux);
+	}
 	return udp.read(buf, len);
 }
 
