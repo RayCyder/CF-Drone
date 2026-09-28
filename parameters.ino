@@ -42,12 +42,14 @@ extern Vector levelGyroBias;             // Mahony 虚拟陀螺偏置，定义�
 
 Preferences storage;
 static bool parameterStorageReady = false;
+static uint16_t dirtyParameterCount = 0;
 
 struct Parameter {
 	const char *name; // max length is 15 (Preferences key limit)
 	bool integer;
 	union { float *f; int *i; };
 	float cache; // what's stored in flash
+	bool dirty = false;
 	void (*callback)(); // called after parameter change
 	Parameter(const char *name, float *variable, void (*callback)() = nullptr) : name(name), integer(false), f(variable), cache(0), callback(callback) {};
 	Parameter(const char *name, int *variable, void (*callback)() = nullptr) : name(name), integer(true), i(variable), cache(0), callback(callback) {};
@@ -313,6 +315,7 @@ void printInvalidParameterValues() {
 
 void setupParameters() {
 	print("Setup parameters\n");
+	dirtyParameterCount = 0;
 	parameterStorageReady = storage.begin("flix", false);
 	if (!parameterStorageReady) {
 		// Never erase the full NVS partition here: it also contains Wi-Fi credentials
@@ -368,6 +371,7 @@ void setupParameters() {
 		}
 		parameter.setValue(stored);
 		parameter.cache = parameter.getValue();
+		parameter.dirty = false;
 	}
 	// 存储异常值已回退默认值后，当前参数集若全部有效则清除活动故障；历史次数仍保留。
 	const bool parametersValid = allParametersValid();
@@ -403,6 +407,14 @@ bool setParameter(const char *name, const float value) {
 		if (strcasecmp(parameter.name, name) == 0) {
 			if (!validParameterValue(parameter.name, parameter.integer, value)) return false;
 			parameter.setValue(value);
+			const float current = parameter.getValue();
+			const bool dirty = current != parameter.cache &&
+				!(isnan(current) && isnan(parameter.cache));
+			if (dirty != parameter.dirty) {
+				if (dirty) ++dirtyParameterCount;
+				else if (dirtyParameterCount) --dirtyParameterCount;
+				parameter.dirty = dirty;
+			}
 			if (parameter.callback) parameter.callback();
 			setDiagnosticFault(DIAG_PARAMETER, !allParametersValid());
 			return true;
@@ -414,19 +426,26 @@ bool setParameter(const char *name, const float value) {
 void syncParameters() {
 	static Rate rate(1);
 	if (!rate) return; // sync once per second
-	if (armed || motorsActive() || !parameterStorageReady) return; // don't write flash while armed or NVS is unavailable
+	if (armed || motorsActive() || !parameterStorageReady || !dirtyParameterCount) return;
 
 	bool hasInvalidParameter = false;
 	for (auto &parameter : parameters) {
+		if (!parameter.dirty) continue;
 		if (!validParameterValue(parameter.name, parameter.integer, parameter.getValue())) {
 			hasInvalidParameter = true;
 			continue;
 		}
-		if (parameter.getValue() == parameter.cache) continue;
-		if (isnan(parameter.getValue()) && isnan(parameter.cache)) continue; // handle NAN != NAN
-		size_t written = storage.putFloat(parameter.name, parameter.getValue());
+		const float value = parameter.getValue();
+		if (value == parameter.cache || (isnan(value) && isnan(parameter.cache))) {
+			parameter.dirty = false;
+			if (dirtyParameterCount) --dirtyParameterCount;
+			continue;
+		}
+		size_t written = storage.putFloat(parameter.name, value);
 		if (written != sizeof(float)) continue; // 写入失败时不更新cache，保留旧值，下一轮 1Hz 周期自动重试
-		parameter.cache = parameter.getValue();
+		parameter.cache = value;
+		parameter.dirty = false;
+		if (dirtyParameterCount) --dirtyParameterCount;
 	}
 	if (hasInvalidParameter) {
 		if (!(getActiveDiagnosticFaults() & DIAG_PARAMETER)) reportInvalidParameters("runtime");
@@ -447,6 +466,8 @@ bool saveParameterNow(const char *name) {
 		const float stored = storage.getFloat(parameter.name, NAN);
 		if (!isfinite(stored) || stored != value) return false;
 		parameter.cache = value;
+		if (parameter.dirty && dirtyParameterCount) --dirtyParameterCount;
+		parameter.dirty = false;
 		return true;
 	}
 	return false;

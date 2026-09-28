@@ -81,14 +81,19 @@ bool configureIMU() {
 void readIMU() {
 	if (!imuOK) return; // IMU 故障时跳过，gyro/acc 保持零值，主循环继续运行
 	static uint8_t consecutiveGoodFrames = 0;
+	const uint32_t waitStarted = micros();
 	if (!imu.waitForData(5)) {
+		recordLoopStage(LOOP_STAGE_IMU_WAIT, micros() - waitStarted);
 		consecutiveGoodFrames = 0;
 		setDiagnosticFault(DIAG_IMU_TIMEOUT, true);
 		return;
 	}
+	recordLoopStage(LOOP_STAGE_IMU_WAIT, micros() - waitStarted);
+	const uint32_t processStarted = micros();
 	imu.getGyro(gyro.x, gyro.y, gyro.z);
 	imu.getAccel(acc.x, acc.y, acc.z);
 	if (!gyro.valid() || !acc.valid()) {
+		recordLoopStage(LOOP_STAGE_IMU_PROCESS, micros() - processStarted);
 		consecutiveGoodFrames = 0;
 		setDiagnosticFault(DIAG_IMU_INVALID, true);
 		return;
@@ -118,6 +123,7 @@ void readIMU() {
 	}
 	acc  = Quaternion::rotateVector(acc,  _imuRotQuat);
 	gyro = Quaternion::rotateVector(gyro, _imuRotQuat);
+	recordLoopStage(LOOP_STAGE_IMU_PROCESS, micros() - processStarted);
 }
 
 void calibrateGyroOnce() {

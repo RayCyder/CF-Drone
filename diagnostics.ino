@@ -50,8 +50,9 @@ struct LoopStageMetrics {
     uint64_t samples = 0, overBudget = 0;
 };
 static LoopStageMetrics loopStages[] = {
-    {"imu",1200}, {"rc_web",200}, {"estimate",200}, {"battery_adc",200},
-    {"control_law",200}, {"motor_out",150}, {"control",500}, {"serial_input",200},
+    {"imu",1200}, {"imu_wait",1500}, {"imu_process",200}, {"rc_web",200},
+    {"estimate",200}, {"battery_adc",200}, {"control_law",200}, {"motor_out",150},
+    {"control",500}, {"serial_input",200},
     {"mavlink",300}, {"param_sync",200}, {"maintenance",300}, {"whole_loop",1500}
 };
 static uint32_t lastStageReportMs = 0;
