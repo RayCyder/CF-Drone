@@ -8,6 +8,7 @@
 #include <DNSServer.h>
 #include "Preferences.h"
 #include "system_log.h"
+#include "flight_log.h"
 
 extern Preferences storage;
 
@@ -26,6 +27,10 @@ static bool wifiRestartScheduled = false;
 static uint32_t wifiConnectStartedMs = 0;
 static uint32_t wifiRestartAtMs = 0;
 static const uint32_t TELEMETRY_SAMPLE_INTERVAL_MS = 500; // 遥测样本 2Hz，降低网络任务占用
+static const int TELEMETRY_LOG_COLUMNS_CAPACITY = 40;
+static const int TELEMETRY_FRAME_CAPACITY = 1024;
+static_assert(TELEMETRY_LOG_COLUMNS_CAPACITY >= FLIGHT_LOG_COLUMNS, "SSE telemetry capacity must cover all flight log columns");
+static_assert(TELEMETRY_FRAME_CAPACITY >= 1024, "SSE telemetry frame buffer must fit 40 CSV floats");
 
 extern int getLogColumnCount();
 extern const char* getLogColumnName(int column);
@@ -34,8 +39,8 @@ extern bool copyLatestLogRow(float *destination, int capacity, uint32_t *sequenc
 static void telemetryStreamTask(void *argument) {
 	(void)argument;
 	const int columns = getLogColumnCount();
-	float row[40];
-	char frame[900];
+	float row[TELEMETRY_LOG_COLUMNS_CAPACITY];
+	char frame[TELEMETRY_FRAME_CAPACITY];
 	for (;;) {
 		WiFiClient client = telemetryServer.accept();
 		if (!client) {

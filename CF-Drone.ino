@@ -8,6 +8,8 @@
 #include "board_config.h"
 #include "diagnostics.h"
 #include "control.h"
+#include "flight_log.h"
+#include "log_transfer.h"
 #include "system_log.h"
 #include "web_rc_input.h"
 #include <esp_system.h>
@@ -115,6 +117,7 @@ void loop() {
 	stageStarted = micros();
 	groupStarted = stageStarted;
 	handleInput(); // 处理串口/Web控制台输入命令
+	serviceFlightLogExport(); // 限额发送，解锁时取消
 	updateAccelCalibration(); // 六面校准逐帧推进，不阻塞飞控主循环
 	recordLoopStage("serial_input", micros() - stageStarted);
 	stageStarted = micros();

@@ -6,8 +6,14 @@
 #include "diagnostics.h"
 #include "system_log.h"
 #include "lpf.h"
+#include "flight_log.h"
+#include "log_transfer.h"
 
 extern LowPassFilter<Vector> gyroBiasFilter;
+static LogOutputChunk serialLogChunk;
+static bool serialLogActive = false;
+static uint32_t serialLogGeneration = 0, serialLogRows = 0, serialLogRow = 0;
+static bool showMotd = true;
 
 #if WEB_RC_ENABLED
 extern bool webConsoleEnabled;
@@ -29,6 +35,9 @@ extern float controlRoll, controlPitch, controlThrottle, controlYaw, controlMode
 extern float motors[4];
 extern int mode;
 extern bool armed;
+bool motorsActive();
+static bool mavlinkConsoleCommand = false;
+void setMavlinkConsoleCommandOutput(bool enabled) { mavlinkConsoleCommand = enabled; }
 extern bool requestArm();
 extern void disarm();
 extern bool setFlightMode(int requestedMode);
@@ -59,11 +68,17 @@ const char* motd =
 "sys - 显示系统info信息\n"
 "diag - 显示故障诊断\n"
 "diag clear - 清理诊断历史计数\n"
-"log [dump|clear] - 打印日志或清理持久历史\n"
+"log [dump|status|resume|clear] - 导出快照、恢复采样或清理事件历史\n"
 "reboot - 重启无人机\n"
 "reset - 重置无人机\n";
 
 void print(const char* format, ...) {
+    if (armed || motorsActive() || serialLogActive) {
+        char event[96]; va_list args;
+        va_start(args, format); vsnprintf(event, sizeof(event), format, args); va_end(args);
+        recordSystemLogEvent("FLIGHT_MSG", event);
+        return; // no UART drain or heap allocation while outputs are active
+    }
 	// 固定 1000 字节缓冲区 + vsnprintf 会静默截断超长内容（例如开机菜单 motd），且截断后连换行符都可能丢失，
 	// 导致后续打印内容拼接到同一行。这里先用栈上小缓冲区尝试格式化，若实际所需长度超过缓冲区，
 	// 再按精确所需大小临时用堆内存重新格式化，避免任何长度的内容被静默截断。
@@ -131,7 +146,18 @@ void doCommand(String str, bool echo = false) {
 	String command, arg0, arg1;
 	splitString(str, command, arg0, arg1);
 	if (command.isEmpty()) return;
+    serialLogActive = false; serialLogChunk.clear(); // a new command cancels the previous serial export
 
+    command.toLowerCase();
+    if ((armed || motorsActive()) && command != "disarm" && command != "stab" &&
+        command != "acro" && command != "auto" && command != "raw") {
+        static uint32_t lastDeniedMs = 0;
+        if ((uint32_t)(millis() - lastDeniedMs) >= 1000) {
+            recordSystemLogEvent("CLI_DENIED", "outputs_active; stop motors first");
+            lastDeniedMs = millis();
+        }
+        return;
+    }
 	// echo command
 	if (echo) {
 		print("> %s\n", str.c_str());
@@ -209,10 +235,18 @@ void doCommand(String str, bool echo = false) {
 		if (arg0 == "clear") {
 			print(clearSystemLogHistory() ? "系统日志历史已清理，将在锁定状态写入。\n" :
 				"清理失败：需保持锁定、停止电机测试且存储可用。\n");
-		} else {
-			printLogHeader();
-			if (arg0 == "dump") printLogData();
-		}
+        } else if (arg0 == "resume") {
+            print(resumeFlightLog() ? "飞行日志已恢复滚动采样。\n" : "恢复失败：请停止电机。\n");
+        } else if (arg0 == "status") {
+            FlightLogStatus status = getFlightLogStatus();
+            print("FLIGHT_LOG version=1 state=%u generation=%lu rows=%lu reasons=0x%08lx missed=%lu\n",
+                (unsigned)status.state, (unsigned long)status.generation, (unsigned long)status.rowCount,
+                (unsigned long)status.reasonMask, (unsigned long)status.missedSamples);
+        } else if (arg0 == "dump") {
+            printLogData();
+        } else {
+            printLogHeader();
+        }
 	} else if (command == "cr") {
 		calibrateRC();
 	} else if (command == "ca") {
@@ -260,11 +294,11 @@ void doCommand(String str, bool echo = false) {
 }
 
 void handleInput() {
-	static bool showMotd = true;
 	static size_t motdOffset = 0;
 	static String input;
+	static bool overflow = false;
 
-	if (showMotd) {
+	if (showMotd && !armed && !motorsActive()) {
 		const size_t motdLength = strlen(motd);
 		const size_t writable = Serial.availableForWrite();
 		const size_t chunk = writable < 32 ? writable : 32;
@@ -278,13 +312,80 @@ void handleInput() {
 		}
 	}
 
-	while (Serial.available()) {
+	for (int budget = 32; budget > 0 && Serial.available(); --budget) {
 		char c = Serial.read();
 		if (c == '\n') {
-			doCommand(input);
-			input.clear();
-		} else {
-			input += c;
+            if (!overflow) doCommand(input);
+            else recordSystemLogEvent("CLI_DENIED", "command exceeds 192 bytes");
+            input.clear(); overflow = false;
+        } else if (c != '\r') {
+            if (input.length() < 192 && !overflow) input += c;
+            else { overflow = true; input.clear(); }
 		}
 	}
+}
+
+
+static bool formatLogHeader(LogOutputChunk &chunk) {
+    chunk.clear();
+    for (int i = 0; i < getLogColumnCount(); ++i) {
+        const int n = snprintf(chunk.data + chunk.size, sizeof(chunk.data) - chunk.size,
+            "%s%s", getLogColumnName(i), i + 1 == getLogColumnCount() ? "\n" : ",");
+        if (n < 0 || (size_t)n >= sizeof(chunk.data) - chunk.size) { chunk.clear(); return false; }
+        chunk.size += n;
+    }
+    return true;
+}
+
+void printLogHeader() {
+    LogOutputChunk header;
+    if (formatLogHeader(header)) print("%s", header.data);
+}
+
+void printLogData() {
+#if WEB_RC_ENABLED
+    if (webConsoleCommandTask == xTaskGetCurrentTaskHandle()) {
+        print("请在实时日志页下载故障快照，或访问 /logs.csv；仅电机停止时可导出。\n");
+        return;
+    }
+#endif
+    if (mavlinkConsoleCommand) {
+        print("Use MAVLink LOG_REQUEST_DATA id=0, or /logs.csv\n");
+        return;
+    }
+    if (!freezeFlightLog()) { print("快照尚未就绪：请停止电机并等待故障后1秒采样完成。\n"); return; }
+    const FlightLogStatus status = getFlightLogStatus();
+    serialLogGeneration = status.generation;
+    serialLogRows = status.rowCount;
+    serialLogRow = 0;
+    showMotd = false;
+    serialLogActive = formatLogHeader(serialLogChunk);
+}
+
+void serviceFlightLogExport() {
+    if (!serialLogActive) return;
+    const FlightLogStatus status = getFlightLogStatus();
+    if (armed || motorsActive() || status.generation != serialLogGeneration || status.state != FROZEN) {
+        serialLogActive = false; serialLogChunk.clear(); return;
+    }
+    if (serialLogChunk.empty()) {
+        if (serialLogRow >= serialLogRows) { serialLogActive = false; return; }
+        float row[FLIGHT_LOG_COLUMNS];
+        if (!copyFrozenLogRow(serialLogGeneration, serialLogRow++, row, FLIGHT_LOG_COLUMNS)) {
+            serialLogActive = false; return;
+        }
+        serialLogChunk.clear();
+        for (int i = 0; i < FLIGHT_LOG_COLUMNS; ++i) {
+            const int n = snprintf(serialLogChunk.data + serialLogChunk.size,
+                sizeof(serialLogChunk.data) - serialLogChunk.size, "%.7g%s", row[i],
+                i + 1 == FLIGHT_LOG_COLUMNS ? "\n" : ",");
+            if (n < 0 || (size_t)n >= sizeof(serialLogChunk.data) - serialLogChunk.size) {
+                serialLogActive = false; serialLogChunk.clear(); return;
+            }
+            serialLogChunk.size += n;
+        }
+    }
+    const int available = Serial.availableForWrite();
+    serialLogChunk.send(available > 0 ? (size_t)available : 0, 64,
+        [](const uint8_t *data, size_t length) { return Serial.write(data, length); });
 }

@@ -11,6 +11,7 @@
 #include "diagnostics.h"
 #include "system_log.h"
 #include "web_rc_input.h"
+#include "flight_log.h"
 
 // 飞控统一控制变量（供协议适配层写入，与 SBUS/MAVLink 共用）
 extern double t;
@@ -62,7 +63,29 @@ static float openLoopTotalSeconds = 0.0f;
 extern int mode;
 extern const int STAB, AUTO;
 extern bool armed;
+extern bool motorsActive();
 extern void descend();
+
+#define WEB_LOG_CSV_COLUMNS_CAPACITY 40
+#define WEB_LOG_CSV_ROW_CAPACITY 1024
+static_assert(WEB_LOG_CSV_COLUMNS_CAPACITY >= FLIGHT_LOG_COLUMNS, "HTTP CSV export capacity must cover all flight log columns");
+static_assert(WEB_LOG_CSV_ROW_CAPACITY >= 1024, "HTTP CSV rows require at least 1024 bytes");
+
+static const char *flightLogStateName(FlightLogState state) {
+    switch (state) {
+        case ROLLING: return "ROLLING";
+        case POST_TRIGGER: return "POST_TRIGGER";
+        case FROZEN: return "FROZEN";
+        default: return "UNKNOWN";
+    }
+}
+
+static bool appendCsvFloat(char *line, size_t capacity, int &used, float value, bool first) {
+    const int written = snprintf(line + used, capacity - used, "%s%.7g", first ? "" : ",", value);
+    if (written <= 0 || written >= (int)(capacity - used)) return false;
+    used += written;
+    return true;
+}
 
 static void skipRouteSeparators(char *&cursor) {
     while (*cursor && (isspace((unsigned char)*cursor) || *cursor == ',')) cursor++;
@@ -906,6 +929,97 @@ void setupWebRC() {
             throttle, roll, pitch, yaw,
             (unsigned long)getActiveDiagnosticFaults());
         webRCServer.send(200, "application/json", json);
+    });
+
+    webRCServer.on("/logs/status", HTTP_GET, []() {
+        const FlightLogStatus status = getFlightLogStatus();
+        char json[224];
+        snprintf(json, sizeof(json),
+            "{\"state\":\"%s\",\"generation\":%lu,\"rowCount\":%lu,"
+            "\"reasonMask\":%lu,\"missedSamples\":%lu,\"triggerUs\":%llu}",
+            flightLogStateName(status.state),
+            (unsigned long)status.generation,
+            (unsigned long)status.rowCount,
+            (unsigned long)status.reasonMask,
+            (unsigned long)status.missedSamples,
+            (unsigned long long)status.triggerUs);
+        webRCServer.send(200, "application/json", json);
+    });
+
+    webRCServer.on("/logs/resume", HTTP_POST, []() {
+        if (armed || motorsActive()) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"motors active\"}");
+            return;
+        }
+        if (!resumeFlightLog()) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"post trigger capture still active\"}");
+            return;
+        }
+        const FlightLogStatus status = getFlightLogStatus();
+        char json[192];
+        snprintf(json, sizeof(json),
+            "{\"ok\":1,\"state\":\"%s\",\"generation\":%lu,\"rowCount\":%lu}",
+            flightLogStateName(status.state), (unsigned long)status.generation,
+            (unsigned long)status.rowCount);
+        webRCServer.send(200, "application/json", json);
+    });
+
+    webRCServer.on("/logs.csv", HTTP_GET, []() {
+        if (armed || motorsActive()) {
+            webRCServer.send(409, "text/plain", "motors active; disarm before downloading logs\n");
+            return;
+        }
+        FlightLogStatus status = getFlightLogStatus();
+        if (status.state != FROZEN) {
+            if (!freezeFlightLog()) {
+                webRCServer.send(409, "text/plain", "log is busy or in post-trigger capture\n");
+                return;
+            }
+            status = getFlightLogStatus();
+        }
+        if (status.state != FROZEN) {
+            webRCServer.send(409, "text/plain", "log is not frozen\n");
+            return;
+        }
+        const int columns = getLogColumnCount();
+        if (columns <= 0 || columns > WEB_LOG_CSV_COLUMNS_CAPACITY) {
+            webRCServer.send(500, "text/plain", "log column count exceeds HTTP export capacity\n");
+            return;
+        }
+        const uint32_t generation = status.generation;
+        const uint32_t rowCount = status.rowCount;
+        WiFiClient client = webRCServer.client();
+        client.setNoDelay(true);
+        client.setTimeout(100);
+        client.print("HTTP/1.1 200 OK\r\nContent-Type: text/csv; charset=utf-8\r\n");
+        client.print("Cache-Control: no-store\r\nConnection: close\r\n");
+        client.printf("X-Flight-Log-Rows: %lu\r\n", (unsigned long)rowCount);
+        client.print("Content-Disposition: attachment; filename=\"cf-drone-flight-log.csv\"\r\n\r\n");
+        for (int i = 0; i < columns; ++i) {
+            if (i) client.print(',');
+            client.print(getLogColumnName(i));
+        }
+        client.print("\n");
+
+        float row[WEB_LOG_CSV_COLUMNS_CAPACITY];
+        char line[WEB_LOG_CSV_ROW_CAPACITY];
+        for (uint32_t i = 0; i < rowCount && client.connected(); ++i) {
+            if (armed || motorsActive()) break;
+            const FlightLogStatus current = getFlightLogStatus();
+            if (current.generation != generation || current.state != FROZEN) break;
+            if (!copyFrozenLogRow(generation, i, row, WEB_LOG_CSV_COLUMNS_CAPACITY)) break;
+            int used = 0;
+            bool ok = true;
+            for (int column = 0; column < columns; ++column) {
+                ok = appendCsvFloat(line, sizeof(line), used, row[column], column == 0);
+                if (!ok) break;
+            }
+            if (!ok || used + 1 >= (int)sizeof(line)) break;
+            line[used++] = '\n';
+            if (client.write((const uint8_t *)line, used) != (size_t)used) break;
+            if ((i & 0x03) == 0x03) vTaskDelay(pdMS_TO_TICKS(1));
+        }
+        client.stop();
     });
 
     webRCServer.onNotFound([]() {

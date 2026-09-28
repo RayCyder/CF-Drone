@@ -3,6 +3,7 @@
 #include <string.h>
 #include "diagnostics.h"
 #include "system_log.h"
+#include "flight_log.h"
 
 #if WEB_RC_ENABLED
 extern bool isUsingWebRC();
@@ -69,6 +70,8 @@ void setDiagnosticFault(DiagnosticFault fault, bool active) {
 		if (active != state.active) {
 			state.lastSeen = now;
 			if (active) {
+				extern bool armed;
+				if (armed) triggerFlightLog((uint32_t)fault);
 				if (state.occurrences < UINT16_MAX) state.occurrences++;
 				if (state.occurrences == 1) state.firstSeen = now;
 				state.activeSince = now;

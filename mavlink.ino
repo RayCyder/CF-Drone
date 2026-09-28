@@ -7,6 +7,8 @@
 #include "util.h"
 #include "board_config.h"
 #include "control.h"
+#include "flight_log.h"
+#include "log_transfer.h"
 
 #ifndef ATTITUDE_TARGET_TYPEMASK_BODY_ROLL_RATE_IGNORE
 #define ATTITUDE_TARGET_TYPEMASK_BODY_ROLL_RATE_IGNORE 1
@@ -35,7 +37,9 @@ Rate telemetrySlow(2);
 Rate telemetryFast(BOARD_MAVLINK_TELEM_FAST_HZ);  // 遥测频率：C3=5Hz（降低WiFi占用）/ ESP32&S3=10Hz
 
 bool mavlinkConnected = false;
-String mavlinkPrintBuffer;
+LogByteQueue<1024> mavlinkPrintBuffer;
+static LogTransferCursor mavlinkLogTransfer;
+static int mavlinkParameterCursor = -1;
 
 extern double controlTime;
 extern float motors[4];
@@ -50,9 +54,11 @@ void processMavlink() {
 
 void sendMavlink() {
 	sendMavlinkPrint();
+	serviceMavlinkLogTransfer();
+	serviceMavlinkParameterList();
 
 	mavlink_message_t msg;
-	uint32_t time = t * 1000;
+	uint32_t time = (uint32_t)(uint64_t)(t * 1000.0);
 
 	if (telemetrySlow) {
 		mavlink_msg_heartbeat_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &msg, MAV_TYPE_QUADROTOR, MAV_AUTOPILOT_GENERIC,
@@ -79,7 +85,7 @@ void sendMavlink() {
 			channels[0], channels[1], channels[2], channels[3], channels[4], channels[5], channels[6], channels[7], UINT8_MAX);
 		if (channels[0] != 0) sendMessage(&msg); // 0 means no RC input
 
-		float controls[8];
+		float controls[8] = {};
 		memcpy(controls, motors, sizeof(motors));
 		mavlink_msg_actuator_control_target_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &msg, time, 0, controls);
 		sendMessage(&msg);
@@ -137,12 +143,8 @@ void handleMavlink(const void *_msg) {
 		mavlink_msg_param_request_list_decode(&msg, &m);
 		if (m.target_system && m.target_system != mavlinkSysId) return;
 
-		mavlink_message_t msg;
-		for (int i = 0; i < parametersCount(); i++) {
-			mavlink_msg_param_value_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &msg,
-				getParameterName(i), getParameter(i), MAV_PARAM_TYPE_REAL32, parametersCount(), i);
-			sendMessage(&msg);
-		}
+        if (armed || motorsActive()) return;
+        mavlinkParameterCursor = 0;
 	}
 
 	if (msg.msgid == MAVLINK_MSG_ID_PARAM_REQUEST_READ) {
@@ -151,11 +153,11 @@ void handleMavlink(const void *_msg) {
 		if (m.target_system && m.target_system != mavlinkSysId) return;
 
 		char name[MAVLINK_MSG_PARAM_REQUEST_READ_FIELD_PARAM_ID_LEN + 1];
-		strlcpy(name, m.param_id, sizeof(name)); // param_id might be not null-terminated
-		float value = strlen(name) == 0 ? getParameter(m.param_index) : getParameter(name);
-		if (m.param_index != -1) {
-			memcpy(name, getParameterName(m.param_index), 16);
-		}
+        if (armed || motorsActive()) return;
+        memcpy(name, m.param_id, sizeof(name)-1); name[sizeof(name)-1] = 0;
+        if (m.param_index < -1 || m.param_index >= parametersCount()) return;
+        float value = m.param_index >= 0 ? getParameter(m.param_index) : getParameter(name);
+        if (m.param_index >= 0) snprintf(name, sizeof(name), "%s", getParameterName(m.param_index));
 		mavlink_message_t msg;
 		mavlink_msg_param_value_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &msg,
 			name, value, MAV_PARAM_TYPE_REAL32, parametersCount(), m.param_index);
@@ -168,7 +170,8 @@ void handleMavlink(const void *_msg) {
 		if (m.target_system && m.target_system != mavlinkSysId) return;
 
 		char name[MAVLINK_MSG_PARAM_SET_FIELD_PARAM_ID_LEN + 1];
-		strlcpy(name, m.param_id, sizeof(name)); // param_id might be not null-terminated
+		if (armed || motorsActive()) return;
+        memcpy(name, m.param_id, sizeof(name)-1); name[sizeof(name)-1] = 0;
 		bool success = setParameter(name, m.param_value);
 		if (!success) return;
 		// send ack
@@ -193,9 +196,13 @@ void handleMavlink(const void *_msg) {
 		mavlink_msg_serial_control_decode(&msg, &m);
 		if (m.target_system && m.target_system != mavlinkSysId) return;
 
-		char data[MAVLINK_MSG_SERIAL_CONTROL_FIELD_DATA_LEN + 1];
-		strlcpy(data, (const char *)m.data, m.count); // data might be not null-terminated
-		doCommand(data, true);
+        if (m.target_component && m.target_component != MAV_COMP_ID_AUTOPILOT1) return;
+        if (m.device != SERIAL_CONTROL_DEV_SHELL || m.count > sizeof(m.data)) return;
+        char data[MAVLINK_MSG_SERIAL_CONTROL_FIELD_DATA_LEN + 1];
+        memcpy(data, m.data, m.count); data[m.count] = 0;
+        setMavlinkConsoleCommandOutput(true);
+        doCommand(data, true);
+        setMavlinkConsoleCommandOutput(false);
 	}
 
 	if (msg.msgid == MAVLINK_MSG_ID_SET_ATTITUDE_TARGET) {
@@ -235,19 +242,32 @@ void handleMavlink(const void *_msg) {
 		submitAutoActuatorTarget(target);
 	}
 
-	if (msg.msgid == MAVLINK_MSG_ID_LOG_REQUEST_DATA) {
-		mavlink_log_request_data_t m;
-		mavlink_msg_log_request_data_decode(&msg, &m);
-		if (m.target_system && m.target_system != mavlinkSysId) return;
-
-		// Send all log records
-		for (int i = 0; i < sizeof(logBuffer) / sizeof(logBuffer[0]); i++) {
-			mavlink_message_t msg;
-			mavlink_msg_log_data_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &msg, 0, i,
-				sizeof(logBuffer[0]), (uint8_t *)logBuffer[i]);
-			sendMessage(&msg);
-		}
-	}
+    if (msg.msgid == MAVLINK_MSG_ID_LOG_REQUEST_END) {
+        mavlink_log_request_end_t m; mavlink_msg_log_request_end_decode(&msg, &m);
+        if ((!m.target_system || m.target_system == mavlinkSysId) &&
+            (!m.target_component || m.target_component == MAV_COMP_ID_AUTOPILOT1))
+            mavlinkLogTransfer.active = false;
+    }
+    if (msg.msgid == MAVLINK_MSG_ID_LOG_REQUEST_LIST) {
+        mavlink_log_request_list_t m; mavlink_msg_log_request_list_decode(&msg, &m);
+        if ((m.target_system && m.target_system != mavlinkSysId) ||
+            (m.target_component && m.target_component != MAV_COMP_ID_AUTOPILOT1) || m.start != 0 ||
+            armed || motorsActive() || !freezeFlightLog()) return;
+        const FlightLogStatus status = getFlightLogStatus();
+        mavlink_message_t response;
+        mavlink_msg_log_entry_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &response, 0, 1, 0, 0,
+            status.rowCount * FLIGHT_LOG_LEGACY_ROW_BYTES);
+        sendMessage(&response);
+    }
+    if (msg.msgid == MAVLINK_MSG_ID_LOG_REQUEST_DATA) {
+        mavlink_log_request_data_t m; mavlink_msg_log_request_data_decode(&msg, &m);
+        if ((m.target_system && m.target_system != mavlinkSysId) ||
+            (m.target_component && m.target_component != MAV_COMP_ID_AUTOPILOT1) || m.id != 0 ||
+            armed || motorsActive() || !freezeFlightLog()) return;
+        const FlightLogStatus status = getFlightLogStatus();
+        mavlinkLogTransfer.start(status.generation, status.rowCount * FLIGHT_LOG_LEGACY_ROW_BYTES,
+            m.ofs, m.count);
+    }
 
 	// Handle commands
 	if (msg.msgid == MAVLINK_MSG_ID_COMMAND_LONG) {
@@ -290,25 +310,54 @@ void handleMavlink(const void *_msg) {
 	}
 }
 
-// Send shell output to GCS
+// Each maintenance pass sends at most one fragment per bounded transfer.
+void serviceMavlinkLogTransfer() {
+    if (!mavlinkLogTransfer.active) return;
+    const FlightLogStatus status = getFlightLogStatus();
+    if (armed || motorsActive() || status.state != FROZEN ||
+        status.generation != mavlinkLogTransfer.generation) { mavlinkLogTransfer.active = false; return; }
+    uint8_t data[90] = {};
+    const uint8_t wanted = mavlinkLogTransfer.nextCount();
+    const size_t count = readFrozenLogBytes(mavlinkLogTransfer.generation,
+        mavlinkLogTransfer.offset, data, wanted);
+    if (count != wanted) { mavlinkLogTransfer.active = false; return; }
+    mavlink_message_t response;
+    mavlink_msg_log_data_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &response, 0,
+        mavlinkLogTransfer.offset, (uint8_t)count, data);
+    sendMessage(&response);
+    mavlinkLogTransfer.advance((uint8_t)count);
+}
+
+void serviceMavlinkParameterList() {
+    if (armed || motorsActive()) { mavlinkParameterCursor = -1; return; }
+    if (mavlinkParameterCursor < 0 || mavlinkParameterCursor >= parametersCount()) return;
+    const int i = mavlinkParameterCursor++;
+    mavlink_message_t response;
+    mavlink_msg_param_value_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &response,
+        getParameterName(i), getParameter(i), MAV_PARAM_TYPE_REAL32, parametersCount(), i);
+    sendMessage(&response);
+}
+
 void mavlinkPrint(const char* str) {
-	mavlinkPrintBuffer += str;
+    if (!armed && !motorsActive() && mavlinkConnected) mavlinkPrintBuffer.push(str);
 }
 
 void sendMavlinkPrint() {
-	// Send mavlink print data in chunks
-	const char *str = mavlinkPrintBuffer.c_str();
-	for (int i = 0; i < strlen(str); i += MAVLINK_MSG_SERIAL_CONTROL_FIELD_DATA_LEN) {
-		char data[MAVLINK_MSG_SERIAL_CONTROL_FIELD_DATA_LEN + 1];
-		strlcpy(data, str + i, sizeof(data));
-		mavlink_message_t msg;
-		mavlink_msg_serial_control_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &msg,
-			SERIAL_CONTROL_DEV_SHELL,
-			i + MAVLINK_MSG_SERIAL_CONTROL_FIELD_DATA_LEN < strlen(str) ? SERIAL_CONTROL_FLAG_MULTI : 0, // more chunks to go
-			0, 0, strlen(data), (uint8_t *)data, 0, 0);
-		sendMessage(&msg);
-	}
-	mavlinkPrintBuffer.clear();
+    if (armed || motorsActive()) { mavlinkPrintBuffer.clear(); return; }
+    uint8_t data[MAVLINK_MSG_SERIAL_CONTROL_FIELD_DATA_LEN] = {};
+    size_t count = mavlinkPrintBuffer.pop(data, sizeof(data));
+    if (!count && mavlinkPrintBuffer.dropped) {
+        count = snprintf((char *)data, sizeof(data), "[console overflow: %lu bytes dropped]\n",
+            (unsigned long)mavlinkPrintBuffer.dropped);
+        if (count >= sizeof(data)) count = sizeof(data)-1;
+        mavlinkPrintBuffer.dropped = 0;
+    }
+    if (!count) return;
+    mavlink_message_t msg;
+    mavlink_msg_serial_control_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &msg,
+        SERIAL_CONTROL_DEV_SHELL, mavlinkPrintBuffer.size() ? SERIAL_CONTROL_FLAG_MULTI : 0,
+        0, 0, (uint8_t)count, data, 0, 0);
+    sendMessage(&msg);
 }
 
 #endif

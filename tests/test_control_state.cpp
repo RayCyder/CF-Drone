@@ -36,6 +36,7 @@ bool isAccelCalibrationActive(){return false;}
 void sendMotors() {}
 bool motorsActive(){for(float m:motors)if(m!=0)return true;return false;}
 void recordSystemLogEvent(const char*,const char*) {}
+void triggerFlightLog(uint32_t) {}
 bool tryArmWithSystemLog();
 void failsafe(); void interpretControls(); void controlAttitude();void controlRates();void controlTorque();
 void desaturate(float&,float&,float&,float&);
