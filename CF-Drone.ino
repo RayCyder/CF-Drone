@@ -88,9 +88,10 @@ void setup() {
 }
 
 void loop() {
-	uint32_t stageStarted = micros();
+	const uint32_t loopStarted = micros();
+	uint32_t stageStarted = loopStarted;
 	readIMU(); // 读取IMU原始数据（陀螺仪/加速度计），并完成校准与坐标旋转
-	recordLoopStage("imu", micros() - stageStarted);
+	recordLoopStage(LOOP_STAGE_IMU, micros() - stageStarted);
 	step(); // 计算主循环步进时间 t 与时间差 dt，并统计循环频率
 	recordLoopTiming(dt);
 	stageStarted = micros();
@@ -99,42 +100,43 @@ void loop() {
 	readWebRC();  // 读取Web遥控器输入
 	processConsoleCommandQueue(); // 将网页命令放到主循环执行，避免阻塞HTTP回调
 #endif
-	recordLoopStage("rc_web", micros() - stageStarted);
+	recordLoopStage(LOOP_STAGE_RC_WEB, micros() - stageStarted);
 	stageStarted = micros();
 	uint32_t groupStarted = stageStarted;
 	estimate(); // 姿态与状态估计（互补滤波融合IMU数据）
-	recordLoopStage("estimate", micros() - stageStarted);
+	recordLoopStage(LOOP_STAGE_ESTIMATE, micros() - stageStarted);
 	stageStarted = micros();
 	updateBatteryVoltage(); // 更新电池电压采样与低电压保护判断
-	recordLoopStage("battery_adc", micros() - stageStarted);
+	recordLoopStage(LOOP_STAGE_BATTERY_ADC, micros() - stageStarted);
 	stageStarted = micros();
 	control(); // 飞控核心：姿态环PID解算，输出电机控制量
-	recordLoopStage("control_law", micros() - stageStarted);
+	recordLoopStage(LOOP_STAGE_CONTROL_LAW, micros() - stageStarted);
 	stageStarted = micros();
 	sendMotors(); // 将电机控制量输出到电机（PWM/DShot）
-	recordLoopStage("motor_out", micros() - stageStarted);
-	recordLoopStage("control", micros() - groupStarted);
+	recordLoopStage(LOOP_STAGE_MOTOR_OUT, micros() - stageStarted);
+	recordLoopStage(LOOP_STAGE_CONTROL, micros() - groupStarted);
 	stageStarted = micros();
 	groupStarted = stageStarted;
 	handleInput(); // 处理串口/Web控制台输入命令
 	serviceFlightLogExport(); // 限额发送，解锁时取消
 	updateAccelCalibration(); // 六面校准逐帧推进，不阻塞飞控主循环
-	recordLoopStage("serial_input", micros() - stageStarted);
+	recordLoopStage(LOOP_STAGE_SERIAL_INPUT, micros() - stageStarted);
 	stageStarted = micros();
 #if WIFI_ENABLED
 	processMavlink(); // 处理MAVLink通信
 #endif
-	recordLoopStage("mavlink", micros() - stageStarted);
+	recordLoopStage(LOOP_STAGE_MAVLINK, micros() - stageStarted);
 	stageStarted = micros();
 	groupStarted = stageStarted;
 	logData(); // 记录飞行日志数据
 	stageStarted = micros();
 	syncParameters(); // 参数变更后延迟写入Flash，避免频繁擦写
-	recordLoopStage("param_sync", micros() - stageStarted);
+	recordLoopStage(LOOP_STAGE_PARAM_SYNC, micros() - stageStarted);
 	updateLED(); // 根据当前飞行状态刷新LED指示效果
 	updateDiagnostics();
 #if WIFI_ENABLED
 	serviceWiFi(); // 更新连接状态、配网DNS与超时回退
 #endif
-	recordLoopStage("maintenance", micros() - groupStarted);
+	recordLoopStage(LOOP_STAGE_MAINTENANCE, micros() - groupStarted);
+	recordLoopStage(LOOP_STAGE_WHOLE_LOOP, micros() - loopStarted);
 }

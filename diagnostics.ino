@@ -4,6 +4,7 @@
 #include "diagnostics.h"
 #include "system_log.h"
 #include "flight_log.h"
+#include "loop_metrics.h"
 
 #if WEB_RC_ENABLED
 extern bool isUsingWebRC();
@@ -40,26 +41,50 @@ static DiagnosticState diagnosticStates[] = {
 static uint32_t loopOverrunCount = 0;
 static float worstLoopDt = 0;
 static uint32_t lastLoopOverrunMs = 0;
-static const char *slowStageNames[11] = {};
-static uint32_t slowStageLoggedAt[11] = {};
+static bool haveLoopOverrun = false;
+static LoopTimingMetrics loopTiming;
+struct LoopStageMetrics {
+    const char *name;
+    uint32_t budgetUs;
+    uint32_t maximumUs = 0, pendingWorstUs = 0;
+    uint64_t samples = 0, overBudget = 0;
+};
+static LoopStageMetrics loopStages[] = {
+    {"imu",1200}, {"rc_web",200}, {"estimate",200}, {"battery_adc",200},
+    {"control_law",200}, {"motor_out",150}, {"control",500}, {"serial_input",200},
+    {"mavlink",300}, {"param_sync",200}, {"maintenance",300}, {"whole_loop",1500}
+};
+static uint32_t lastStageReportMs = 0;
 
-void recordLoopStage(const char *stage, uint32_t durationUs) {
-	if (!stage || durationUs < 5000) return;
-	const uint32_t now = millis();
-	int slot = -1;
-	for (int i = 0; i < 11; ++i) {
-		if (slowStageNames[i] && strcmp(slowStageNames[i], stage) == 0) {
-			slot = i;
-			break;
-		}
-		if (slot < 0 && !slowStageNames[i]) slot = i;
-	}
-	if (slot < 0 || (slowStageNames[slot] && (uint32_t)(now - slowStageLoggedAt[slot]) < 5000)) return;
-	slowStageNames[slot] = stage;
-	slowStageLoggedAt[slot] = now;
-	char message[48];
-	snprintf(message, sizeof(message), "stage=%s duration_us=%lu", stage, (unsigned long)durationUs);
-	recordSystemLogEvent("SLOW_LOOP", message);
+static_assert(sizeof(loopStages) / sizeof(loopStages[0]) == LOOP_STAGE_COUNT, "stage index/name table mismatch");
+void recordLoopStage(LoopStageId stage, uint32_t durationUs) {
+    if (stage >= LOOP_STAGE_COUNT) return;
+    auto &entry = loopStages[stage];
+    ++entry.samples;
+    if (durationUs > entry.maximumUs) entry.maximumUs = durationUs;
+    if (durationUs > entry.budgetUs) {
+        ++entry.overBudget;
+        if (durationUs > entry.pendingWorstUs) entry.pendingWorstUs = durationUs;
+    }
+}
+
+static void reportLoopStages() {
+    const uint32_t now = millis();
+    if ((uint32_t)(now - lastStageReportMs) < 5000) return;
+    lastStageReportMs = now;
+    const LoopStageMetrics *worst = nullptr;
+    for (const auto &entry : loopStages) {
+        if (!strcmp(entry.name,"whole_loop") || !strcmp(entry.name,"control") ||
+            !strcmp(entry.name,"maintenance")) continue;
+        if (entry.pendingWorstUs && (!worst || entry.pendingWorstUs > worst->pendingWorstUs)) worst = &entry;
+    }
+    if (worst) {
+        char message[48];
+        snprintf(message, sizeof(message), "stage=%s duration_us=%lu", worst->name,
+            (unsigned long)worst->pendingWorstUs);
+        recordSystemLogEvent("SLOW_LOOP", message);
+    }
+    for (auto &entry : loopStages) entry.pendingWorstUs = 0;
 }
 
 void setDiagnosticFault(DiagnosticFault fault, bool active) {
@@ -110,15 +135,18 @@ bool hasBlockingDiagnosticFault() {
 }
 
 void recordLoopTiming(float dt) {
-	if (!isfinite(dt) || dt > worstLoopDt) worstLoopDt = dt;
-	if (dt > 0.010f) {
-		if (loopOverrunCount < UINT32_MAX) loopOverrunCount++;
-		lastLoopOverrunMs = millis();
-		setDiagnosticFault(DIAG_LOOP_OVERRUN, true);
-	}
+    const uint32_t us = loopTiming.observe(dt);
+    worstLoopDt = loopTiming.maximumUs * .000001f;
+    if (us > 1500) {
+        if (loopOverrunCount < UINT32_MAX) ++loopOverrunCount;
+        lastLoopOverrunMs = millis();
+        haveLoopOverrun = true;
+        setDiagnosticFault(DIAG_LOOP_OVERRUN, true);
+    }
 }
 
 void updateDiagnostics() {
+    reportLoopStages();
 	extern bool imuOK;
 	extern bool motorOutputsOK;
 	extern double controlTime;
@@ -149,8 +177,10 @@ void updateDiagnostics() {
 	setDiagnosticFault(DIAG_AUTO_TARGET_TIMEOUT, autoTimeoutFault);
 	setDiagnosticFault(DIAG_BATTERY_LOW,
 		batteryAlertActiveForFlight(armed && thrustTarget >= 0.15f));
-	if (lastLoopOverrunMs && (uint32_t)(millis() - lastLoopOverrunMs) > 10000UL)
-		setDiagnosticFault(DIAG_LOOP_OVERRUN, false);
+	if (haveLoopOverrun && (uint32_t)(millis() - lastLoopOverrunMs) > 10000UL) {
+        setDiagnosticFault(DIAG_LOOP_OVERRUN, false);
+        haveLoopOverrun = false;
+    }
 }
 
 void initializeDiagnostics() {
@@ -166,7 +196,9 @@ void clearDiagnosticHistory() {
 		state.lastSeen = state.active ? state.activeSince : 0;
 		state.activeDuration = 0;
 	}
-	loopOverrunCount = 0;
+    loopTiming = {};
+    for (auto &entry : loopStages) { entry.maximumUs = entry.pendingWorstUs = 0; entry.samples = entry.overBudget = 0; }
+    loopOverrunCount = 0;
 	worstLoopDt = 0;
 	print("诊断历史计数已清理；当前故障仍保留。\n");
 }
@@ -181,6 +213,20 @@ void printDiagnostics() {
 		batteryVoltage, controlTime > 0 ? t - controlTime : -1.0f,
 		controlRoll, controlPitch, controlYaw, controlThrottle, loopRate, dt,
 		(unsigned long)ESP.getFreeHeap());
+    const uint32_t p99 = loopTiming.p99UpperUs();
+    char p99Label[24];
+    if (!loopTiming.samples) snprintf(p99Label, sizeof(p99Label), "no_samples");
+    else if (p99) snprintf(p99Label, sizeof(p99Label), "<=%lu", (unsigned long)p99);
+    else snprintf(p99Label, sizeof(p99Label), ">10000");
+    print("LOOP_TIMING samples=%llu invalid=%llu max_us=%lu over_1000=%llu over_1500=%llu missed_slots=%llu p99_bucket_us=%s\n",
+        (unsigned long long)loopTiming.samples, (unsigned long long)loopTiming.invalid,
+        (unsigned long)loopTiming.maximumUs, (unsigned long long)loopTiming.over1000,
+        (unsigned long long)loopTiming.over1500, (unsigned long long)loopTiming.missedSlots, p99Label);
+    for (const auto &entry : loopStages) {
+        print("LOOP_STAGE name=%s samples=%llu max_us=%lu budget_us=%lu over_budget=%llu\n",
+            entry.name, (unsigned long long)entry.samples, (unsigned long)entry.maximumUs,
+            (unsigned long)entry.budgetUs, (unsigned long long)entry.overBudget);
+    }
 	bool any = false;
 	print("故障诊断 active=0x%08lx loop_overruns=%lu worst_dt=%.4fs\n",
 		(unsigned long)getActiveDiagnosticFaults(), (unsigned long)loopOverrunCount, worstLoopDt);

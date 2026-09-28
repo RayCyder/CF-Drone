@@ -35,7 +35,8 @@ bool batteryBlocksArming(){return false;}
 bool isAccelCalibrationActive(){return false;}
 void sendMotors() {}
 bool motorsActive(){for(float m:motors)if(m!=0)return true;return false;}
-void recordSystemLogEvent(const char*,const char*) {}
+unsigned systemEventCount=0;
+void recordSystemLogEvent(const char*,const char*) {++systemEventCount;}
 void triggerFlightLog(uint32_t) {}
 bool tryArmWithSystemLog();
 void failsafe(); void interpretControls(); void controlAttitude();void controlRates();void controlTorque();
@@ -131,5 +132,16 @@ int main(){
     nowMs+=501; t+=.501; failsafe();
     assert(isControlledLandingActive() && rollRatePID.integral==0);
     disarm();
+    clearDiagnosticHistory();
+    recordLoopTiming(0); recordLoopTiming(NAN); recordLoopTiming(.001f); recordLoopTiming(.0015f);
+    assert(!(getActiveDiagnosticFaults() & DIAG_LOOP_OVERRUN));
+    recordLoopTiming(.001501f); assert(getActiveDiagnosticFaults() & DIAG_LOOP_OVERRUN);
+    assert(loopTiming.samples==3 && loopTiming.invalid==2 && loopTiming.maximumUs==1501);
+    const unsigned eventCount=systemEventCount;
+    for(int i=0;i<1000;i++) recordLoopStage(LOOP_STAGE_CONTROL_LAW,201);
+    assert(systemEventCount==eventCount); // hot-path counters do not format/emit events
+    assert(loopStages[LOOP_STAGE_CONTROL_LAW].overBudget==1000);
+    nowMs=0; recordLoopTiming(.002f); nowMs=10001; updateDiagnostics();
+    assert(!(getActiveDiagnosticFaults() & DIAG_LOOP_OVERRUN));
     puts("landing/control state regression: PASS");
 }

@@ -74,7 +74,7 @@ static void telemetryStreamTask(void *argument) {
 			for (int i = 0; i < eventCount; ++i) {
 				const SystemLogEvent &event = events[i];
 				used = snprintf(frame, sizeof(frame), "id: %08lx-%lu\nevent: system-log\ndata: %lu|%s|%s\n\n",
-					(unsigned long)getSystemLogBootId(), (unsigned long)event.sequence,
+					(unsigned long)event.bootId, (unsigned long)event.sequence,
 					(unsigned long)event.uptimeMs, event.tag, event.message);
 				if (used <= 0 || used >= (int)sizeof(frame) ||
 					client.write((const uint8_t *)frame, used) != (size_t)used) {
