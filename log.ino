@@ -26,7 +26,8 @@ static const char *const logColumnNames[FLIGHT_LOG_COLUMNS] = {
     "rate_i_x", "rate_i_y", "rate_i_z", "mix_scale", "control_source"
 };
 static_assert((DIAG_IMU_INIT | DIAG_IMU_TIMEOUT | DIAG_IMU_INVALID | DIAG_MOTOR_INIT |
-    DIAG_RC_LOSS | DIAG_WEB_RC_LOSS | DIAG_BATTERY_LOW | DIAG_LOOP_OVERRUN | DIAG_PARAMETER | DIAG_AUTO_TARGET_TIMEOUT) <= UINT16_MAX,
+    DIAG_RC_LOSS | DIAG_WEB_RC_LOSS | DIAG_BATTERY_LOW | DIAG_LOOP_OVERRUN | DIAG_PARAMETER |
+    DIAG_AUTO_TARGET_TIMEOUT | DIAG_INVERTED) <= UINT16_MAX,
     "Expand flight record fault mask when diagnostic bits exceed 16 bits");
 
 int getLogColumnCount() { return FLIGHT_LOG_COLUMNS; }

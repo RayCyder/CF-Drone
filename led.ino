@@ -3,6 +3,7 @@
 
 #include "board_config.h"
 #include "diagnostics.h"
+#include "led_alert_policy.h"
 
 #if BOARD_LED_ENABLED
 
@@ -72,18 +73,18 @@ bool ledAlertActive() {
 	return false;
 }
 
+bool ledFastBlinkActive() {
+	const bool armedAlert = armed && ledAlertActive();
+	const bool disarmedAlert = !armed && (batteryAlertActive() || hasBlockingDiagnosticFault());
+	return ledFastBlinkRequested(armed, armedAlert, disarmedAlert);
+}
+
 // 主循环调用：根据飞行状态驱动 LED
 void updateLED() {
-	if (!armed) {
-		if (batteryAlertActive() || hasBlockingDiagnosticFault()) {
-			setLED(micros() / BLINK_FAST_PERIOD % 2); // 锁定时仅低电或阻止解锁的故障快闪
-		} else {
-			setLED(false); // 正常待机：常灭
-		}
-		return;
-	}
-	if (ledAlertActive()) {
-		setLED(micros() / BLINK_FAST_PERIOD % 2); // 任何告警：快闪 8Hz
+	if (ledFastBlinkActive()) {
+		setLED(micros() / BLINK_FAST_PERIOD % 2); // 告警：快闪 8Hz
+	} else if (!armed) {
+		setLED(false); // 正常待机：常灭
 	} else {
 		setLED(micros() / BLINK_PERIOD % 2); // 正常飞行：慢闪 1Hz
 	}
@@ -94,5 +95,6 @@ void updateLED() {
 void setupLED() {}
 void setLED(bool on) {}
 void updateLED() {}
+bool ledFastBlinkActive() { return false; }
 
 #endif // BOARD_LED_ENABLED

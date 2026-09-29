@@ -21,6 +21,7 @@ extern double t;
 extern double controlTime;
 extern float controlRoll, controlPitch, controlYaw, controlThrottle, controlMode;
 extern float batteryVoltage;
+extern bool ledFastBlinkActive();
 extern const char* motd;
 
 // ==================== 配置常量 ====================
@@ -1041,10 +1042,11 @@ void setupWebRC() {
         if (isnan(vbat) || vbat < 0.0f) vbat = 0.0f;
         char json[448];
         snprintf(json, sizeof(json),
-            "{\"armed\":%s,\"enabled\":%s,\"active\":%s,"
+            "{\"armed\":%s,\"led_fast_blink\":%s,\"enabled\":%s,\"active\":%s,"
             "\"voltage\":%.2f,"
             "\"throttle\":%.1f,\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,\"faults\":%lu}",
             armed ? "true" : "false",
+            ledFastBlinkActive() ? "true" : "false",
             enabled ? "true" : "false",
             (useWebRC && enabled) ? "true" : "false",
             vbat,

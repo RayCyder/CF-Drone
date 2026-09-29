@@ -36,6 +36,7 @@ static DiagnosticState diagnosticStates[] = {
 	{DIAG_LOOP_OVERRUN, "LOOP_OVERRUN", "WARNING", "检查循环负载、通信请求和日志输出", false, 0, 0, 0, 0, 0},
 	{DIAG_PARAMETER, "PARAMETER", "CRITICAL", "检查参数范围；修正后重启并重新执行diag", false, 0, 0, 0, 0, 0},
 	{DIAG_AUTO_TARGET_TIMEOUT, "AUTO_TARGET_TIMEOUT", "WARNING", "检查外部AUTO控制链路、目标频率和模式切换流程", false, 0, 0, 0, 0, 0},
+	{DIAG_INVERTED, "INVERTED", "WARNING", "检查机体姿态；倒置保护触发期间保持锁定", false, 0, 0, 0, 0, 0},
 };
 
 static uint32_t loopOverrunCount = 0;
@@ -283,6 +284,7 @@ void updateDiagnostics() {
 	extern double t;
 	extern float rcLossTimeout;
 	extern bool armed;
+	extern bool isInverted;
 	extern int mode;
 	extern const int AUTO;
 	extern float thrustTarget;
@@ -305,6 +307,7 @@ void updateDiagnostics() {
 			autoTargetTimedOut();
 	}
 	setDiagnosticFault(DIAG_AUTO_TARGET_TIMEOUT, autoTimeoutFault);
+	setDiagnosticFault(DIAG_INVERTED, armed && isInverted);
 	setDiagnosticFault(DIAG_BATTERY_LOW,
 		batteryAlertActiveForFlight(armed && thrustTarget >= 0.15f));
 	if (haveLoopOverrun && (uint32_t)(millis() - lastLoopOverrunMs) > 10000UL) {

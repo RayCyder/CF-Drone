@@ -776,7 +776,9 @@ const diagnosticChecks = [
   {bit:32,  name:'网页遥控链路', advice:'检查遥控页面连接和 Wi-Fi 链路。'},
   {bit:64,  name:'电池电压', advice:'检查电池电量、分压电阻和 ADC 引脚。'},
   {bit:128, name:'控制循环时序', advice:'检查循环负载、通信请求和日志输出是否过重。'},
-  {bit:256, name:'参数有效性', advice:'检查参数值；修正后重启并重新查看自检状态。'}
+  {bit:256, name:'参数有效性', advice:'检查参数值；修正后重启并重新查看自检状态。'},
+  {bit:512, name:'AUTO 目标超时', advice:'检查外部 AUTO 目标流和模式切换状态。'},
+  {bit:1024,name:'机体倒置', advice:'机体倒置告警；保持锁定并检查姿态。'}
 ];
 
 function openSelfCheck() {
@@ -818,6 +820,9 @@ function loadSelfCheckStatus(showLoading) {
   }).catch(() => {
     if (requestId !== selfCheckRequestSequence) return;
     document.getElementById('battery').textContent = '-';
+    const ledReason = document.getElementById('led-alert-reason');
+    ledReason.className = 'diagnostic-summary offline';
+    ledReason.innerHTML = '<strong>无法确认蓝灯快闪原因</strong><small>飞控状态读取失败；请检查 USB/Wi-Fi 链路后刷新。</small>';
     if (!selfCheckHasData) showSelfCheckUnavailable();
     else document.getElementById('diagnostic-updated').textContent = '读取失败，保留上次故障结果';
   });
@@ -831,22 +836,39 @@ function renderSelfCheckStatus(data) {
   const blockingFaults = diagnosticChecks.filter(check =>
     [1, 2, 4, 8, 256].includes(check.bit) && (faults & check.bit) !== 0);
   const voltage = Number(data.voltage);
-  const lowBattery = Number.isFinite(voltage) && voltage > 0.5 && voltage < 3.5;
+  const lowBattery = data.armed === true
+    ? (faults & 64) !== 0
+    : Number.isFinite(voltage) && voltage > 0.5 && voltage < 3.5;
   const ledCauses = [];
-  if (lowBattery) ledCauses.push(`电池低压：${voltage.toFixed(2)} V（锁定告警阈值 3.50 V）`);
-  blockingFaults.forEach(check => ledCauses.push(`阻止解锁故障：${check.name}`));
+  if (lowBattery) ledCauses.push(`电池低压：${voltage.toFixed(2)} V`);
+  const nonBatteryCauses = data.armed === true
+    ? active.filter(check => check.bit !== 64)
+    : blockingFaults;
+  nonBatteryCauses.forEach(check =>
+    ledCauses.push(`${data.armed === true ? '活动告警' : '阻止解锁故障'}：${check.name}`));
   if (data.armed === true) {
-    ledReason.className = 'diagnostic-summary offline';
-    ledReason.innerHTML = '<strong>蓝灯快闪原因</strong><small>飞控当前显示已解锁；请刷新自检状态核对灯态和连接。</small>';
-  } else if (ledCauses.length) {
+    if (data.led_fast_blink === true && ledCauses.length) {
+      ledReason.className = 'diagnostic-summary fault';
+      ledReason.innerHTML = `<strong>蓝灯快闪原因（已解锁）</strong><small>${ledCauses.join('<br>')}</small>`;
+    } else if (data.led_fast_blink === true) {
+      ledReason.className = 'diagnostic-summary fault';
+      ledReason.innerHTML = '<strong>飞控报告蓝灯快闪</strong><small>LED 判定与故障字段不一致，请检查固件版本。</small>';
+    } else {
+      ledReason.className = 'diagnostic-summary ok';
+      ledReason.innerHTML = '<strong>飞控当前未报告蓝灯快闪</strong><small>已解锁但无活动告警；若实体灯仍快闪，请刷新状态并确认固件版本。</small>';
+    }
+  } else if (data.led_fast_blink === true && ledCauses.length) {
     ledReason.className = 'diagnostic-summary fault';
     ledReason.innerHTML = `<strong>蓝灯快闪原因（当前锁定状态）</strong><small>${ledCauses.join('<br>')}</small>`;
+  } else if (data.led_fast_blink === true) {
+    ledReason.className = 'diagnostic-summary fault';
+    ledReason.innerHTML = '<strong>飞控报告蓝灯应快闪</strong><small>当前故障位和电压读数未能对应到具体触发项，请确认固件版本并刷新。</small>';
   } else if (!Number.isFinite(voltage) || voltage <= 0.5) {
     ledReason.className = 'diagnostic-summary offline';
     ledReason.innerHTML = '<strong>暂未找到蓝灯快闪触发项</strong><small>未检测到阻止解锁故障；电池电压无有效读数，因此无法排除电池告警。请检查电压采样并刷新。</small>';
   } else {
     ledReason.className = 'diagnostic-summary ok';
-    ledReason.innerHTML = `<strong>当前数据未显示蓝灯快闪原因</strong><small>电池 ${voltage.toFixed(2)} V，且没有阻止解锁故障。若蓝灯仍快闪，请刷新或确认固件版本。</small>`;
+    ledReason.innerHTML = `<strong>当前数据未显示蓝灯快闪</strong><small>电池 ${voltage.toFixed(2)} V，且没有阻止解锁故障。若蓝灯仍快闪，请刷新或确认固件版本。</small>`;
   }
   const summary = document.getElementById('diagnostic-summary');
   const button = document.getElementById('self-check-button');
