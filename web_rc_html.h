@@ -317,6 +317,9 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
         <strong>正在读取诊断状态…</strong>
         <small>数据来自飞控当前运行状态。</small>
       </div>
+      <div id="led-alert-reason" class="diagnostic-summary offline">
+        <strong>正在读取蓝灯状态…</strong>
+      </div>
       <div id="diagnostic-active" class="diagnostic-active" style="display:none"></div>
       <div id="diagnostic-list" class="diagnostic-list"></div>
       <section class="diagnostic-summary offline">
@@ -809,7 +812,7 @@ function loadSelfCheckStatus(showLoading) {
     if (requestId !== selfCheckRequestSequence) return;
     if (typeof data.faults !== 'number') throw new Error('diagnostics unsupported');
     selfCheckHasData = true;
-    renderSelfCheckStatus(data.faults);
+    renderSelfCheckStatus(data);
     if (data.voltage !== undefined && data.voltage > 0.5)
       document.getElementById('battery').textContent = Number(data.voltage).toFixed(2) + 'V';
   }).catch(() => {
@@ -820,9 +823,31 @@ function loadSelfCheckStatus(showLoading) {
   });
 }
 
-function renderSelfCheckStatus(faults) {
+function renderSelfCheckStatus(data) {
+  const faults = data.faults;
   if (typeof faults !== 'number') return;
   const active = diagnosticChecks.filter(check => (faults & check.bit) !== 0);
+  const ledReason = document.getElementById('led-alert-reason');
+  const blockingFaults = diagnosticChecks.filter(check =>
+    [1, 2, 4, 8, 256].includes(check.bit) && (faults & check.bit) !== 0);
+  const voltage = Number(data.voltage);
+  const lowBattery = Number.isFinite(voltage) && voltage > 0.5 && voltage < 3.5;
+  const ledCauses = [];
+  if (lowBattery) ledCauses.push(`电池低压：${voltage.toFixed(2)} V（锁定告警阈值 3.50 V）`);
+  blockingFaults.forEach(check => ledCauses.push(`阻止解锁故障：${check.name}`));
+  if (data.armed === true) {
+    ledReason.className = 'diagnostic-summary offline';
+    ledReason.innerHTML = '<strong>蓝灯快闪原因</strong><small>飞控当前显示已解锁；请刷新自检状态核对灯态和连接。</small>';
+  } else if (ledCauses.length) {
+    ledReason.className = 'diagnostic-summary fault';
+    ledReason.innerHTML = `<strong>蓝灯快闪原因（当前锁定状态）</strong><small>${ledCauses.join('<br>')}</small>`;
+  } else if (!Number.isFinite(voltage) || voltage <= 0.5) {
+    ledReason.className = 'diagnostic-summary offline';
+    ledReason.innerHTML = '<strong>暂未找到蓝灯快闪触发项</strong><small>未检测到阻止解锁故障；电池电压无有效读数，因此无法排除电池告警。请检查电压采样并刷新。</small>';
+  } else {
+    ledReason.className = 'diagnostic-summary ok';
+    ledReason.innerHTML = `<strong>当前数据未显示蓝灯快闪原因</strong><small>电池 ${voltage.toFixed(2)} V，且没有阻止解锁故障。若蓝灯仍快闪，请刷新或确认固件版本。</small>`;
+  }
   const summary = document.getElementById('diagnostic-summary');
   const button = document.getElementById('self-check-button');
   button.classList.toggle('has-fault', active.length > 0);

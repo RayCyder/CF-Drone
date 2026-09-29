@@ -219,8 +219,8 @@ static bool finishAccelCalibration() {
 	saved = saveParameterNow("IMU_ACC_SCALE_Y") && saved;
 	saved = saveParameterNow("IMU_ACC_SCALE_Z") && saved;
 	calibrationPhase = CAL_IDLE;
-	if (saved) print("✓加速度计六面校准完成，参数已写入并读回验证。放正机身后执行 ps 查看姿态。\n");
-	else print("⚠加速度计校准已应用于本次运行，但 NVS 保存未完全验证；重新运行 ca 并确认成功提示后再断电。\n");
+	if (saved) print("✓加速度计六面校准完成，参数已加入锁定后的 NVS 统一保存队列；等待保存完成后再断电。放正机身后执行 ps 查看姿态。\n");
+	else print("⚠加速度计校准已应用于本次运行，但参数未能加入 NVS 保存队列；重新运行 ca。\n");
 	return true;
 }
 

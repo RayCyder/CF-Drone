@@ -13,6 +13,10 @@ struct SystemLogEvent {
 void recordSystemLogEvent(const char *tag, const char *message);
 void initializeSystemLog();
 bool tryArmWithSystemLog();
+bool beginPersistentWriteBatch();
+bool systemLogPersistencePending();
+bool persistSystemLogInBatch();
+void finishPersistentWriteBatch(bool wroteAny);
 bool clearSystemLogHistory();
 uint32_t getSystemLogBootId();
 int copySystemLogEventsAfter(uint32_t sequence, SystemLogEvent *destination, int capacity);

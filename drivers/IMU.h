@@ -84,7 +84,11 @@ private:
 
 		float rate = getRate();
 		uint32_t frequency = 1000000;
-		uint64_t alarmValue = round(1000000 / rate);
+		// The software timer substitutes for an unwired DRDY pin. Make it wake
+		// slightly after the nominal sensor period so phase drift cannot make the
+		// loop poll a not-yet-ready sample and then wait through another full tick.
+		constexpr uint64_t IMU_TIMER_PHASE_MARGIN_US = 10;
+		uint64_t alarmValue = round(1000000 / rate) + IMU_TIMER_PHASE_MARGIN_US;
 
 		if (timer != NULL) {
 			timerEnd(timer);

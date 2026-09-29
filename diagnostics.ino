@@ -48,27 +48,139 @@ struct LoopStageMetrics {
     uint32_t budgetUs;
     uint32_t maximumUs = 0, pendingWorstUs = 0;
     uint64_t samples = 0, overBudget = 0;
+    LoopStageEma average;
 };
 static LoopStageMetrics loopStages[] = {
-    {"imu",1200}, {"imu_wait",1500}, {"imu_process",200}, {"rc_web",200},
-    {"estimate",200}, {"battery_adc",200}, {"control_law",200}, {"motor_out",150},
-    {"control",500}, {"serial_input",200},
-    {"mavlink",300}, {"flight_log",300}, {"param_sync",200}, {"led",100},
-    {"diagnostics",200}, {"wifi_service",300}, {"loop_gap",100},
-    {"maintenance",300}, {"whole_loop",1500}
+    {"imu",1200,0,0,0,0,{}}, {"imu_wait",1500,0,0,0,0,{}},
+    {"imu_process",200,0,0,0,0,{}}, {"rc_web",200,0,0,0,0,{}},
+    {"estimate",200,0,0,0,0,{}}, {"battery_adc",200,0,0,0,0,{}},
+    {"control_law",200,0,0,0,0,{}}, {"motor_out",150,0,0,0,0,{}},
+    {"control",500,0,0,0,0,{}}, {"serial_input",200,0,0,0,0,{}},
+    {"mavlink",300,0,0,0,0,{}}, {"flight_log",300,0,0,0,0,{}},
+    {"param_sync",200,0,0,0,0,{}}, {"led",100,0,0,0,0,{}},
+    {"diagnostics",200,0,0,0,0,{}}, {"wifi_service",300,0,0,0,0,{}},
+    {"loop_gap",100,0,0,0,0,{}}, {"maintenance",300,0,0,0,0,{}},
+    {"whole_loop",1500,0,0,0,0,{}}
 };
 static uint32_t lastStageReportMs = 0;
+static LoopOverrunTraceRing loopTrace;
+static portMUX_TYPE loopTraceMux = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t currentLoopTraceStages[LOOP_TRACE_STAGE_COUNT] = {};
+static uint32_t previousLoopBodyStages[LOOP_TRACE_STAGE_COUNT] = {};
+static uint32_t currentLoopSequence = 0;
+
+static int traceStageForLoopStage(LoopStageId stage) {
+    switch (stage) {
+    case LOOP_STAGE_IMU_WAIT: return LOOP_TRACE_IMU_WAIT;
+    case LOOP_STAGE_IMU_PROCESS: return LOOP_TRACE_IMU_PROCESS;
+    case LOOP_STAGE_RC_WEB: return LOOP_TRACE_RC_WEB;
+    case LOOP_STAGE_ESTIMATE: return LOOP_TRACE_ESTIMATE;
+    case LOOP_STAGE_BATTERY_ADC: return LOOP_TRACE_BATTERY_ADC;
+    case LOOP_STAGE_CONTROL_LAW: return LOOP_TRACE_CONTROL_LAW;
+    case LOOP_STAGE_MOTOR_OUT: return LOOP_TRACE_MOTOR_OUT;
+    case LOOP_STAGE_SERIAL_INPUT: return LOOP_TRACE_SERIAL_INPUT;
+    case LOOP_STAGE_MAVLINK: return LOOP_TRACE_MAVLINK;
+    case LOOP_STAGE_FLIGHT_LOG: return LOOP_TRACE_FLIGHT_LOG;
+    case LOOP_STAGE_PARAM_SYNC: return LOOP_TRACE_PARAM_SYNC;
+    case LOOP_STAGE_LED: return LOOP_TRACE_LED;
+    case LOOP_STAGE_DIAGNOSTICS: return LOOP_TRACE_DIAGNOSTICS;
+    case LOOP_STAGE_WIFI_SERVICE: return LOOP_TRACE_WIFI_SERVICE;
+    case LOOP_STAGE_LOOP_GAP: return LOOP_TRACE_LOOP_GAP;
+    default: return -1;
+    }
+}
+
+static const char *const loopTraceStageNames[LOOP_TRACE_STAGE_COUNT] = {
+    "imu_wait", "imu_process", "rc_web", "estimate", "battery_adc",
+    "control_law", "motor_out", "serial_input", "mavlink", "flight_log",
+    "param_sync", "led", "diagnostics", "wifi_service", "loop_gap", "unaccounted"
+};
 
 static_assert(sizeof(loopStages) / sizeof(loopStages[0]) == LOOP_STAGE_COUNT, "stage index/name table mismatch");
 void recordLoopStage(LoopStageId stage, uint32_t durationUs) {
     if (stage >= LOOP_STAGE_COUNT) return;
     auto &entry = loopStages[stage];
     ++entry.samples;
+    entry.average.update(durationUs);
     if (durationUs > entry.maximumUs) entry.maximumUs = durationUs;
     if (durationUs > entry.budgetUs) {
         ++entry.overBudget;
         if (durationUs > entry.pendingWorstUs) entry.pendingWorstUs = durationUs;
     }
+    const int traceStage = traceStageForLoopStage(stage);
+    if (traceStage >= 0) currentLoopTraceStages[traceStage] = durationUs;
+}
+
+void beginLoopTraceCycle() {
+    memset(currentLoopTraceStages, 0, sizeof(currentLoopTraceStages));
+}
+
+void finishLoopTraceCycle() {
+    // dt is sampled just after the next iteration's IMU read. Retain only the
+    // prior iteration's body here; that next sample combines it with the
+    // current gap and IMU read, matching the actual dt measurement interval.
+    for (uint8_t i = LOOP_TRACE_RC_WEB; i <= LOOP_TRACE_WIFI_SERVICE; ++i)
+        previousLoopBodyStages[i] = currentLoopTraceStages[i];
+}
+
+uint8_t getLoopTraceCount() {
+    portENTER_CRITICAL(&loopTraceMux);
+    const uint8_t result = loopTrace.count;
+    portEXIT_CRITICAL(&loopTraceMux);
+    return result;
+}
+
+uint32_t getLoopTraceOverwrittenCount() {
+    portENTER_CRITICAL(&loopTraceMux);
+    const uint32_t result = loopTrace.overwritten;
+    portEXIT_CRITICAL(&loopTraceMux);
+    return result;
+}
+
+uint32_t getLoopTraceOldestSequence() {
+    portENTER_CRITICAL(&loopTraceMux);
+    const uint32_t result = loopTrace.oldestSequence();
+    portEXIT_CRITICAL(&loopTraceMux);
+    return result;
+}
+
+uint32_t getLoopTraceNextSequence() {
+    portENTER_CRITICAL(&loopTraceMux);
+    const uint32_t result = loopTrace.nextSequence;
+    portEXIT_CRITICAL(&loopTraceMux);
+    return result;
+}
+
+void getLoopTraceRange(uint32_t &oldest, uint32_t &next, uint32_t &overwritten) {
+    portENTER_CRITICAL(&loopTraceMux);
+    oldest = loopTrace.oldestSequence();
+    next = loopTrace.nextSequence;
+    overwritten = loopTrace.overwritten;
+    portEXIT_CRITICAL(&loopTraceMux);
+}
+
+const char *getLoopTraceStageName(uint8_t stage) {
+    return stage < LOOP_TRACE_STAGE_COUNT ? loopTraceStageNames[stage] : "";
+}
+
+bool copyLoopTrace(uint32_t sequence, LoopOverrunTrace &destination) {
+    portENTER_CRITICAL(&loopTraceMux);
+    const bool copied = loopTrace.copy(sequence, destination);
+    portEXIT_CRITICAL(&loopTraceMux);
+    return copied;
+}
+
+void resetLoopTraceState() {
+    portENTER_CRITICAL(&loopTraceMux);
+    loopTrace.clear();
+    portEXIT_CRITICAL(&loopTraceMux);
+    memset(currentLoopTraceStages, 0, sizeof(currentLoopTraceStages));
+    memset(previousLoopBodyStages, 0, sizeof(previousLoopBodyStages));
+    currentLoopSequence = 0;
+}
+
+void setLoopTimingSequence(uint32_t loopSequence) {
+    currentLoopSequence = loopSequence;
 }
 
 static void reportLoopStages() {
@@ -145,6 +257,21 @@ void recordLoopTiming(float dt) {
         lastLoopOverrunMs = millis();
         haveLoopOverrun = true;
         setDiagnosticFault(DIAG_LOOP_OVERRUN, true);
+        LoopOverrunTrace trace;
+        trace.uptimeMs = millis();
+        trace.dtUs = us;
+        trace.loopSequence = currentLoopSequence;
+        trace.stageUs[LOOP_TRACE_IMU_WAIT] = currentLoopTraceStages[LOOP_TRACE_IMU_WAIT];
+        trace.stageUs[LOOP_TRACE_IMU_PROCESS] = currentLoopTraceStages[LOOP_TRACE_IMU_PROCESS];
+        for (uint8_t i = LOOP_TRACE_RC_WEB; i <= LOOP_TRACE_WIFI_SERVICE; ++i)
+            trace.stageUs[i] = previousLoopBodyStages[i];
+        trace.stageUs[LOOP_TRACE_LOOP_GAP] = currentLoopTraceStages[LOOP_TRACE_LOOP_GAP];
+        uint64_t attributedUs = 0;
+        for (uint8_t i = 0; i < LOOP_TRACE_UNACCOUNTED; ++i) attributedUs += trace.stageUs[i];
+        trace.stageUs[LOOP_TRACE_UNACCOUNTED] = attributedUs < us ? (uint32_t)(us - attributedUs) : 0;
+        portENTER_CRITICAL(&loopTraceMux);
+        loopTrace.push(trace);
+        portEXIT_CRITICAL(&loopTraceMux);
     }
 }
 
@@ -200,7 +327,12 @@ void clearDiagnosticHistory() {
 		state.activeDuration = 0;
 	}
     loopTiming = {};
-    for (auto &entry : loopStages) { entry.maximumUs = entry.pendingWorstUs = 0; entry.samples = entry.overBudget = 0; }
+    for (auto &entry : loopStages) {
+        entry.maximumUs = entry.pendingWorstUs = 0;
+        entry.samples = entry.overBudget = 0;
+        entry.average = {};
+    }
+    resetLoopTraceState();
     loopOverrunCount = 0;
 	worstLoopDt = 0;
 	print("诊断历史计数已清理；当前故障仍保留。\n");
@@ -225,11 +357,28 @@ void printDiagnostics() {
         (unsigned long long)loopTiming.samples, (unsigned long long)loopTiming.invalid,
         (unsigned long)loopTiming.maximumUs, (unsigned long long)loopTiming.over1000,
         (unsigned long long)loopTiming.over1500, (unsigned long long)loopTiming.missedSlots, p99Label);
-    for (const auto &entry : loopStages) {
-        print("LOOP_STAGE name=%s samples=%llu max_us=%lu budget_us=%lu over_budget=%llu\n",
-            entry.name, (unsigned long long)entry.samples, (unsigned long)entry.maximumUs,
-            (unsigned long)entry.budgetUs, (unsigned long long)entry.overBudget);
-    }
+	// Keep the interactive diagnostic command bounded: printing one line per
+	// stage on the control-loop task caused the probe itself to create overruns.
+	// Detailed per-overrun measurements remain available from trace.csv.
+	print("LOOP_EMA_US imu=%lu wait=%lu process=%lu rc=%lu est=%lu adc=%lu pid=%lu motor=%lu serial=%lu mav=%lu log=%lu param=%lu led=%lu diag=%lu wifi=%lu gap=%lu\n",
+		(unsigned long)loopStages[LOOP_STAGE_IMU].average.roundedUs(),
+		(unsigned long)loopStages[LOOP_STAGE_IMU_WAIT].average.roundedUs(),
+		(unsigned long)loopStages[LOOP_STAGE_IMU_PROCESS].average.roundedUs(),
+		(unsigned long)loopStages[LOOP_STAGE_RC_WEB].average.roundedUs(),
+		(unsigned long)loopStages[LOOP_STAGE_ESTIMATE].average.roundedUs(),
+		(unsigned long)loopStages[LOOP_STAGE_BATTERY_ADC].average.roundedUs(),
+		(unsigned long)loopStages[LOOP_STAGE_CONTROL_LAW].average.roundedUs(),
+		(unsigned long)loopStages[LOOP_STAGE_MOTOR_OUT].average.roundedUs(),
+		(unsigned long)loopStages[LOOP_STAGE_SERIAL_INPUT].average.roundedUs(),
+		(unsigned long)loopStages[LOOP_STAGE_MAVLINK].average.roundedUs(),
+		(unsigned long)loopStages[LOOP_STAGE_FLIGHT_LOG].average.roundedUs(),
+		(unsigned long)loopStages[LOOP_STAGE_PARAM_SYNC].average.roundedUs(),
+		(unsigned long)loopStages[LOOP_STAGE_LED].average.roundedUs(),
+		(unsigned long)loopStages[LOOP_STAGE_DIAGNOSTICS].average.roundedUs(),
+		(unsigned long)loopStages[LOOP_STAGE_WIFI_SERVICE].average.roundedUs(),
+		(unsigned long)loopStages[LOOP_STAGE_LOOP_GAP].average.roundedUs());
+	print("LOOP_TRACE count=%u overwritten=%lu capacity=%u csv=/diag/trace.csv\n",
+		(unsigned)getLoopTraceCount(), (unsigned long)getLoopTraceOverwrittenCount(), LOOP_TRACE_CAPACITY);
 	bool any = false;
 	print("故障诊断 active=0x%08lx loop_overruns=%lu worst_dt=%.4fs\n",
 		(unsigned long)getActiveDiagnosticFaults(), (unsigned long)loopOverrunCount, worstLoopDt);

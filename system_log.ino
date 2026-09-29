@@ -9,6 +9,7 @@
 #include <string.h>
 #include "system_log.h"
 #include "system_log_storage.h"
+#include "persistent_write_policy.h"
 
 static const char *STALL_TAG = "SLOW_LOOP";
 static const char *STALL_DIAG_PREFIX = "ACTIVE LOOP";
@@ -26,37 +27,20 @@ static portMUX_TYPE systemLogMux = portMUX_INITIALIZER_UNLOCKED;
 
 extern bool armed;
 extern bool motorTestActive;
+extern bool motorsActive();
+extern bool parameterPersistencePending();
+extern bool persistDirtyParametersInBatch();
 
-static void systemLogPersistenceTask(void *argument) {
+static void persistentWriteTask(void *argument) {
 	(void)argument;
 	for (;;) {
 		vTaskDelay(pdMS_TO_TICKS(1000));
-		PersistedSystemLog snapshot;
-		bool shouldPersist = false;
-		portENTER_CRITICAL(&systemLogMux);
-		const uint32_t now = millis();
-		if (storageReady && historyDirty && !armed && !motorTestActive && !persistenceBusy &&
-			!persistedWhileDisarmed && (int32_t)(now - persistenceRetryAfterMs) >= 0) {
-			persistenceBusy = true;
-			persistedWhileDisarmed = true;
-			historyDirty = false;
-			snapshot = history;
-			shouldPersist = true;
-		}
-		portEXIT_CRITICAL(&systemLogMux);
-		if (!shouldPersist) continue;
-
-		const size_t written = logStorage.putBytes("SYS_LOG", &snapshot, sizeof(snapshot));
-		portENTER_CRITICAL(&systemLogMux);
-		persistenceBusy = false;
-		if (written == sizeof(snapshot)) {
-			armBlockedUntilMs = millis() + 10000UL;
-		} else {
-			historyDirty = true;
-			persistedWhileDisarmed = false;
-			persistenceRetryAfterMs = millis() + 10000UL;
-		}
-		portEXIT_CRITICAL(&systemLogMux);
+		if (!systemLogPersistencePending() && !parameterPersistencePending()) continue;
+		if (!beginPersistentWriteBatch()) continue;
+		bool wroteAny = false;
+		if (systemLogPersistencePending()) wroteAny = persistSystemLogInBatch();
+		wroteAny = persistDirtyParametersInBatch() || wroteAny;
+		finishPersistentWriteBatch(wroteAny);
 	}
 }
 
@@ -85,10 +69,9 @@ void initializeSystemLog() {
 	if (history.nextSequence == 0) history.nextSequence = 1;
 	systemLogBootId = esp_random();
 	if (systemLogBootId == 0) systemLogBootId = 1;
-	if (storageReady && xTaskCreatePinnedToCore(systemLogPersistenceTask, "syslog_nvs", 4096,
+	if (xTaskCreatePinnedToCore(persistentWriteTask, "nvs_maintenance", 4096,
 		nullptr, 1, nullptr, 0) != pdPASS) {
-		storageReady = false;
-		Serial.println("SYSLOG_PERSIST state=DISABLED reason=task_create_failed");
+		Serial.println("NVS_MAINTENANCE state=DISABLED reason=task_create_failed");
 	}
 }
 
@@ -140,9 +123,57 @@ bool tryArmWithSystemLog() {
 	return allowed;
 }
 
+bool beginPersistentWriteBatch() {
+	portENTER_CRITICAL(&systemLogMux);
+	const bool allowed = persistentWritesAllowed(armed, motorsActive()) && !motorTestActive && !persistenceBusy;
+	if (allowed) persistenceBusy = true;
+	portEXIT_CRITICAL(&systemLogMux);
+	return allowed;
+}
+
+bool systemLogPersistencePending() {
+	portENTER_CRITICAL(&systemLogMux);
+	const bool pending = storageReady && historyDirty && !persistedWhileDisarmed &&
+		(int32_t)(millis() - persistenceRetryAfterMs) >= 0;
+	portEXIT_CRITICAL(&systemLogMux);
+	return pending;
+}
+
+bool persistSystemLogInBatch() {
+	PersistedSystemLog snapshot;
+	portENTER_CRITICAL(&systemLogMux);
+	const bool shouldPersist = persistenceBusy && storageReady && historyDirty && !persistedWhileDisarmed &&
+		(int32_t)(millis() - persistenceRetryAfterMs) >= 0;
+	if (shouldPersist) {
+		snapshot = history;
+		historyDirty = false;
+		persistedWhileDisarmed = true;
+	}
+	portEXIT_CRITICAL(&systemLogMux);
+	if (!shouldPersist) return false;
+
+	const size_t written = logStorage.putBytes("SYS_LOG", &snapshot, sizeof(snapshot));
+	if (written != sizeof(snapshot)) {
+		portENTER_CRITICAL(&systemLogMux);
+		historyDirty = true;
+		persistedWhileDisarmed = false;
+		persistenceRetryAfterMs = millis() + 10000UL;
+		portEXIT_CRITICAL(&systemLogMux);
+		return false;
+	}
+	return true;
+}
+
+void finishPersistentWriteBatch(bool wroteAny) {
+	portENTER_CRITICAL(&systemLogMux);
+	if (wroteAny) armBlockedUntilMs = millis() + 10000UL;
+	persistenceBusy = false;
+	portEXIT_CRITICAL(&systemLogMux);
+}
+
 bool clearSystemLogHistory() {
 	portENTER_CRITICAL(&systemLogMux);
-	if (armed || motorTestActive || persistenceBusy || !storageReady) {
+	if (!persistentWritesAllowed(armed, motorsActive()) || motorTestActive || persistenceBusy || !storageReady) {
 		portEXIT_CRITICAL(&systemLogMux);
 		return false;
 	}

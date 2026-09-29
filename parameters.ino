@@ -2,6 +2,7 @@
 // Parameters storage in flash memory
 
 #include <Preferences.h>
+#include "persistent_write_policy.h"
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +22,7 @@ extern int pwmFrequency, pwmResolution, pwmStop, pwmMin, pwmMax;
 extern float motThrMin;
 extern float motThrMax;
 extern bool armed;
+extern bool motorsActive();
 #if BOARD_WIFI_ENABLED
 extern int mavlinkSysId;
 extern Rate telemetrySlow, telemetryFast;
@@ -43,6 +45,7 @@ extern Vector levelGyroBias;             // Mahony 虚拟陀螺偏置，定义�
 Preferences storage;
 static bool parameterStorageReady = false;
 static uint16_t dirtyParameterCount = 0;
+static portMUX_TYPE parameterMux = portMUX_INITIALIZER_UNLOCKED;
 
 struct Parameter {
 	const char *name; // max length is 15 (Preferences key limit)
@@ -406,6 +409,7 @@ bool setParameter(const char *name, const float value) {
 	for (auto &parameter : parameters) {
 		if (strcasecmp(parameter.name, name) == 0) {
 			if (!validParameterValue(parameter.name, parameter.integer, value)) return false;
+			portENTER_CRITICAL(&parameterMux);
 			parameter.setValue(value);
 			const float current = parameter.getValue();
 			const bool dirty = current != parameter.cache &&
@@ -415,6 +419,7 @@ bool setParameter(const char *name, const float value) {
 				else if (dirtyParameterCount) --dirtyParameterCount;
 				parameter.dirty = dirty;
 			}
+			portEXIT_CRITICAL(&parameterMux);
 			if (parameter.callback) parameter.callback();
 			setDiagnosticFault(DIAG_PARAMETER, !allParametersValid());
 			return true;
@@ -424,50 +429,61 @@ bool setParameter(const char *name, const float value) {
 }
 
 void syncParameters() {
-	static Rate rate(1);
-	if (!rate) return; // sync once per second
-	if (armed || motorsActive() || !parameterStorageReady || !dirtyParameterCount) return;
+	// Runtime writes happen in persistentWriteTask on core 0. Parameter values
+	// are validated at load and at every update, so keep this loop-stage hook O(1).
+}
 
-	bool hasInvalidParameter = false;
+bool parameterPersistencePending() {
+	portENTER_CRITICAL(&parameterMux);
+	const bool pending = parameterStorageReady && dirtyParameterCount != 0;
+	portEXIT_CRITICAL(&parameterMux);
+	return pending;
+}
+
+bool persistDirtyParametersInBatch() {
+	if (!parameterStorageReady) return false;
+	bool wroteAny = false;
 	for (auto &parameter : parameters) {
-		if (!parameter.dirty) continue;
-		if (!validParameterValue(parameter.name, parameter.integer, parameter.getValue())) {
-			hasInvalidParameter = true;
-			continue;
-		}
-		const float value = parameter.getValue();
-		if (value == parameter.cache || (isnan(value) && isnan(parameter.cache))) {
+		float value, cached;
+		bool dirty;
+		portENTER_CRITICAL(&parameterMux);
+		value = parameter.getValue();
+		cached = parameter.cache;
+		dirty = parameter.dirty;
+		portEXIT_CRITICAL(&parameterMux);
+		if (!dirty || !validParameterValue(parameter.name, parameter.integer, value) ||
+			(value == cached || (isnan(value) && isnan(cached)))) continue;
+
+		const size_t written = storage.putFloat(parameter.name, value);
+		if (written != sizeof(float)) continue; // Keep dirty for the next locked batch.
+		wroteAny = true;
+		portENTER_CRITICAL(&parameterMux);
+		const float current = parameter.getValue();
+		if (parameter.dirty && current == value) {
+			parameter.cache = value;
 			parameter.dirty = false;
 			if (dirtyParameterCount) --dirtyParameterCount;
-			continue;
 		}
-		size_t written = storage.putFloat(parameter.name, value);
-		if (written != sizeof(float)) continue; // 写入失败时不更新cache，保留旧值，下一轮 1Hz 周期自动重试
-		parameter.cache = value;
-		parameter.dirty = false;
-		if (dirtyParameterCount) --dirtyParameterCount;
+		portEXIT_CRITICAL(&parameterMux);
 	}
-	if (hasInvalidParameter) {
-		if (!(getActiveDiagnosticFaults() & DIAG_PARAMETER)) reportInvalidParameters("runtime");
-		setDiagnosticFault(DIAG_PARAMETER, true);
-	} else {
-		setDiagnosticFault(DIAG_PARAMETER, !allParametersValid());
-	}
+	return wroteAny;
 }
 
 bool saveParameterNow(const char *name) {
-	if (!name || armed || motorsActive() || !parameterStorageReady) return false;
+	if (!name || !persistentWritesAllowed(armed, motorsActive()) || !parameterStorageReady) return false;
 	for (auto &parameter : parameters) {
 		if (strcasecmp(parameter.name, name) != 0) continue;
 		const float value = parameter.getValue();
 		if (!validParameterValue(parameter.name, parameter.integer, value)) return false;
-		const size_t written = storage.putFloat(parameter.name, value);
-		if (written != sizeof(float)) return false;
-		const float stored = storage.getFloat(parameter.name, NAN);
-		if (!isfinite(stored) || stored != value) return false;
-		parameter.cache = value;
-		if (parameter.dirty && dirtyParameterCount) --dirtyParameterCount;
-		parameter.dirty = false;
+		portENTER_CRITICAL(&parameterMux);
+		const bool dirty = value != parameter.cache && !(isnan(value) && isnan(parameter.cache));
+		if (dirty != parameter.dirty) {
+			if (dirty) ++dirtyParameterCount;
+			else if (dirtyParameterCount) --dirtyParameterCount;
+			parameter.dirty = dirty;
+		}
+		portEXIT_CRITICAL(&parameterMux);
+		// Queue calibration values for the next disarmed NVS maintenance batch.
 		return true;
 	}
 	return false;
@@ -480,8 +496,10 @@ void printParameters() {
 }
 
 void resetParameters() {
+	if (!persistentWritesAllowed(armed, motorsActive()) || !beginPersistentWriteBatch()) return;
 	// Reset only registered flight parameters. Wi-Fi credentials, migration
 	// metadata, and persistent system logs share this namespace and must survive.
 	for (auto &parameter : parameters) storage.remove(parameter.name);
+	finishPersistentWriteBatch(false); // ESP.restart() immediately follows; never allow a concurrent NVS batch.
 	ESP.restart();
 }

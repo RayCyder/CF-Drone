@@ -9,6 +9,7 @@
 #include "web_rc_html.h"
 #include "board_config.h"
 #include "diagnostics.h"
+#include "task_switch_trace_runtime.h"
 #include "system_log.h"
 #include "web_rc_input.h"
 #include "open_loop_sequence.h"
@@ -1040,9 +1041,10 @@ void setupWebRC() {
         if (isnan(vbat) || vbat < 0.0f) vbat = 0.0f;
         char json[448];
         snprintf(json, sizeof(json),
-            "{\"enabled\":%s,\"active\":%s,"
+            "{\"armed\":%s,\"enabled\":%s,\"active\":%s,"
             "\"voltage\":%.2f,"
             "\"throttle\":%.1f,\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,\"faults\":%lu}",
+            armed ? "true" : "false",
             enabled ? "true" : "false",
             (useWebRC && enabled) ? "true" : "false",
             vbat,
@@ -1064,6 +1066,102 @@ void setupWebRC() {
             (unsigned long)status.missedSamples,
             (unsigned long long)status.triggerUs);
         webRCServer.send(200, "application/json", json);
+    });
+
+    webRCServer.on("/diag/trace.csv", HTTP_GET, []() {
+        if (armed || motorsActive()) {
+            webRCServer.send(409, "text/plain", "motors active; disarm before downloading loop traces\n");
+            return;
+        }
+        uint32_t sequence, endSequence, overwritten;
+        getLoopTraceRange(sequence, endSequence, overwritten);
+        WiFiClient client = webRCServer.client();
+        client.setNoDelay(true);
+        client.setTimeout(100);
+        client.print("HTTP/1.1 200 OK\r\nContent-Type: text/csv; charset=utf-8\r\n");
+        client.print("Cache-Control: no-store\r\nConnection: close\r\n");
+        client.printf("X-Loop-Trace-Rows: %lu\r\nX-Loop-Trace-Overwritten: %lu\r\n",
+            (unsigned long)(endSequence - sequence), (unsigned long)overwritten);
+        client.print("Content-Disposition: attachment; filename=\"cf-drone-loop-trace.csv\"\r\n\r\n");
+        client.print("sequence,uptime_ms,dt_us,loop_sequence");
+        for (uint8_t i = 0; i < LOOP_TRACE_STAGE_COUNT; ++i) {
+            client.print(',');
+            client.print(getLoopTraceStageName(i));
+            client.print("_us");
+        }
+        client.print("\n");
+
+        for (uint32_t seq = sequence; seq < endSequence && client.connected(); ++seq) {
+            if (armed || motorsActive()) break;
+            LoopOverrunTrace trace;
+            if (!copyLoopTrace(seq, trace)) {
+                client.print("# trace changed during export; retry while disarmed\n");
+                break;
+            }
+            char line[256];
+            int used = snprintf(line, sizeof(line), "%lu,%lu,%lu,%lu",
+                (unsigned long)trace.sequence, (unsigned long)trace.uptimeMs,
+                (unsigned long)trace.dtUs, (unsigned long)trace.loopSequence);
+            for (uint8_t i = 0; i < LOOP_TRACE_STAGE_COUNT && used > 0 && used < (int)sizeof(line); ++i) {
+                const int added = snprintf(line + used, sizeof(line) - (size_t)used,
+                    ",%lu", (unsigned long)trace.stageUs[i]);
+                if (added < 0 || added >= (int)(sizeof(line) - (size_t)used)) { used = -1; break; }
+                used += added;
+            }
+            if (used <= 0 || used + 1 >= (int)sizeof(line)) break;
+            line[used++] = '\n';
+            if (client.write((const uint8_t *)line, used) != (size_t)used) break;
+            if ((seq & 0x03) == 0x03) vTaskDelay(pdMS_TO_TICKS(1));
+        }
+        client.stop();
+    });
+
+    webRCServer.on("/diag/scheduler.csv", HTTP_GET, []() {
+        if (armed || motorsActive()) {
+            webRCServer.send(409, "text/plain", "motors active; disarm before downloading scheduler trace\n");
+            return;
+        }
+        const uint8_t coreCount = taskSwitchTraceCoreCount();
+        if (!coreCount) {
+            webRCServer.send(404, "text/plain", "scheduler trace is available only in the diagnostic build\n");
+            return;
+        }
+        if (!freezeTaskSwitchTrace()) {
+            webRCServer.send(503, "text/plain", "scheduler trace snapshot busy; retry while disarmed\n");
+            return;
+        }
+        struct TraceResumeGuard {
+            ~TraceResumeGuard() { unfreezeTaskSwitchTrace(); }
+        } resumeGuard;
+
+        uint32_t oldest[2] = {}, next[2] = {}, overwritten[2] = {};
+        for (uint8_t core = 0; core < coreCount; ++core)
+            taskSwitchTraceRange(core, oldest[core], next[core], overwritten[core]);
+
+        WiFiClient client = webRCServer.client();
+        client.setNoDelay(true);
+        client.setTimeout(100);
+        client.print("HTTP/1.1 200 OK\r\nContent-Type: text/csv; charset=utf-8\r\n");
+        client.print("Cache-Control: no-store\r\nConnection: close\r\n");
+        client.printf("X-Task-Trace-Core0-Overwritten: %lu\r\nX-Task-Trace-Core1-Overwritten: %lu\r\n\r\n",
+            (unsigned long)overwritten[0], (unsigned long)overwritten[1]);
+        client.print("sequence,timestamp_us,loop_sequence,capture_id,task_handle,core,event,dropped_events\n");
+        for (uint8_t core = 0; core < coreCount && client.connected(); ++core) {
+            for (uint32_t sequence = oldest[core]; sequence < next[core] && client.connected(); ++sequence) {
+                TaskSwitchTraceEvent event;
+                if (!copyTaskSwitchTrace(core, sequence, event)) continue;
+                char line[128];
+                const int length = snprintf(line, sizeof(line), "%lu,%lu,%lu,%u,0x%08lx,%u,%u,%u\n",
+                    (unsigned long)event.sequence, (unsigned long)event.timestampUs,
+                    (unsigned long)event.loopSequence, (unsigned)event.captureId,
+                    (unsigned long)event.taskHandle, (unsigned)event.coreId,
+                    (unsigned)event.kind, (unsigned)event.droppedEvents);
+                if (length <= 0 || length >= (int)sizeof(line) ||
+                    client.write((const uint8_t *)line, (size_t)length) != (size_t)length) break;
+                if ((sequence & 0x0f) == 0x0f) vTaskDelay(pdMS_TO_TICKS(1));
+            }
+        }
+        client.stop();
     });
 
     webRCServer.on("/logs/resume", HTTP_POST, []() {

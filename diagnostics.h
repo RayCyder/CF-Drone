@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "loop_metrics.h"
 
 enum DiagnosticFault : uint32_t {
 	DIAG_IMU_INIT       = 1UL << 0,
@@ -22,6 +23,56 @@ void printDiagnostics();
 void clearDiagnosticHistory();
 void updateDiagnostics();
 void recordLoopTiming(float dt);
-enum LoopStageId : uint8_t { LOOP_STAGE_IMU, LOOP_STAGE_IMU_WAIT, LOOP_STAGE_IMU_PROCESS, LOOP_STAGE_RC_WEB, LOOP_STAGE_ESTIMATE, LOOP_STAGE_BATTERY_ADC, LOOP_STAGE_CONTROL_LAW, LOOP_STAGE_MOTOR_OUT, LOOP_STAGE_CONTROL, LOOP_STAGE_SERIAL_INPUT, LOOP_STAGE_MAVLINK, LOOP_STAGE_FLIGHT_LOG, LOOP_STAGE_PARAM_SYNC, LOOP_STAGE_LED, LOOP_STAGE_DIAGNOSTICS, LOOP_STAGE_WIFI_SERVICE, LOOP_STAGE_LOOP_GAP, LOOP_STAGE_MAINTENANCE, LOOP_STAGE_WHOLE_LOOP, LOOP_STAGE_COUNT };
+void setLoopTimingSequence(uint32_t loopSequence);
+enum LoopStageId : uint8_t {
+	LOOP_STAGE_IMU,
+	LOOP_STAGE_IMU_WAIT,
+	LOOP_STAGE_IMU_PROCESS,
+	LOOP_STAGE_RC_WEB,
+	LOOP_STAGE_ESTIMATE,
+	LOOP_STAGE_BATTERY_ADC,
+	LOOP_STAGE_CONTROL_LAW,
+	LOOP_STAGE_MOTOR_OUT,
+	LOOP_STAGE_CONTROL,
+	LOOP_STAGE_SERIAL_INPUT,
+	LOOP_STAGE_MAVLINK,
+	LOOP_STAGE_FLIGHT_LOG,
+	LOOP_STAGE_PARAM_SYNC,
+	LOOP_STAGE_LED,
+	LOOP_STAGE_DIAGNOSTICS,
+	LOOP_STAGE_WIFI_SERVICE,
+	LOOP_STAGE_LOOP_GAP,
+	LOOP_STAGE_MAINTENANCE,
+	LOOP_STAGE_WHOLE_LOOP,
+	LOOP_STAGE_COUNT
+};
+enum LoopTraceStageId : uint8_t {
+	LOOP_TRACE_IMU_WAIT,
+	LOOP_TRACE_IMU_PROCESS,
+	LOOP_TRACE_RC_WEB,
+	LOOP_TRACE_ESTIMATE,
+	LOOP_TRACE_BATTERY_ADC,
+	LOOP_TRACE_CONTROL_LAW,
+	LOOP_TRACE_MOTOR_OUT,
+	LOOP_TRACE_SERIAL_INPUT,
+	LOOP_TRACE_MAVLINK,
+	LOOP_TRACE_FLIGHT_LOG,
+	LOOP_TRACE_PARAM_SYNC,
+	LOOP_TRACE_LED,
+	LOOP_TRACE_DIAGNOSTICS,
+	LOOP_TRACE_WIFI_SERVICE,
+	LOOP_TRACE_LOOP_GAP,
+	LOOP_TRACE_UNACCOUNTED
+};
 void recordLoopStage(LoopStageId stage, uint32_t durationUs);
+void beginLoopTraceCycle();
+void finishLoopTraceCycle();
+uint8_t getLoopTraceCount();
+uint32_t getLoopTraceOverwrittenCount();
+uint32_t getLoopTraceOldestSequence();
+uint32_t getLoopTraceNextSequence();
+void getLoopTraceRange(uint32_t &oldest, uint32_t &next, uint32_t &overwritten);
+bool copyLoopTrace(uint32_t sequence, LoopOverrunTrace &destination);
+const char *getLoopTraceStageName(uint8_t stage);
+void resetLoopTraceState();
 void initializeDiagnostics();

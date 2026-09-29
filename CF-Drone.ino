@@ -7,6 +7,7 @@
 #include "util.h"
 #include "board_config.h"
 #include "diagnostics.h"
+#include "task_switch_trace_runtime.h"
 #include "control.h"
 #include "flight_log.h"
 #include "log_transfer.h"
@@ -57,6 +58,7 @@ static const char *resetReasonName(esp_reset_reason_t reason) {
 }
 
 void setup() {
+	initializeTaskSwitchTrace();
 	Serial.begin(115200); // 初始化串口，波特率115200
 	disableBrownOut(); // 禁用ESP32低压复位检测，防止电机启动瞬间电压跌落导致误复位
 	char bootEvent[112];
@@ -86,9 +88,15 @@ void setup() {
 	setLED(false); // 熄灭LED，提示初始化完成
 	print("程序初始化完成！\n");
 	print("================================\n");
+	enableTaskSwitchTrace();
 }
 
 void loop() {
+	static uint32_t loopSequence = 0;
+	const uint32_t currentLoopSequence = ++loopSequence;
+	setTaskSwitchTraceLoopSequence(currentLoopSequence);
+	setLoopTimingSequence(currentLoopSequence);
+	beginLoopTraceCycle();
 	const uint32_t loopStarted = micros();
 	static uint32_t previousLoopEnd = 0;
 	if (previousLoopEnd) recordLoopStage(LOOP_STAGE_LOOP_GAP, loopStarted - previousLoopEnd);
@@ -97,6 +105,8 @@ void loop() {
 	recordLoopStage(LOOP_STAGE_IMU, micros() - stageStarted);
 	step(); // 计算主循环步进时间 t 与时间差 dt，并统计循环频率
 	recordLoopTiming(dt);
+	// The rest of this iteration contributes to the next dt sample.
+	setTaskSwitchTraceLoopSequence(currentLoopSequence + 1);
 	stageStarted = micros();
 	readRC(); // 读取遥控接收机输入
 #if WEB_RC_ENABLED
@@ -137,7 +147,7 @@ void loop() {
 	logData(); // 记录飞行日志数据
 	recordLoopStage(LOOP_STAGE_FLIGHT_LOG, micros() - stageStarted);
 	stageStarted = micros();
-	syncParameters(); // 参数变更后延迟写入Flash，避免频繁擦写
+	syncParameters(); // 仅做轻量参数校验；NVS 刷写由低优先级维护任务统一执行
 	recordLoopStage(LOOP_STAGE_PARAM_SYNC, micros() - stageStarted);
 	stageStarted = micros();
 	updateLED(); // 根据当前飞行状态刷新LED指示效果
@@ -153,4 +163,5 @@ void loop() {
 	recordLoopStage(LOOP_STAGE_MAINTENANCE, micros() - groupStarted);
 	recordLoopStage(LOOP_STAGE_WHOLE_LOOP, micros() - loopStarted);
 	previousLoopEnd = micros();
+	finishLoopTraceCycle();
 }

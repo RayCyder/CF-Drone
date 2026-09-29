@@ -18,5 +18,15 @@ static void batch_tests(uint8_t sampleCount) {
 int main() {
 	batch_tests(8);
 	batch_tests(16);
+	BatteryAdcSchedule schedule;
+	assert(!schedule.due(499));
+	assert(schedule.due(500));
+	for (uint32_t i = 0; i < 16; ++i) {
+		const uint32_t now = 500 + i * BatteryAdcSchedule::SAMPLE_INTERVAL_MS;
+		assert(schedule.due(now));
+		schedule.sampled(now, i == 15);
+		if (i != 15) assert(!schedule.due(now + BatteryAdcSchedule::SAMPLE_INTERVAL_MS - 1));
+	}
+	assert(!schedule.due(1149) && schedule.due(1150));
 	puts("incremental battery ADC regression: PASS");
 }

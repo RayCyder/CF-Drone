@@ -75,8 +75,8 @@ bool ledAlertActive() {
 // 主循环调用：根据飞行状态驱动 LED
 void updateLED() {
 	if (!armed) {
-		if (batteryAlertActive() || getActiveDiagnosticFaults() != 0) {
-			setLED(micros() / BLINK_FAST_PERIOD % 2); // 解锁前低电：快闪
+		if (batteryAlertActive() || hasBlockingDiagnosticFault()) {
+			setLED(micros() / BLINK_FAST_PERIOD % 2); // 锁定时仅低电或阻止解锁的故障快闪
 		} else {
 			setLED(false); // 正常待机：常灭
 		}

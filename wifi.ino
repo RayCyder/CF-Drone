@@ -9,6 +9,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include "Preferences.h"
+#include "persistent_write_policy.h"
 #include "system_log.h"
 #include "flight_log.h"
 
@@ -234,17 +235,15 @@ void serviceWiFi() {
 	if (WiFi.isConnected()) {
 		if (!wifiWasConnected) {
 			wifiWasConnected = true;
-			print("WIFI_STATE state=CONNECTED ssid=%s ip=%s rssi=%d\n",
-				WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
-			String eventMessage = "state=CONNECTED ssid=" + WiFi.SSID() + " ip=" + WiFi.localIP().toString() +
-				" rssi=" + String(WiFi.RSSI());
-			recordSystemLogEvent("WIFI", eventMessage.c_str());
+			// Avoid String allocation and network-stack queries in the 1 kHz
+			// control loop. Detailed link information remains available via `wifi`.
+			recordSystemLogEvent("WIFI", "state=CONNECTED");
 			if (configPortalActive) {
 				wifiDnsServer.stop();
 				WiFi.softAPdisconnect(false);
 				WiFi.mode(WIFI_STA);
 				configPortalActive = false;
-				print("WIFI_CONFIG_AP state=CLOSED reason=station_connected\n");
+				recordSystemLogEvent("WIFI_CONFIG_AP", "state=CLOSED reason=station_connected");
 			}
 		}
 		return;
@@ -320,7 +319,8 @@ void printWiFiInfo() {
 bool configWiFi(bool ap, const char *ssid, const char *password) {
 	extern bool armed;
 	extern bool motorTestActive;
-	if (armed || motorTestActive) {
+	extern bool motorsActive();
+	if (!persistentWritesAllowed(armed, motorsActive()) || motorTestActive) {
 		recordSystemLogEvent("WIFI_SAVE", "result=FAIL reason=motors_active");
 		return false;
 	}
@@ -333,6 +333,7 @@ bool configWiFi(bool ap, const char *ssid, const char *password) {
 	const int requestedMode = ap ? W_AP : W_STA;
 	const size_t ssidLength = strlen(ssid);
 	const size_t passwordLength = strlen(password);
+	if (!beginPersistentWriteBatch()) return false;
 	const size_t ssidWritten = storage.putString(ssidKey, ssid);
 	const size_t passwordWritten = storage.putString(passwordKey, password);
 	const size_t modeWritten = storage.putFloat("WIFI_MODE", (float)requestedMode);
@@ -342,6 +343,7 @@ bool configWiFi(bool ap, const char *ssid, const char *password) {
 	const bool readbackOK = storage.getString(ssidKey, "__readback_failed__") == ssid &&
 		storage.getString(passwordKey, "__readback_failed__") == password &&
 		storage.getFloat("WIFI_MODE", -1.0f) == (float)requestedMode;
+	finishPersistentWriteBatch(writeResultsOK && readbackOK);
 	if (!writeResultsOK || !readbackOK) {
 		print("WIFI_CONFIG_SAVE result=FAIL ssid_write=%u password_write=%u mode_write=%u version=%u readback=%u\n",
 			(unsigned)ssidWritten, (unsigned)passwordWritten, (unsigned)modeWritten, versionOK ? 1 : 0, readbackOK ? 1 : 0);

@@ -1,6 +1,10 @@
 #include "Arduino.h"
 #include <cassert>
 #include <cstdio>
+using portMUX_TYPE = int;
+#define portMUX_INITIALIZER_UNLOCKED 0
+#define portENTER_CRITICAL(mux) ((void)(mux))
+#define portEXIT_CRITICAL(mux) ((void)(mux))
 #define WEB_RC_ENABLED 1
 #define WIFI_ENABLED 0
 #include "../vector.h"
@@ -150,5 +154,26 @@ int main(){
     assert(loopStages[LOOP_STAGE_CONTROL_LAW].overBudget==1000);
     nowMs=0; recordLoopTiming(.002f); nowMs=10001; updateDiagnostics();
     assert(!(getActiveDiagnosticFaults() & DIAG_LOOP_OVERRUN));
+
+    clearDiagnosticHistory();
+    beginLoopTraceCycle();
+    recordLoopStage(LOOP_STAGE_RC_WEB,120);
+    recordLoopStage(LOOP_STAGE_ESTIMATE,240);
+    finishLoopTraceCycle();
+    beginLoopTraceCycle();
+    recordLoopStage(LOOP_STAGE_LOOP_GAP,100);
+    recordLoopStage(LOOP_STAGE_IMU_WAIT,800);
+    recordLoopStage(LOOP_STAGE_IMU_PROCESS,100);
+    recordLoopTiming(.002f);
+    assert(getLoopTraceCount()==1);
+    LoopOverrunTrace trace;
+    assert(copyLoopTrace(getLoopTraceOldestSequence(),trace));
+    assert(trace.dtUs==2000);
+    assert(trace.stageUs[LOOP_TRACE_RC_WEB]==120);
+    assert(trace.stageUs[LOOP_TRACE_ESTIMATE]==240);
+    assert(trace.stageUs[LOOP_TRACE_LOOP_GAP]==100);
+    assert(trace.stageUs[LOOP_TRACE_IMU_WAIT]==800);
+    assert(trace.stageUs[LOOP_TRACE_IMU_PROCESS]==100);
+    assert(trace.stageUs[LOOP_TRACE_UNACCOUNTED]==640);
     puts("landing/control state regression: PASS");
 }

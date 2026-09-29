@@ -15,9 +15,9 @@
 #define BATTERY_FLYING_THRUST_MIN    0.15f  // 推力≥此值视为飞行中，L1不适用
 #define BATTERY_ACTION_DEBOUNCE_TIME  0.9f  // 低压连续判定防抖时间（秒）
 
-extern double t;
 float batteryVoltage = 0.0f;  // 全局最新电压，由 updateBatteryVoltage() 定期刷新
 static BatteryAdcAccumulator batteryAdcAccumulator;
+static BatteryAdcSchedule batteryAdcSchedule;
 
 bool batteryBlocksArming() {
 	return batteryVoltage > VBAT_ABSENT_THRESHOLD && batteryVoltage < VBAT_WARN_THRESHOLD;
@@ -29,12 +29,13 @@ bool batteryAlertActiveForFlight(bool flying) {
 }
 
 void updateBatteryVoltage() {
-	static double lastCheck = 0;
-	if (t - lastCheck < 0.5f) return;  // 每 0.5 秒启动一次分帧采样
+	const uint32_t nowMs = millis();
+	if (!batteryAdcSchedule.due(nowMs)) return;
 	float sampledVoltage = batteryVoltage;
-	if (batteryAdcAccumulator.add(analogReadMilliVolts(VBAT_ADC_PIN), VBAT_ADC_SAMPLES,
-			VBAT_DIVIDER, sampledVoltage)) {
+	const bool batchComplete = batteryAdcAccumulator.add(
+		analogReadMilliVolts(VBAT_ADC_PIN), VBAT_ADC_SAMPLES, VBAT_DIVIDER, sampledVoltage);
+	batteryAdcSchedule.sampled(nowMs, batchComplete);
+	if (batchComplete) {
 		batteryVoltage = sampledVoltage;
-		lastCheck = t;
 	}
 }
