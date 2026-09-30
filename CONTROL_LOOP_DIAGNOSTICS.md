@@ -85,6 +85,10 @@ This event is from the existing guarded NVS maintenance path: persistent writes 
 
 The new IMU-wait instrumentation was flashed and its CSV schema verified on the target. A second startup cache callback began during `RC_WEB`: its row had `dt_us=51,596`, `rc_web_us=50,672`, `imu_wait_us=90`, and `estimate_us=102`; the IPC callback lasted 50,585 us and again came from `nvs_maintenance`. The records are saved in [loop-overrun-nvs-rc-web-20261001.csv](data/attitude/loop-overrun-nvs-rc-web-20261001.csv), [task-switch-nvs-rc-web-20261001.csv](data/attitude/task-switch-nvs-rc-web-20261001.csv), and [flash-ipc-nvs-rc-web-20261001.csv](data/attitude/flash-ipc-nvs-rc-web-20261001.csv). That row's adjacent wait telemetry reports source 1 (software timer), one successful semaphore take, one ready sensor read lasting 71 us, and no timeout. Because this long callback occurred during the following loop-body stage, these IMU numbers describe the adjacent wait call; they do not classify the old 6,055-second IMU-wait event.
 
+### Long-run heartbeat check (2026-10-01)
+
+A read-only `diag` command was queued through `/console/cmd` at about 2,216 s uptime. Its response confirms the control loop was advancing (`loop_rate=990`, `dt=1.0 ms`, `samples=2,192,609`) with `armed=0`, 4.08 V, and no active faults. Cumulative diagnostics reported 23 periods over 1,500 us, 54 missed slots, and a maximum of 51,596 us; the maximum matches the already captured startup NVS callback. The trace ring held 20 rows with three overwritten, and its only row later than startup was adjacent to the diagnostic command: `dt_us=2,345`, `rc_web_us=1,218`, `imu_wait_us=166`, `estimate_us=207`, and `imu_read_max_us=125`. This short event is consistent with the queued command adding work in `RC_WEB`, so it is not treated as an undisturbed workload sample. The row is saved in [loop-overrun-runtime-diag-20261001.csv](data/attitude/loop-overrun-runtime-diag-20261001.csv). No 5 ms-class event has yet been identified at long uptime; this run has not reached the historical ~6,055-second point.
+
 ### Stage C — controlled localization and fix
 
 - Requirement IDs: STALL-5, STALL-6.
@@ -100,7 +104,7 @@ The new IMU-wait instrumentation was flashed and its CSV schema verified on the 
 ## Known gaps before claiming root cause
 
 - The representative 50.9 ms startup `ipc1`/`imu_wait` interval is now directly attributed to a 50.882 ms SPI flash cache callback from `nvs_maintenance`; it occurred while disarmed, and the existing persistence interlock blocks arming during and after the write.
-- The separate 50 ms-class `imu_wait` spikes seen around 6,055 seconds uptime are still unexplained and need a capture from that long-running condition.
+- The separate 50 ms-class `imu_wait` spikes seen around 6,055 seconds uptime are still unexplained and need a capture from that long-running condition. The current image was verified advancing at about 2,216 seconds uptime; the latest undisturbed trace rows show no additional 5 ms-class event, but this run has not reached the historical point.
 - The historical 6,055 s trace did not include scheduler or IMU notification/read markers. The diagnostic firmware now carries the IMU wait telemetry and its target CSV export has been verified, but the old event still needs to recur under the new image before its cause can be determined.
 - Scheduler switch-in hooks missed some flight-loop resumptions in earlier captures; a subsequent 50.9 ms device trace closed normally through the wrapped switch-in path. The loop-entry fallback remains host-tested but has not yet been isolated in a target capture where switch-in is intentionally missed.
 - This trace records task switches, not ISR entry/exit. A long ISR or long instruction path may appear as the flight task remaining current; if a representative IMU wait is not explained by scheduler events, add timer-ISR/semaphore timestamps or targeted markers around the wait path.
