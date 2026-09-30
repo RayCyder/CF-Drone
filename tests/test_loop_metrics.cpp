@@ -13,12 +13,19 @@ int main() {
     LoopOverrunTrace trace;
     for(uint32_t i=0;i<LOOP_TRACE_CAPACITY+3;++i) {
         trace.uptimeMs=1000+i; trace.dtUs=1501+i; trace.loopSequence=2000+i; trace.stageUs[2]=i*10;
+#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+        trace.imuWait.waitStartedUs=3000+i; trace.imuWait.interruptCount=i;
+        trace.imuWait.semaphoreTimeouts=i+1;
+#endif
         traceRing.push(trace);
     }
     assert(traceRing.count==LOOP_TRACE_CAPACITY && traceRing.overwritten==3);
     assert(traceRing.oldestSequence()==3 && traceRing.nextSequence==LOOP_TRACE_CAPACITY+3);
     assert(!traceRing.copy(2,trace));
     assert(traceRing.copy(3,trace) && trace.sequence==3 && trace.uptimeMs==1003 && trace.dtUs==1504 && trace.loopSequence==2003);
+#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+    assert(trace.imuWait.waitStartedUs==3003 && trace.imuWait.interruptCount==3 && trace.imuWait.semaphoreTimeouts==4);
+#endif
 
     LoopTimingMetrics m;
     assert(m.observe(0)==0 && m.observe(NAN)==0 && m.observe(INFINITY)==0);

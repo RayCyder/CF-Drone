@@ -66,6 +66,9 @@ enum LoopTraceStageId : uint8_t {
 	LOOP_TRACE_UNACCOUNTED
 };
 void recordLoopStage(LoopStageId stage, uint32_t durationUs);
+#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+void recordImuWaitTrace(const ImuWaitTrace &trace);
+#endif
 void beginLoopTraceCycle();
 void finishLoopTraceCycle();
 uint8_t getLoopTraceCount();

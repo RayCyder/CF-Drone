@@ -1,9 +1,14 @@
 #pragma once
 #include <stdint.h>
 #include <math.h>
+#include "imu_wait_trace.h"
 
 constexpr uint8_t LOOP_TRACE_STAGE_COUNT = 16;
+#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+constexpr uint8_t LOOP_TRACE_CAPACITY = 20;
+#else
 constexpr uint8_t LOOP_TRACE_CAPACITY = 32;
+#endif
 
 // Integer Q4 EMA keeps fractional-microsecond precision without floating point in
 // the 1 kHz loop. Alpha is 1/16 (lambda = 15/16).
@@ -37,6 +42,9 @@ struct LoopOverrunTrace {
     // motor output, serial input, MAVLink, flight log, parameter sync, LED,
     // diagnostics, Wi-Fi, loop gap, and unaccounted interval time.
     uint32_t stageUs[LOOP_TRACE_STAGE_COUNT] = {};
+#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+    ImuWaitTrace imuWait = {};
+#endif
 };
 
 struct LoopOverrunTraceRing {

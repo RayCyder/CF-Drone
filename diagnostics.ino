@@ -73,6 +73,9 @@ static portMUX_TYPE loopTraceMux = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t currentLoopTraceStages[LOOP_TRACE_STAGE_COUNT] = {};
 static uint32_t previousLoopBodyStages[LOOP_TRACE_STAGE_COUNT] = {};
 static uint32_t currentLoopSequence = 0;
+#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+static ImuWaitTrace currentImuWaitTrace = {};
+#endif
 
 static int traceStageForLoopStage(LoopStageId stage) {
     switch (stage) {
@@ -116,8 +119,17 @@ void recordLoopStage(LoopStageId stage, uint32_t durationUs) {
     if (traceStage >= 0) currentLoopTraceStages[traceStage] = durationUs;
 }
 
+#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+void recordImuWaitTrace(const ImuWaitTrace &trace) {
+    currentImuWaitTrace = trace;
+}
+#endif
+
 void beginLoopTraceCycle() {
     memset(currentLoopTraceStages, 0, sizeof(currentLoopTraceStages));
+#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+    currentImuWaitTrace = {};
+#endif
 }
 
 void finishLoopTraceCycle() {
@@ -270,6 +282,9 @@ void recordLoopTiming(float dt) {
         trace.uptimeMs = millis();
         trace.dtUs = us;
         trace.loopSequence = currentLoopSequence;
+#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+        trace.imuWait = currentImuWaitTrace;
+#endif
         trace.stageUs[LOOP_TRACE_IMU_WAIT] = currentLoopTraceStages[LOOP_TRACE_IMU_WAIT];
         trace.stageUs[LOOP_TRACE_IMU_PROCESS] = currentLoopTraceStages[LOOP_TRACE_IMU_PROCESS];
         for (uint8_t i = LOOP_TRACE_RC_WEB; i <= LOOP_TRACE_WIFI_SERVICE; ++i)

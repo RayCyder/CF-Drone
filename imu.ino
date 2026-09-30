@@ -85,7 +85,11 @@ void readIMU() {
 	if (!imuOK) return; // IMU 故障时跳过，gyro/acc 保持零值，主循环继续运行
 	static uint8_t consecutiveGoodFrames = 0;
 	const uint32_t waitStarted = micros();
-	if (!imu.waitForData(5)) {
+	const bool imuDataReady = imu.waitForData(5);
+#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+	recordImuWaitTrace(imu.lastWaitTrace());
+#endif
+	if (!imuDataReady) {
 		recordLoopStage(LOOP_STAGE_IMU_WAIT, micros() - waitStarted);
 		consecutiveGoodFrames = 0;
 		setDiagnosticFault(DIAG_IMU_TIMEOUT, true);

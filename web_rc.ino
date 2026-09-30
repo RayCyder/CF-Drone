@@ -1460,6 +1460,11 @@ void setupWebRC() {
             client.print(getLoopTraceStageName(i));
             client.print("_us");
         }
+#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+        client.print(",imu_wait_start_us,imu_wait_end_us,imu_irq_count_delta,imu_last_irq_us");
+        client.print(",imu_sem_takes,imu_sem_timeouts,imu_read_attempts,imu_read_ready");
+        client.print(",imu_read_total_us,imu_read_max_us,imu_interrupt_source,imu_wait_result");
+#endif
         client.print("\n");
 
         for (uint32_t seq = sequence; seq < endSequence && client.connected(); ++seq) {
@@ -1469,7 +1474,7 @@ void setupWebRC() {
                 client.print("# trace changed during export; retry while disarmed\n");
                 break;
             }
-            char line[256];
+            char line[384];
             int used = snprintf(line, sizeof(line), "%lu,%lu,%lu,%lu",
                 (unsigned long)trace.sequence, (unsigned long)trace.uptimeMs,
                 (unsigned long)trace.dtUs, (unsigned long)trace.loopSequence);
@@ -1479,6 +1484,27 @@ void setupWebRC() {
                 if (added < 0 || added >= (int)(sizeof(line) - (size_t)used)) { used = -1; break; }
                 used += added;
             }
+#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+            if (used > 0 && used < (int)sizeof(line)) {
+                const ImuWaitTrace &imuWait = trace.imuWait;
+                const int added = snprintf(line + used, sizeof(line) - (size_t)used,
+                    ",%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%u,%u",
+                    (unsigned long)imuWait.waitStartedUs,
+                    (unsigned long)imuWait.waitEndedUs,
+                    (unsigned long)imuWait.interruptCount,
+                    (unsigned long)imuWait.lastInterruptUs,
+                    (unsigned long)imuWait.semaphoreTakes,
+                    (unsigned long)imuWait.semaphoreTimeouts,
+                    (unsigned long)imuWait.readAttempts,
+                    (unsigned long)imuWait.readyReads,
+                    (unsigned long)imuWait.readTotalUs,
+                    (unsigned long)imuWait.readMaxUs,
+                    (unsigned)imuWait.interruptSource,
+                    (unsigned)imuWait.result);
+                if (added < 0 || added >= (int)(sizeof(line) - (size_t)used)) used = -1;
+                else used += added;
+            }
+#endif
             if (used <= 0 || used + 1 >= (int)sizeof(line)) break;
             line[used++] = '\n';
             if (client.write((const uint8_t *)line, used) != (size_t)used) break;
