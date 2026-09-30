@@ -105,6 +105,9 @@ void readIMU() {
 		setDiagnosticFault(DIAG_IMU_INVALID, true);
 		return;
 	}
+	// Keep the calibrated sensor-frame reading before online bias subtraction
+	// and body-axis rotation for optional, disarmed temperature diagnostics.
+	const Vector rawGyroSensor = gyro;
 	calibrationRawAcc = acc;
 	++calibrationRawAccSequence;
 	if (consecutiveGoodFrames < 100) ++consecutiveGoodFrames;
@@ -130,7 +133,8 @@ void readIMU() {
 	}
 	acc  = Quaternion::rotateVector(acc,  _imuRotQuat);
 	gyro = Quaternion::rotateVector(gyro, _imuRotQuat);
-	imuCapture.append(micros(), gyro.x, gyro.y, gyro.z, acc.x, acc.y, acc.z, imu.getTemp());
+	imuCapture.append(micros(), gyro.x, gyro.y, gyro.z, acc.x, acc.y, acc.z, imu.getTemp(),
+		rawGyroSensor.x, rawGyroSensor.y, rawGyroSensor.z);
 	recordLoopStage(LOOP_STAGE_IMU_PROCESS, micros() - processStarted);
 }
 

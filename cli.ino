@@ -18,9 +18,12 @@ static uint32_t serialLogGeneration = 0, serialLogRows = 0, serialLogRow = 0;
 static bool showMotd = true;
 static bool serialImuCaptureActive = false;
 static bool serialImuCaptureIncludeTemp = false;
+static bool serialImuCaptureIncludeRawGyro = false;
 static bool serialImuCaptureHeaderPending = false;
 static uint16_t serialImuCaptureRow = 0;
-static char serialImuCaptureLine[128];
+// The optional raw-temperature CSV header is 190 bytes; keep room for it plus
+// the longest formatted sample so both use the same bounded chunk exporter.
+static char serialImuCaptureLine[256];
 static size_t serialImuCaptureLineLength = 0;
 static size_t serialImuCaptureLineOffset = 0;
 static ConsoleOutputQueue serialConsoleOutputQueue;
@@ -96,7 +99,7 @@ const char* motd =
 "preset - 重置飞控参数（保留Wi-Fi凭据和系统日志）\n"
 "mfr, mfl, mrr, mrl - 测试马达 (马达不受算法影响运转，为了安全不要装桨叶！！！)\n"
 "ca - 六面校准加速度计\n"
-"imucap [start|stop|status|dump|dump-temp] - 采集/导出约1秒、1kHz机体坐标系IMU数据（仅上锁）\n"
+"imucap [start|raw-start|stop|status|dump|dump-temp|dump-raw-temp] - 采集/导出约1秒、1kHz IMU数据（仅上锁）\n"
 "ps - 显示pitch/roll/yaw姿态\n"
 "cr - 校准RC遥控器\n"
 "rc - 显示RC遥控数据\n"
@@ -242,30 +245,42 @@ void doCommand(String str, bool echo = false) {
 		printIMUCalibration();
 		print("landed: %d\n", landed);
 	} else if (command == "imucap") {
-		if (arg0 == "start") {
-			if (imuCapture.start(armed, motorsActive(), ESP.getFreeHeap())) print("IMU_CAPTURE state=running capacity=%u sample_period_us~1000\n", IMU_CAPTURE_CAPACITY);
-			else print("IMU_CAPTURE start rejected: require disarmed/stopped motors, >=48 KiB heap, and available memory\n");
+		if (arg0 == "start" || arg0 == "raw-start") {
+			const bool captureRawGyro = arg0 == "raw-start";
+			if (imuCapture.start(armed, motorsActive(), ESP.getFreeHeap(), captureRawGyro)) {
+				print("IMU_CAPTURE state=running capacity=%u sample_period_us~1000 raw_gyro=%u\n",
+					IMU_CAPTURE_CAPACITY, captureRawGyro ? 1 : 0);
+			} else {
+				const unsigned minimumHeapKiB = captureRawGyro
+					? (unsigned)(IMU_CAPTURE_RAW_MIN_FREE_HEAP / 1024)
+					: (unsigned)(IMU_CAPTURE_MIN_FREE_HEAP / 1024);
+				print("IMU_CAPTURE start rejected: require disarmed/stopped motors, >=%u KiB heap, and available memory\n",
+					minimumHeapKiB);
+			}
 		} else if (arg0 == "stop") {
 			imuCapture.stop();
 			print("IMU_CAPTURE state=%u rows=%u\n", (unsigned)imuCapture.state(), (unsigned)imuCapture.size());
 		} else if (arg0 == "status") {
 			print("IMU_CAPTURE state=%u rows=%u capacity=%u\n", (unsigned)imuCapture.state(),
 				(unsigned)imuCapture.size(), IMU_CAPTURE_CAPACITY);
-		} else if (arg0 == "dump" || arg0 == "dump-temp") {
+		} else if (arg0 == "dump" || arg0 == "dump-temp" || arg0 == "dump-raw-temp") {
 			if (armed || motorsActive() || imuCapture.state() == IMU_CAPTURE_RUNNING) {
 				print("IMU_CAPTURE dump rejected: stop capture and motors first\n");
+			} else if (arg0 == "dump-raw-temp" && !imuCapture.capturesRawGyro()) {
+				print("IMU_CAPTURE dump rejected: capture with 'imucap raw-start' first\n");
 			} else if (!imuCapture.size()) {
 				print("IMU_CAPTURE empty\n");
 			} else {
 				serialImuCaptureRow = 0;
-				serialImuCaptureIncludeTemp = arg0 == "dump-temp";
+				serialImuCaptureIncludeTemp = arg0 != "dump";
+				serialImuCaptureIncludeRawGyro = arg0 == "dump-raw-temp";
 				serialImuCaptureHeaderPending = true;
 				serialImuCaptureLineLength = 0;
 				serialImuCaptureLineOffset = 0;
 				serialImuCaptureActive = true;
 			}
 		} else {
-			print("usage: imucap start|stop|status|dump|dump-temp\n");
+			print("usage: imucap start|raw-start|stop|status|dump|dump-temp|dump-raw-temp\n");
 		}
 	} else if (command == "arm") {
 		if (!requestArm()) print("系统未满足解锁条件，请检查油门、电池、IMU、故障和电机测试状态。\n");
@@ -492,7 +507,9 @@ void serviceImuCaptureExport() {
 		const bool consoleOutputPending = serialConsoleOutputQueue.available() > 0;
 		portEXIT_CRITICAL(&serialConsoleOutputMux);
 		if (consoleOutputPending) return;
-		const char *header = serialImuCaptureIncludeTemp
+		const char *header = serialImuCaptureIncludeRawGyro
+			? "time_us,gyro_x_rad_s,gyro_y_rad_s,gyro_z_rad_s,acc_x_m_s2,acc_y_m_s2,acc_z_m_s2,temperature_c,gyro_sensor_uncorrected_x_rad_s,gyro_sensor_uncorrected_y_rad_s,gyro_sensor_uncorrected_z_rad_s\n"
+			: serialImuCaptureIncludeTemp
 			? "time_us,gyro_x_rad_s,gyro_y_rad_s,gyro_z_rad_s,acc_x_m_s2,acc_y_m_s2,acc_z_m_s2,temperature_c\n"
 			: "time_us,gyro_x_rad_s,gyro_y_rad_s,gyro_z_rad_s,acc_x_m_s2,acc_y_m_s2,acc_z_m_s2\n";
 		serialImuCaptureLineLength = strlen(header);
@@ -512,25 +529,46 @@ void serviceImuCaptureExport() {
 			serialImuCaptureActive = false;
 			return;
 		}
-		const char *format = serialImuCaptureIncludeTemp
-			? "%lu,%.6f,%.6f,%.6f,%.2f,%.2f,%.2f,%.2f\n"
-			: "%lu,%.6f,%.6f,%.6f,%.2f,%.2f,%.2f\n";
-		const int length = serialImuCaptureIncludeTemp ? snprintf(serialImuCaptureLine, sizeof(serialImuCaptureLine), format,
-			(unsigned long)sample.timeUs,
-			sample.gyroMicroRadPerSec[0] * 1.0e-6f,
-			sample.gyroMicroRadPerSec[1] * 1.0e-6f,
-			sample.gyroMicroRadPerSec[2] * 1.0e-6f,
-			sample.accCentiMetersPerSec2[0] * 0.01f,
-			sample.accCentiMetersPerSec2[1] * 0.01f,
-			sample.accCentiMetersPerSec2[2] * 0.01f,
-			sample.temperatureCentiC * 0.01f) : snprintf(serialImuCaptureLine, sizeof(serialImuCaptureLine), format,
-			(unsigned long)sample.timeUs,
-			sample.gyroMicroRadPerSec[0] * 1.0e-6f,
-			sample.gyroMicroRadPerSec[1] * 1.0e-6f,
-			sample.gyroMicroRadPerSec[2] * 1.0e-6f,
-			sample.accCentiMetersPerSec2[0] * 0.01f,
-			sample.accCentiMetersPerSec2[1] * 0.01f,
-			sample.accCentiMetersPerSec2[2] * 0.01f);
+		int length;
+		if (serialImuCaptureIncludeRawGyro) {
+			int32_t rawGyro[3];
+			if (!imuCapture.copyRawGyro(serialImuCaptureRow, rawGyro)) {
+				serialImuCaptureActive = false;
+				return;
+			}
+			length = snprintf(serialImuCaptureLine, sizeof(serialImuCaptureLine),
+				"%lu,%.6f,%.6f,%.6f,%.2f,%.2f,%.2f,%.2f,%.6f,%.6f,%.6f\n",
+				(unsigned long)sample.timeUs,
+				sample.gyroMicroRadPerSec[0] * 1.0e-6f,
+				sample.gyroMicroRadPerSec[1] * 1.0e-6f,
+				sample.gyroMicroRadPerSec[2] * 1.0e-6f,
+				sample.accCentiMetersPerSec2[0] * 0.01f,
+				sample.accCentiMetersPerSec2[1] * 0.01f,
+				sample.accCentiMetersPerSec2[2] * 0.01f,
+				sample.temperatureCentiC * 0.01f,
+				rawGyro[0] * 1.0e-6f, rawGyro[1] * 1.0e-6f, rawGyro[2] * 1.0e-6f);
+		} else if (serialImuCaptureIncludeTemp) {
+			length = snprintf(serialImuCaptureLine, sizeof(serialImuCaptureLine),
+				"%lu,%.6f,%.6f,%.6f,%.2f,%.2f,%.2f,%.2f\n",
+				(unsigned long)sample.timeUs,
+				sample.gyroMicroRadPerSec[0] * 1.0e-6f,
+				sample.gyroMicroRadPerSec[1] * 1.0e-6f,
+				sample.gyroMicroRadPerSec[2] * 1.0e-6f,
+				sample.accCentiMetersPerSec2[0] * 0.01f,
+				sample.accCentiMetersPerSec2[1] * 0.01f,
+				sample.accCentiMetersPerSec2[2] * 0.01f,
+				sample.temperatureCentiC * 0.01f);
+		} else {
+			length = snprintf(serialImuCaptureLine, sizeof(serialImuCaptureLine),
+				"%lu,%.6f,%.6f,%.6f,%.2f,%.2f,%.2f\n",
+				(unsigned long)sample.timeUs,
+				sample.gyroMicroRadPerSec[0] * 1.0e-6f,
+				sample.gyroMicroRadPerSec[1] * 1.0e-6f,
+				sample.gyroMicroRadPerSec[2] * 1.0e-6f,
+				sample.accCentiMetersPerSec2[0] * 0.01f,
+				sample.accCentiMetersPerSec2[1] * 0.01f,
+				sample.accCentiMetersPerSec2[2] * 0.01f);
+		}
 		if (length <= 0 || length >= (int)sizeof(serialImuCaptureLine)) {
 			serialImuCaptureActive = false;
 			return;
