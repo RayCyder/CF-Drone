@@ -4,6 +4,7 @@ ESP32无人机飞控固件
 
 * [Web API 接口文档](docs/web-api.md)
 * [ESP32-D 实时隔离与分区方案](ESP32D_REALTIME_ISOLATION.md)
+* [ESP32-D 分区与实时隔离验收试验](ESP32D_ACCEPTANCE_TEST_PLAN.md)
 
 ## 六轴 IMU 修复验收（2026-09-28）
 
