@@ -6,16 +6,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
-static constexpr uint8_t TASK_TRACE_CORE_COUNT = 2;
-#else
 static constexpr uint8_t TASK_TRACE_CORE_COUNT = 1;
-#endif
 
-static TaskSwitchTraceRecorder taskSwitchTrace[TASK_TRACE_CORE_COUNT];
+static TaskSwitchTraceRecorder taskSwitchTrace;
 static uint32_t loopTaskHandleValue = 0;
+static uint8_t loopTaskCore = 0;
 static volatile uint32_t taskTraceEnabled = 0;
-static volatile uint32_t taskTraceWriters[TASK_TRACE_CORE_COUNT] = {};
+static volatile uint32_t taskTraceWriters = 0;
 
 static uint32_t currentTaskHandleValue() {
     return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(xTaskGetCurrentTaskHandle()));
@@ -23,8 +20,8 @@ static uint32_t currentTaskHandleValue() {
 
 void initializeTaskSwitchTrace() {
     loopTaskHandleValue = currentTaskHandleValue();
-    for (uint8_t core = 0; core < TASK_TRACE_CORE_COUNT; ++core)
-        taskSwitchTrace[core].setFlightTaskHandle(loopTaskHandleValue);
+    loopTaskCore = static_cast<uint8_t>(xPortGetCoreID());
+    taskSwitchTrace.setFlightTaskHandle(loopTaskHandleValue);
 }
 
 void enableTaskSwitchTrace() {
@@ -33,8 +30,8 @@ void enableTaskSwitchTrace() {
 
 void setTaskSwitchTraceLoopSequence(uint32_t loopSequence) {
     const BaseType_t core = xPortGetCoreID();
-    if (core >= 0 && core < TASK_TRACE_CORE_COUNT)
-        taskSwitchTrace[core].setLoopSequence(loopSequence);
+    if (core >= 0 && core == loopTaskCore)
+        taskSwitchTrace.setLoopSequence(loopSequence);
 }
 
 bool freezeTaskSwitchTrace() {
@@ -42,8 +39,7 @@ bool freezeTaskSwitchTrace() {
     const uint32_t startedMs = millis();
     for (;;) {
         bool active = false;
-        for (uint8_t core = 0; core < TASK_TRACE_CORE_COUNT; ++core)
-            active = active || (__atomic_load_n(&taskTraceWriters[core], __ATOMIC_ACQUIRE) != 0);
+        active = __atomic_load_n(&taskTraceWriters, __ATOMIC_ACQUIRE) != 0;
         if (!active) return true;
         if ((uint32_t)(millis() - startedMs) >= 100) {
             __atomic_store_n(&taskTraceEnabled, 1, __ATOMIC_RELEASE);
@@ -62,7 +58,7 @@ uint8_t taskSwitchTraceCoreCount() { return TASK_TRACE_CORE_COUNT; }
 void taskSwitchTraceRange(uint8_t coreId, uint32_t &oldest, uint32_t &next,
                           uint32_t &overwritten) {
     if (coreId >= TASK_TRACE_CORE_COUNT) { oldest = next = overwritten = 0; return; }
-    const TaskSwitchTraceRecorder &trace = taskSwitchTrace[coreId];
+    const TaskSwitchTraceRecorder &trace = taskSwitchTrace;
     oldest = trace.oldestSequence();
     next = trace.nextSequence();
     overwritten = trace.overwritten();
@@ -70,7 +66,7 @@ void taskSwitchTraceRange(uint8_t coreId, uint32_t &oldest, uint32_t &next,
 
 bool copyTaskSwitchTrace(uint8_t coreId, uint32_t sequence,
                          TaskSwitchTraceEvent &destination) {
-    return coreId < TASK_TRACE_CORE_COUNT && taskSwitchTrace[coreId].copy(sequence, destination);
+    return coreId < TASK_TRACE_CORE_COUNT && taskSwitchTrace.copy(sequence, destination);
 }
 
 extern "C" void __real_vTaskSwitchContext(void);
@@ -81,23 +77,23 @@ extern "C" void __wrap_vTaskSwitchContext(void) {
         return;
     }
     const BaseType_t coreValue = xPortGetCoreID();
-    if (coreValue < 0 || coreValue >= TASK_TRACE_CORE_COUNT) {
+    if (coreValue < 0 || coreValue != loopTaskCore) {
         __real_vTaskSwitchContext();
         return;
     }
     const uint8_t core = static_cast<uint8_t>(coreValue);
-    __atomic_add_fetch(&taskTraceWriters[core], 1, __ATOMIC_ACQUIRE);
+    __atomic_add_fetch(&taskTraceWriters, 1, __ATOMIC_ACQUIRE);
     if (__atomic_load_n(&taskTraceEnabled, __ATOMIC_ACQUIRE)) {
         const uint32_t timestampUs = static_cast<uint32_t>(esp_timer_get_time());
         const uint32_t outgoing = currentTaskHandleValue();
-        taskSwitchTrace[core].switchedOut(timestampUs, outgoing, core);
+        taskSwitchTrace.switchedOut(timestampUs, outgoing, core);
         __real_vTaskSwitchContext();
         const uint32_t incoming = currentTaskHandleValue();
-        taskSwitchTrace[core].switchedIn(timestampUs, incoming, core);
+        taskSwitchTrace.switchedIn(timestampUs, incoming, core);
     } else {
         __real_vTaskSwitchContext();
     }
-    __atomic_sub_fetch(&taskTraceWriters[core], 1, __ATOMIC_RELEASE);
+    __atomic_sub_fetch(&taskTraceWriters, 1, __ATOMIC_RELEASE);
 }
 
 #else

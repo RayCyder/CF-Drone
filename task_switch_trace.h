@@ -4,8 +4,15 @@
 
 // Compact, host-testable recorder for FreeRTOS task-switch hooks.
 // Hooks pass raw 32-bit ESP32 task handles; this class calls no FreeRTOS APIs.
+#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+// The flight-loop diagnostic build records only its execution core and uses a
+// smaller ring so the instrumentation still fits the ESP32 internal DRAM.
+constexpr uint8_t TASK_SWITCH_TRACE_CAPACITY = 20;
+constexpr uint8_t TASK_SWITCH_PENDING_CAPACITY = 16;
+#else
 constexpr uint8_t TASK_SWITCH_TRACE_CAPACITY = 64;
 constexpr uint8_t TASK_SWITCH_PENDING_CAPACITY = 24;
+#endif
 constexpr uint32_t TASK_SWITCH_TRACE_MIN_US = 1500;
 
 enum TaskSwitchTraceKind : uint8_t {

@@ -5,7 +5,11 @@
 
 class ConsoleOutputQueue {
 public:
+	#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+	static constexpr size_t CAPACITY = 1024;
+	#else
 	static constexpr size_t CAPACITY = 1536;
+	#endif
 
 	size_t push(const char *data, size_t length) {
 		size_t accepted = 0;

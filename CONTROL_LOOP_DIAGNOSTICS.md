@@ -1,7 +1,7 @@
 # Control-loop stall localization
 
-Status: diagnostic implementation and host tests complete; device-level overhead and capture acceptance pending.
-Updated: 2026-09-29
+Status: diagnostic build now fits target; device-level capture and overhead acceptance pending.
+Updated: 2026-10-01
 
 ## Goal and scope
 
@@ -33,7 +33,7 @@ The firmware uses accelerometer and gyroscope inputs only. No GPS, barometer, or
 1. At each loop entry, increment a 32-bit loop sequence. Keep the current sequence and existing stage timestamps in RAM.
 2. Set the active `loopSequence` before the IMU read and advance it consistently with the `dt` sample; update the active sequence after `step()` so later task switches are associated with the next `dt` interval. A FreeRTOS switch-out hook starts a pending capture only when the outgoing task is the flight-loop task. A switch-in hook appends the running task handle while that capture is active. Switching back to the flight-loop task closes the capture. Each published event carries this loop sequence so it joins the existing `dt` row directly, including the one-loop stage alignment already used by the current trace.
 3. Keep the pending capture private until it closes. Publish it only when elapsed time is at least 1,500 us. This avoids writing to the public history for the frequent short `waitForData()` handoffs. Timestamp differences use unsigned 32-bit subtraction and are valid across timer wrap for captures shorter than 2^32 us.
-4. Store events in `TaskSwitchTraceRecorder`: 64 public events and 24 pending events, no heap. Each event has timestamp, loop sequence, raw task handle, core, kind, capture ID, dropped-event count, and ring sequence (24 bytes on ESP32; about 2.1 KiB per core including pending entries). `task_switch_trace.h` provides the tested recorder. A per-core instance is required; hooks never mutate a shared recorder concurrently from both cores.
+4. Store events in `TaskSwitchTraceRecorder`: production diagnostic-disabled constants remain 64 public events and 24 pending events. The memory-constrained task-trace build records only the flight-loop core and uses 20 public events plus 16 pending events, enough to publish one full pending capture plus an overflow marker. Each event has timestamp, loop sequence, raw task handle, core, kind, capture ID, dropped-event count, and ring sequence (24 bytes on ESP32). No heap is used. Hooks on the other core immediately chain to the real scheduler without touching the recorder.
 5. The current implementation records raw 32-bit task handles; `sys` output maps those handles to names outside the hook. A future compact-ID table can replace raw handles if task creation churn or CSV size becomes a problem. The hook must not query task names, format strings, acquire application locks, or call logging/network/NVS APIs. If more than 24 events occur during one captured pause, publish an overflow marker with the omitted-event count.
 6. IMU timer ISR timestamps and semaphore give/take/timeout counters are not yet connected. Add them only if the scheduler trace implicates the IMU wakeup path or leaves the delay unexplained. Keep ISR work to timestamp/counter updates only; do not format or print from an ISR.
 7. Export the trace only while disarmed at `/diag/scheduler.csv`, guarded like `/diag/trace.csv`. Include recorder sequence, capture ID, loop sequence, timestamp, raw task handle, core, event kind, and overwrite/overflow counters. The endpoint disables recording, waits for in-flight hooks to finish, copies the stable ring, and re-enables recording on every exit path. Match handles to task names with the `sys` CLI output, which now includes each task handle.
@@ -60,7 +60,7 @@ The firmware uses accelerometer and gyroscope inputs only. No GPS, barometer, or
 
 - Requirement IDs: STALL-1, STALL-4, STALL-5.
 - The Arduino package links a precompiled `libfreertos.a`, so sketch-defined FreeRTOS trace macros cannot instrument its context-switch path. The project-owned diagnostic build instead uses GNU ld `--wrap=vTaskSwitchContext`, which the current ESP32 port calls from `portasm.S`; `tools/build_task_trace.sh` applies the wrapper only to the diagnostic build. The normal build has no scheduler wrapper.
-- The wrapper records outgoing/incoming task handles around the real scheduler switch, into independent per-core recorders. It uses one timestamp per switch, fixed memory, no formatting, sockets, heap, or flash operations. The web endpoint freezes recording and waits for in-flight wrappers before reading the rings. The endpoint currently emits CSV directly; it has no separate host formatter test yet.
+- The wrapper records outgoing/incoming task handles around the real scheduler switch on the flight-loop core only. The diagnostic build keeps the recorder ring and console queue smaller to fit internal DRAM; default builds retain their original recorder and output queue sizes. It uses one timestamp per switch, fixed memory, no formatting, sockets, heap, or flash operations in the hook. The web endpoint freezes recording and waits for in-flight wrappers before reading the ring. The endpoint currently emits CSV directly; it has no separate host formatter test yet.
 - Acceptance: diagnostic target compiles; a hardware trace must show loop task switch-out/in and known handles; `sys` maps handles to task names. Confirm tracing overhead and no extra >1.5 ms intervals before using the data to attribute a flight issue.
 
 Build the diagnostic image with `tools/build_task_trace.sh esp32:esp32:esp32`. After installing that image, keep the aircraft disarmed and download `http://<device-address>/diag/scheduler.csv`; match its `task_handle` values to the `Handle` column printed by the `sys` console command. The regular Arduino build does not include the scheduler wrapper. This implementation compiles the diagnostic image but does not flash it.
@@ -79,7 +79,7 @@ Build the diagnostic image with `tools/build_task_trace.sh esp32:esp32:esp32`. A
 
 ## Known gaps before claiming root cause
 
-- Firmware is not flashed to the device in this change. The diagnostic build has not yet been run on hardware, so hook behavior, raw task-handle mapping, and measured overhead remain unverified.
+- Firmware is not yet flashed to the device. The diagnostic target now compiles within the ESP32-D partition/DRAM budget, but hook behavior, raw task-handle mapping, and measured overhead remain unverified.
 - This trace records task switches, not ISR entry/exit. A long ISR or long instruction path may appear as the flight task remaining current; if the switch trace does not explain a gap, add temporary SystemView/ISR or nested function markers before assigning a cause.
 - Existing live evidence does not establish which task/ISR accounts for the recurring 50 ms delay.
 - Unit tests and target compilation cannot prove instrumentation overhead or flight behavior; target-only disarmed tests remain mandatory.
