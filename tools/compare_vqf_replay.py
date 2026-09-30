@@ -21,11 +21,12 @@ DEFAULT_CAPTURES = (
 )
 
 
-def compile_driver(compiler: str, output: Path, vqf: bool, tau_acc: float = 3.0) -> None:
+def compile_driver(compiler: str, output: Path, vqf: bool, tau_acc: float = 3.0,
+                  estimator_source: Path | None = None) -> None:
     command = [
         compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-Wno-vla",
         "-I", str(ROOT / "tests/stubs"), "-I", str(ROOT),
-        f'-DESTIMATOR_SOURCE="{ROOT / "estimate.ino"}"',
+        f'-DESTIMATOR_SOURCE="{estimator_source or ROOT / "estimate.ino"}"',
     ]
     if vqf:
         command.extend(("-DATTITUDE_ESTIMATOR_VQF=1", "-DVQF_SINGLE_PRECISION",
@@ -82,6 +83,8 @@ def main() -> int:
                         help="motor-start transient to exclude (default: 100 ms)")
     parser.add_argument("--tau-acc", type=float, action="append", dest="tau_acc_values",
                         help="VQF acceleration correction time constant in seconds; repeat to compare values (default: 3.0)")
+    parser.add_argument("--min-confidence", type=float, action="append", dest="confidence_thresholds",
+                        help="minimum accelerometer confidence required for a VQF update; repeat to compare values (default: 0.0)")
     args = parser.parse_args()
     if not math.isfinite(args.acc_weight) or not 0.0 <= args.acc_weight <= 1.0:
         parser.error("--acc-weight must be finite and in [0, 1]")
@@ -99,24 +102,39 @@ def main() -> int:
     tau_acc_values = args.tau_acc_values or [3.0]
     if any(not math.isfinite(value) or value <= 0.0 for value in tau_acc_values):
         parser.error("--tau-acc values must be finite and greater than zero")
+    confidence_thresholds = args.confidence_thresholds or [0.0]
+    if any(not math.isfinite(value) or not 0.0 <= value < 1.0 for value in confidence_thresholds):
+        parser.error("--min-confidence values must be finite and in [0, 1)")
 
     with tempfile.TemporaryDirectory(prefix="cf-drone-vqf-replay-") as directory:
-        current_bin = Path(directory) / "current-estimator"
+        temp_path = Path(directory)
+        current_bin = temp_path / "current-estimator"
         compile_driver(compiler, current_bin, vqf=False)
         vqf_bins = []
-        for index, tau_acc in enumerate(tau_acc_values):
-            vqf_bin = Path(directory) / f"vqf-single-precision-{index}"
-            compile_driver(compiler, vqf_bin, vqf=True, tau_acc=tau_acc)
-            vqf_bins.append((tau_acc, vqf_bin))
+        base_estimator = (ROOT / "estimate.ino").read_text(encoding="utf-8")
+        gate_expression = "landed || correctionConfidence > 0.0f"
+        if base_estimator.count(gate_expression) != 1:
+            raise RuntimeError("could not uniquely locate the VQF confidence gate")
+        for gate_index, threshold in enumerate(confidence_thresholds):
+            estimator_source = ROOT / "estimate.ino"
+            if threshold > 0.0:
+                estimator_source = temp_path / f"estimate-confidence-{gate_index}.ino"
+                estimator_source.write_text(base_estimator.replace(
+                    gate_expression, f"landed || correctionConfidence > {threshold:.9g}f"), encoding="utf-8")
+            for tau_index, tau_acc in enumerate(tau_acc_values):
+                vqf_bin = temp_path / f"vqf-single-precision-{gate_index}-{tau_index}"
+                compile_driver(compiler, vqf_bin, vqf=True, tau_acc=tau_acc,
+                               estimator_source=estimator_source)
+                vqf_bins.append((tau_acc, threshold, vqf_bin))
         print("Capture | estimator | roll mean/std/pp (deg) | pitch mean/std/pp (deg)")
         for capture in captures:
             _, median_dt_us = read_capture_timing(capture)
             first_index = 450 + round(args.skip_start_ms * 1000.0 / median_dt_us)
             current = run_driver(current_bin, capture, args.acc_weight)
             outputs = [("current", current)]
-            outputs.extend((f"VQF 6D tauAcc={tau_acc:g}s",
+            outputs.extend((f"VQF 6D tauAcc={tau_acc:g}s minConf>{threshold:g}",
                             run_driver(vqf_bin, capture, args.acc_weight))
-                           for tau_acc, vqf_bin in vqf_bins)
+                           for tau_acc, threshold, vqf_bin in vqf_bins)
             for name, samples in outputs:
                 roll = axis_summary(samples, 0, first_index)
                 pitch = axis_summary(samples, 1, first_index)
