@@ -1,0 +1,5 @@
+workload,condition,sketch_bytes,static_ram_bytes,window_host_s,start_snapshot_uptime_ms,end_snapshot_uptime_ms,start_over_1500,end_over_1500,start_missed_slots,end_missed_slots,start_p99_bucket_us,end_p99_bucket_us,boundary_trace_rows,steady_window_new_trace_rows,heartbeat_posts,sse_connections
+idle,trace_off,1299503,124132,,47006,423926,49,50,117,118,"<=1250","<=1250",1,0,0,0
+idle,trace_on,1302451,124212,,92214,492723,1,2,0,1,"<=1250","<=1250",1,0,0,0
+web_monitor,trace_off,1299503,124132,361,70249,462518,47,49,118,119,"<=1250","<=1250",2,0,176,2
+web_monitor,trace_on,1302451,124212,360,492723,1211082,2,4,1,2,"<=1250","<=1250",2,0,176,2
