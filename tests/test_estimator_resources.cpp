@@ -11,6 +11,7 @@ float controlRoll = 0.0f, controlPitch = 0.0f;
 Vector rates, gyro, acc;
 Quaternion attitude;
 bool landed = false;
+bool armed = false;
 static bool motorOutputActive = true;
 bool motorsActive() { return motorOutputActive; }
 void applyGyro();
@@ -50,6 +51,20 @@ static Quaternion runAccCorrection(float sampleDt, int samples) {
 	return attitude;
 }
 
+static Quaternion runAirborneAccCorrection(float sampleDt, int samples) {
+	resetEstimator(Quaternion::fromEuler(Vector(0.1f, 0.0f, 0.0f)));
+	armed = true;
+	motorOutputActive = true;
+	acc = Vector(0.0f, 0.0f, ONE_G);
+	levelWeight = 0.0f;
+	levelBiasGain = 0.0f;
+	for (int i = 0; i < samples; ++i) {
+		dt = sampleDt;
+		applyAcc();
+	}
+	return attitude;
+}
+
 int main() {
 	const Quaternion tilted = Quaternion::fromEuler(Vector(0.1f, 0.08f, 0.0f));
 	resetEstimator(tilted);
@@ -67,6 +82,54 @@ int main() {
 	const Quaternion accJittered = runAccCorrection(0.0005f, 20);
 	assert(fabsf(accNominal.w - accJittered.w) < 1e-5f);
 	assert(fabsf(accNominal.x - accJittered.x) < 1e-5f);
+	assert(fabsf(accNominal.y - accJittered.y) < 1e-5f);
+
+	const Quaternion airborneInitial = Quaternion::fromEuler(Vector(0.1f, 0.0f, 0.0f));
+	const Quaternion airborneCorrected = runAirborneAccCorrection(0.001f, 500);
+	assert(fabsf(airborneCorrected.toEuler().x) < 0.04f);
+	assert(fabsf(airborneCorrected.toEuler().x) < fabsf(airborneInitial.toEuler().x));
+	const Quaternion airborneJittered = runAirborneAccCorrection(0.0005f, 1000);
+	assert(fabsf(airborneCorrected.x - airborneJittered.x) < 1e-4f);
+	assert(fabsf(airborneCorrected.w - airborneJittered.w) < 1e-4f);
+
+	// Strong non-gravitational acceleration must not pull the estimate toward level.
+	resetEstimator(airborneInitial);
+	armed = true;
+	motorOutputActive = true;
+	acc = Vector(0.0f, 0.0f, ONE_G * 1.5f);
+	dt = 0.001f;
+	applyAcc();
+	assert(fabsf(attitude.x - airborneInitial.x) < 1e-6f);
+	assert(fabsf(attitude.w - airborneInitial.w) < 1e-6f);
+
+	// Stick input fades out accelerometer correction during intentional maneuvers.
+	resetEstimator(airborneInitial);
+	armed = true;
+	motorOutputActive = true;
+	controlRoll = levelGateThreshold;
+	acc = Vector(0.0f, 0.0f, ONE_G);
+	applyAcc();
+	assert(fabsf(attitude.x - airborneInitial.x) < 1e-6f);
+	controlRoll = 0.0f;
+
+	// Gravity provides no heading reference, so yaw-only error is unchanged.
+	const Quaternion yawOnly = Quaternion::fromEuler(Vector(0.0f, 0.0f, 0.3f));
+	resetEstimator(yawOnly);
+	armed = true;
+	motorOutputActive = true;
+	acc = Vector(0.0f, 0.0f, ONE_G);
+	applyAcc();
+	assert(fabsf(attitude.w - yawOnly.w) < 1e-6f);
+	assert(fabsf(attitude.z - yawOnly.z) < 1e-6f);
+
+	// Disarmed motor tests must not activate airborne gravity fusion.
+	resetEstimator(airborneInitial);
+	armed = false;
+	motorOutputActive = true;
+	acc = Vector(0.0f, 0.0f, ONE_G);
+	applyAcc();
+	assert(fabsf(attitude.x - airborneInitial.x) < 1e-6f);
+	assert(fabsf(attitude.w - airborneInitial.w) < 1e-6f);
 
 	resetEstimator(tilted);
 	levelWeight = 0.0f;

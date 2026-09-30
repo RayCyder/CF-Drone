@@ -17,6 +17,7 @@ PID rollRatePID(1,1,0),pitchRatePID(1,1,0),yawRatePID(1,1,0);
 uint64_t testUs=0;
 int64_t esp_timer_get_time(){return testUs;}
 bool motorsActive(){return activeMotors;}
+void recordDescentCalibrationSample(){}
 uint32_t getActiveDiagnosticFaults(){return 0;}
 ControlSource getCurrentControlSource(){return CONTROL_SOURCE_NONE;}
 typedef int portMUX_TYPE;

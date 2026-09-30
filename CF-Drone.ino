@@ -14,7 +14,13 @@
 #include "system_log.h"
 #include "web_rc_input.h"
 #include "open_loop_sequence.h"
+#include "descent_calibration.h"
+#include "wifi_profiles.h"
 #include <esp_system.h>
+
+// Arduino's sketch prototype generator omits the string overload because a
+// numeric getParameter overload is declared later in the merged sketch.
+float getParameter(const char *name);
 
 // WiFi 和 Web 遥控器开关由 board_config.h 按芯片自动设置：
 // 如需手动覆盖，在此处 #undef 后重新 #define
@@ -39,6 +45,9 @@ void setupWiFi();
 void serviceWiFi();
 bool configWiFi(bool ap, const char *ssid, const char *password);
 void printWiFiInfo();
+void setupMavlinkReceiver();
+uint32_t mavlinkRxDroppedCount();
+uint32_t mavlinkRxQueueDepth();
 #endif
 
 static const char *resetReasonName(esp_reset_reason_t reason) {
@@ -78,6 +87,7 @@ void setup() {
 	setLED(true); // 点亮LED，提示正在初始化
 #if WIFI_ENABLED
 	setupWiFi(); // 初始化WiFi（用于Web遥控/MAVLink等）
+	setupMavlinkReceiver(); // UDP读取与MAVLink字节解析运行在通信核
 #endif
 #if WEB_RC_ENABLED
 	setupWebRC();  // 初始化Web遥控器
@@ -155,11 +165,8 @@ void loop() {
 	stageStarted = micros();
 	updateDiagnostics();
 	recordLoopStage(LOOP_STAGE_DIAGNOSTICS, micros() - stageStarted);
-	stageStarted = micros();
-#if WIFI_ENABLED
-	serviceWiFi(); // 更新连接状态、配网DNS与超时回退
-#endif
-	recordLoopStage(LOOP_STAGE_WIFI_SERVICE, micros() - stageStarted);
+	// Wi-Fi state/DNS maintenance is offloaded to wifi_service on core 0.
+	recordLoopStage(LOOP_STAGE_WIFI_SERVICE, 0);
 	recordLoopStage(LOOP_STAGE_MAINTENANCE, micros() - groupStarted);
 	recordLoopStage(LOOP_STAGE_WHOLE_LOOP, micros() - loopStarted);
 	previousLoopEnd = micros();

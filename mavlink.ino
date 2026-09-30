@@ -9,6 +9,8 @@
 #include "control.h"
 #include "flight_log.h"
 #include "log_transfer.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 
 #ifndef ATTITUDE_TARGET_TYPEMASK_BODY_ROLL_RATE_IGNORE
 #define ATTITUDE_TARGET_TYPEMASK_BODY_ROLL_RATE_IGNORE 1
@@ -36,10 +38,59 @@ int mavlinkSysId = 1;
 Rate telemetrySlow(2);
 Rate telemetryFast(BOARD_MAVLINK_TELEM_FAST_HZ);  // 遥测频率：C3=5Hz（降低WiFi占用）/ ESP32&S3=10Hz
 
-bool mavlinkConnected = false;
+volatile bool mavlinkConnected = false;
 LogByteQueue<1024> mavlinkPrintBuffer;
 static LogTransferCursor mavlinkLogTransfer;
 static int mavlinkParameterCursor = -1;
+static QueueHandle_t mavlinkRxQueue = nullptr;
+static uint32_t mavlinkRxDropped = 0;
+extern int wifiMode;
+
+// UDP access and byte-level MAVLink parsing stay on the communications core.
+// Parsed messages are handed to the flight loop, which remains the sole owner
+// of command execution and flight-control state changes.
+static void mavlinkReceiveTask(void *argument) {
+	(void)argument;
+	uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
+	mavlink_message_t message;
+	mavlink_status_t status;
+	for (;;) {
+		const int length = receiveWiFi(buffer, sizeof(buffer));
+		if (length > 0) {
+			mavlinkConnected = true;
+			for (int i = 0; i < length; ++i) {
+				if (mavlink_parse_char(MAVLINK_COMM_0, buffer[i], &message, &status) &&
+					xQueueSend(mavlinkRxQueue, &message, 0) != pdTRUE) {
+					__atomic_add_fetch(&mavlinkRxDropped, 1, __ATOMIC_RELAXED);
+				}
+			}
+		}
+		vTaskDelay(pdMS_TO_TICKS(1));
+	}
+}
+
+void setupMavlinkReceiver() {
+	if (wifiMode == 0) {
+		print("MAVLINK_RX state=DISABLED reason=wifi_disabled\n");
+		return;
+	}
+	mavlinkRxQueue = xQueueCreate(8, sizeof(mavlink_message_t));
+	if (!mavlinkRxQueue || xTaskCreatePinnedToCore(mavlinkReceiveTask, "mavlink_rx", 4096,
+		nullptr, 1, nullptr, 0) != pdPASS) {
+		if (mavlinkRxQueue) { vQueueDelete(mavlinkRxQueue); mavlinkRxQueue = nullptr; }
+		print("MAVLINK_RX state=DISABLED reason=task_create_failed\n");
+		return;
+	}
+	print("MAVLINK_RX state=READY queue=8 core=0 priority=1\n");
+}
+
+uint32_t mavlinkRxDroppedCount() {
+	return __atomic_load_n(&mavlinkRxDropped, __ATOMIC_RELAXED);
+}
+
+uint32_t mavlinkRxQueueDepth() {
+	return mavlinkRxQueue ? (uint32_t)uxQueueMessagesWaiting(mavlinkRxQueue) : 0;
+}
 
 extern double controlTime;
 extern float motors[4];
@@ -136,17 +187,14 @@ void sendMessage(const void *msg) {
 }
 
 void receiveMavlink() {
-	uint8_t buf[MAVLINK_MAX_PACKET_LEN];
-	int len = receiveWiFi(buf, MAVLINK_MAX_PACKET_LEN);
-	if (len) mavlinkConnected = true;
-
-	// New packet, parse it
-	mavlink_message_t msg;
-	mavlink_status_t status;
-	for (int i = 0; i < len; i++) {
-		if (mavlink_parse_char(MAVLINK_COMM_0, buf[i], &msg, &status)) {
-			handleMavlink(&msg);
-		}
+	// Bound command work per flight-loop pass; parsing and socket reads happen
+	// in mavlinkReceiveTask, while stateful commands execute only here.
+	constexpr uint8_t MAX_MESSAGES_PER_PASS = 2;
+	if (!mavlinkRxQueue) return;
+	mavlink_message_t message;
+	for (uint8_t i = 0; i < MAX_MESSAGES_PER_PASS &&
+		 xQueueReceive(mavlinkRxQueue, &message, 0) == pdTRUE; ++i) {
+		handleMavlink(&message);
 	}
 }
 

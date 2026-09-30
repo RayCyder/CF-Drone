@@ -15,29 +15,33 @@ select{box-sizing:border-box;width:100%;padding:12px;border-radius:8px;border:1p
 button{margin-top:12px;width:100%;padding:13px;border:0;border-radius:8px;background:#147efb;color:#fff;font-size:1rem;font-weight:bold}
 a{display:inline-block;margin-top:18px;color:#9fc7ff}#status{min-height:1.5em;color:#ffd27a}
 #events{margin-top:22px;padding-top:14px;border-top:1px solid #555}#events h2{font-size:1rem;margin:0 0 8px}#event-state{color:#aaa;font-size:.85rem}#event-list{max-height:220px;overflow:auto;padding:8px;background:#222;border-radius:8px;font:12px/1.5 monospace;white-space:pre-wrap;overflow-wrap:anywhere}.event-actions{display:flex;gap:8px}.event-actions button{flex:1;padding:9px;font-size:.88rem}
+#saved-profile-list{list-style:none;padding:0;margin:8px 0}.saved-profile{display:flex;align-items:center;justify-content:space-between;gap:10px;background:#30353c;border-radius:7px;padding:8px 10px;margin:6px 0}.saved-profile button{width:auto;margin:0;padding:7px 10px;background:#8b3434;font-size:.85rem}.muted{color:#aaa;font-size:.85rem}
 </style></head><body><main>
 <h1>无人机 Wi-Fi 配置</h1>
-<p>扫描附近的 2.4 GHz Wi-Fi 并选择网络，或手动输入名称（隐藏网络）。保存后无人机将连接该网络并重启。请稍后让手机也连接到同一网络，再打开无人机显示的地址进行遥控。</p>
+<p>扫描附近的 2.4 GHz Wi-Fi 并选择网络，或手动输入名称（隐藏网络）。最多保存 4 个网络；无人机按优先顺序依次连接，当前添加或更新的网络会排在第一位。所有网络均不可用时，会启动 Drone_WiFi 配置热点。</p>
 <form id="wifi-form"><label for="ssid">Wi-Fi 名称（SSID）</label>
 <select id="networks" aria-label="附近的 Wi-Fi 网络"><option value="">点击扫描附近网络…</option></select>
 <button id="scan" type="button">扫描 Wi-Fi</button>
 <input id="ssid" name="ssid" maxlength="32" autocomplete="off" required>
 <label for="password">Wi-Fi 密码</label>
 <input id="password" name="password" type="password" maxlength="63" autocomplete="new-password">
-<button type="submit">保存并连接</button></form><div id="status" role="status"></div>
+<button type="submit">保存网络并连接</button></form><div id="status" role="status"></div>
+<section id="saved-profiles"><h2>已保存网络</h2><ul id="saved-profile-list"><li class="muted">正在读取…</li></ul><div id="profile-capacity" class="muted"></div></section>
 <section id="events"><h2>启动与 Wi-Fi 自检日志</h2><div id="event-state">正在连接事件流…</div><pre id="event-list" aria-live="polite"></pre><div class="event-actions"><button id="download-events" type="button" disabled>下载日志</button><button id="clear-events" type="button">清空显示</button></div></section>
 <a href="/">返回遥控页面</a></main>
 <script>
 const statusEl=document.getElementById('status'), networkList=document.getElementById('networks');
 networkList.addEventListener('change',()=>{if(networkList.value)document.getElementById('ssid').value=networkList.value;});
 document.getElementById('scan').addEventListener('click',async()=>{const button=document.getElementById('scan');button.disabled=true;networkList.replaceChildren(new Option('正在扫描附近网络…',''));statusEl.textContent='';try{let data;do{const r=await fetch(data?'/wifi/scan':'/wifi/scan?refresh=1');data=await r.json();if(data.state==='scanning')await new Promise(resolve=>setTimeout(resolve,700));}while(data.state==='scanning');networkList.replaceChildren();if(data.state!=='done')throw new Error(data.message||'扫描失败');if(!data.networks.length){networkList.add(new Option('未发现网络，请手动输入 SSID',''));}else{networkList.add(new Option('选择附近的 Wi-Fi 网络…',''));for(const n of data.networks){const suffix=(n.open?'开放':'需密码')+' · '+n.rssi+' dBm';networkList.add(new Option(n.ssid+' ('+suffix+')',n.ssid));}}statusEl.textContent='扫描完成；隐藏网络请手动填写 SSID。';}catch(_){networkList.replaceChildren(new Option('扫描失败，请重试或手动输入',''));statusEl.textContent='无法扫描网络，请重试或手动输入 SSID。';}finally{button.disabled=false;}});
-document.getElementById('wifi-form').addEventListener('submit',async e=>{e.preventDefault();statusEl.textContent='正在保存…';try{const r=await fetch('/wifi/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(new FormData(e.target))});const d=await r.json();statusEl.textContent=d.message||'保存失败';statusEl.style.color=r.ok?'#8fe3a0':'#ff8b8b';}catch(_){statusEl.textContent='连接中断；请查看下方事件日志，确认飞控是否正在重启。';statusEl.style.color='#ffd27a';}});
+async function refreshSavedProfiles(){const list=document.getElementById('saved-profile-list'),capacity=document.getElementById('profile-capacity');try{const r=await fetch('/wifi/profiles',{cache:'no-store'}),data=await r.json();list.replaceChildren();if(!data.profiles.length){list.append(Object.assign(document.createElement('li'),{className:'muted',textContent:'尚无已保存网络'}));}for(const profile of data.profiles){const item=document.createElement('li');item.className='saved-profile';const label=document.createElement('span');label.textContent=profile.priority+'. '+profile.ssid;const remove=document.createElement('button');remove.type='button';remove.textContent='删除';remove.onclick=async()=>{remove.disabled=true;try{const result=await fetch('/wifi/remove',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({ssid:profile.ssid})}),reply=await result.json();statusEl.textContent=reply.message||'删除失败';statusEl.style.color=result.ok?'#8fe3a0':'#ff8b8b';if(result.ok)await refreshSavedProfiles();}catch(_){statusEl.textContent='删除失败，连接中断';}finally{remove.disabled=false;}};item.append(label,remove);list.append(item);}capacity.textContent=`${data.profiles.length}/${data.limit} 个网络已保存 · 独立闪存双槽 ${data.storage_used}/${data.storage_total} 字节`;}catch(_){list.replaceChildren(Object.assign(document.createElement('li'),{className:'muted',textContent:'无法读取已保存网络'}));capacity.textContent='';}}
+document.getElementById('wifi-form').addEventListener('submit',async e=>{e.preventDefault();statusEl.textContent='正在安全保存网络…';try{const r=await fetch('/wifi/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(new FormData(e.target))});const d=await r.json();statusEl.textContent=d.message||'保存失败';statusEl.style.color=r.ok?'#8fe3a0':'#ff8b8b';if(r.ok){document.getElementById('password').value='';await refreshSavedProfiles();}}catch(_){statusEl.textContent='连接中断；请查看下方事件日志，确认飞控是否正在重启。';statusEl.style.color='#ffd27a';}});
 const eventState=document.getElementById('event-state'),eventList=document.getElementById('event-list'),downloadEvents=document.getElementById('download-events');let events=[],seenEvents=new Set();
 const eventSource=new EventSource(location.protocol+'//'+location.hostname+':81/stream');
 eventSource.onopen=()=>eventState.textContent='事件流已连接；启动和 Wi-Fi 状态会实时显示';eventSource.onerror=()=>eventState.textContent='事件流断开，浏览器正在自动重连；已收到的日志仍保留在此页面';
 eventSource.addEventListener('system-log',e=>{if(e.lastEventId&&seenEvents.has(e.lastEventId))return;if(e.lastEventId)seenEvents.add(e.lastEventId);const parts=e.data.split('|');const line=(parts[0]||'?')+' ms  ['+(parts[1]||'SYSTEM')+'] '+parts.slice(2).join('|');events.push(line);if(events.length>500)events.shift();eventList.textContent=events.join('\n');eventList.scrollTop=eventList.scrollHeight;downloadEvents.disabled=events.length===0;});
 downloadEvents.onclick=()=>{if(!events.length)return;const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([events.join('\n')+'\n'],{type:'text/plain;charset=utf-8'}));link.download='cf-drone-system-log.txt';link.click();URL.revokeObjectURL(link.href);};
 document.getElementById('clear-events').onclick=()=>{events=[];seenEvents.clear();eventList.textContent='';downloadEvents.disabled=true;};
+refreshSavedProfiles();
 </script>
 </body></html>
 )rawliteral";
@@ -144,7 +148,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
 .status-dot.warning { background: #ff9; box-shadow: 0 0 8px #ff9; }
 .self-check-button{position:absolute;right:10px;top:9px;border:1px solid rgba(0,255,136,.55);border-radius:8px;background:rgba(0,255,136,.12);color:#aaffd4;padding:6px 10px;font-size:.75rem;font-weight:bold;cursor:pointer;touch-action:manipulation}
 .self-check-button.has-fault{border-color:rgba(255,80,80,.7);background:rgba(255,50,50,.18);color:#ffb0b0}
-.header{position:relative;padding-right:150px}
+.header{position:relative;padding-right:258px}
 .diagnostic-page{position:fixed;inset:0;z-index:1000;display:none;background:#252525;overflow-y:auto;padding:clamp(14px,4vw,28px);touch-action:pan-y}
 .diagnostic-shell{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
 .diagnostic-top{display:flex;align-items:center;justify-content:space-between;gap:12px}
@@ -183,7 +187,19 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
 /*======== 按钮区 ========*/
 .buttons-container{flex:.55;display:flex;flex-direction:column;gap:10px;padding:12px;background:rgba(0,0,0,.4);border-radius:20px;border:2px solid rgba(150,150,150,.3);box-shadow:inset 0 0 20px rgba(0,0,0,.5)}
 #route-page-button{right:92px}
+#descent-calibration-button{right:174px;border-color:rgba(255,160,60,.65);background:rgba(255,140,0,.16);color:#ffd2a3}
 .route-page{position:fixed;inset:0;z-index:1001;display:none;background:#252525;overflow-y:auto;padding:clamp(14px,4vw,28px);touch-action:pan-y}
+.descent-calibration-page{position:fixed;inset:0;z-index:1002;display:none;background:#252525;overflow-y:auto;padding:clamp(14px,4vw,28px);touch-action:pan-y}
+.descent-calibration-shell{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+.calibration-card{border:1px solid rgba(255,255,255,.14);border-radius:12px;padding:14px;background:rgba(0,0,0,.25)}
+.calibration-card p,.calibration-card small{color:#c4cbd3;font-size:.85rem;line-height:1.5}
+.calibration-actions{display:flex;gap:8px;flex-wrap:wrap}
+.calibration-actions button{border:0;border-radius:8px;padding:10px 14px;background:#444;color:#fff;font-size:.9rem;touch-action:manipulation}
+.calibration-actions button.primary{background:#a85b00}.calibration-actions button:disabled{opacity:.45}
+.calibration-fields{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.calibration-fields input{max-width:130px;background:#17191c;color:#fff;border:1px solid #777;border-radius:7px;padding:9px}
+.calibration-fields button{border:0;border-radius:7px;padding:9px 12px;background:#444;color:#fff;font-size:.88rem;touch-action:manipulation}
+.calibration-points{display:grid;gap:6px;font-size:.82rem;color:#d3d9e0}
 .route-shell{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
 .route-editor{width:100%;min-height:48vh;padding:12px;border:1px solid #777;border-radius:9px;background:#17191c;color:#e9f1ff;font: .9rem/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;overflow:auto;touch-action:auto;user-select:text;-webkit-user-select:text}
 .route-help{color:#c4cbd3;font-size:.85rem;line-height:1.5}.route-page-actions{display:flex;gap:8px;flex-wrap:wrap}.route-page-actions button{border:0;border-radius:8px;padding:10px 14px;background:#444;color:#fff;font-size:.9rem;touch-action:manipulation}.route-page-actions .run{background:#167c3a}.route-page-actions .stop{background:#a33}
@@ -226,7 +242,9 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   .content>.joystick-container:last-child{grid-column:2;grid-row:2;min-width:0;overflow:hidden}
   .header h1{font-size:clamp(0.85rem,3.5vw,1.1rem)}
   #route-page-button{right:78px}
+  #descent-calibration-button{right:148px}
   .self-check-button{top:6px;right:6px;padding:5px 7px;font-size:.68rem}
+  #route-page-button,#descent-calibration-button{padding:5px 7px;font-size:.68rem}
   .status-bar{gap:5px;flex-wrap:wrap;justify-content:center}
   .status-item{font-size:clamp(0.6rem,2.5vw,0.7rem);padding:2px 5px}
 }
@@ -236,7 +254,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   :root{--js-size:clamp(120px,min(42vw,44vh),240px);--knob-size:calc(var(--js-size)*0.25)}
   .joystick-title{font-size:0.72rem}
   .header h1{font-size:0.82rem}
-  .header{padding:3px 150px 3px 8px}
+  .header{padding:3px 258px 3px 8px}
   .header h1{margin-bottom:2px}
   .status-bar{margin-top:2px;gap:4px}
   .status-item{font-size:0.58rem;padding:2px 4px}
@@ -256,6 +274,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
     <h1>琛光无人机网页遥控器</h1>
     <button id="self-check-button" class="self-check-button" onclick="openSelfCheck()">自检状态</button>
     <button id="route-page-button" class="self-check-button" onclick="openRoutePage()">开环序列</button>
+    <button id="descent-calibration-button" class="self-check-button" onclick="handleDescentCalibrationEntry()">迫降标定</button>
     <div class="status-bar">
       <div class="status-item"><span class="status-dot" id="status-dot"></span><span id="connection-text">连接中...</span></div>
       <div class="status-item" id="armed-status-item" style="background:rgba(255,51,51,0.15)"><span id="armed-status" style="color:#ff6666">已上锁</span></div>
@@ -331,14 +350,25 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   </section>
   <section id="route-page" class="route-page" aria-hidden="true">
     <div class="route-shell">
-      <div class="diagnostic-top"><h2>开环动作序列</h2><div class="diagnostic-actions"><button onclick="closeRoutePage()">返回遥控器</button></div></div>
-      <p class="route-help">只有加速度计和陀螺仪，无位置、高度或触地反馈。本功能执行定时动作，不能保证航迹或落点。连接断开、执行周期中断、完成或停止时会转入定推力下降；需操作者确认情况后上锁。</p>
-      <p class="route-help">每行：持续秒数（0.1–600） 油门百分比（0–100） 横滚/俯仰/偏航输入（各 -100–100，不是角度）。最多 128 段、合计 30 分钟、正文 4096 字节；空行和 # 注释不执行。</p>
+      <div class="diagnostic-top"><h2>相对航线（遥控输出序列）</h2><div class="diagnostic-actions"><button onclick="closeRoutePage()">返回遥控器</button></div></div>
+      <p class="route-help">航线定义为按时间排列的遥控输出：每段设置油门、横滚、俯仰和偏航输入，可表达平移、转向及升降趋势。每段数值是该段持续使用的输入，不是相对上一段的增量。飞控没有位置或高度反馈，实际轨迹会受风、推力和机体响应影响。连接断开、执行周期中断、完成或停止时会转入定推力下降；需操作者确认情况后上锁。</p>
+      <p class="route-help">每行：持续秒数（0.1–600） 油门百分比（0–100） 横滚/俯仰/偏航遥控输入（各 -100–100，不是角度）。最多 128 段、合计 30 分钟、正文 4096 字节；空行和 # 注释不执行。当前序列正常结束也会进入定推力下降。若后续增加“结束后近似悬停”，其控制方式应为保持末段油门、横滚/俯仰/偏航回中以尝试保持垂直加速度接近 0；这不具备高度/位置保持能力。</p>
       <textarea id="route-editor" class="route-editor" spellcheck="false" aria-label="开环控制序列"></textarea>
       <div class="route-page-actions"><button onclick="saveRoute()">保存到浏览器</button><button id="route-upload" onclick="uploadRoute()">上传并校验</button><button id="route-start" class="run" onclick="startRoute()">启动已上传序列</button><button id="route-stop" class="stop" onclick="stopRoute()">停止并下降</button><button id="route-takeover" onclick="takeManualControl()">接管摇杆</button></div>
       <p class="route-help">先在上锁且电机停止时上传；启动需要由操作者解锁并选择自稳模式。“停止并下降”保留下降控制，“接管摇杆”明确退出序列并切回手动自稳。</p>
       <div class="route-status" id="route-message" role="status">当前内容尚未上传；上传不会解锁或启动。</div>
       <div class="route-status" id="route-status">正在读取飞控状态…</div>
+    </div>
+  </section>
+  <section id="descent-calibration-page" class="descent-calibration-page" aria-hidden="true">
+    <div class="descent-calibration-shell">
+      <div class="diagnostic-top"><h2>迫降推力标定</h2><div class="diagnostic-actions"><button onclick="closeDescentCalibrationPage()">返回遥控器</button></div></div>
+      <div class="calibration-card"><strong>飞手手动下降，飞控只记录</strong><p>仅在自稳模式且已解锁时开始记录。开始后请关闭此页回到摇杆操作；可从顶部“停止标定”结束采集。单次最多 30 秒，记录每秒约 20 个样本。该功能不会自动改变飞行控制。</p><small>完成后输入这段记录对应的实测下降高度差，页面用高度差 ÷ 记录时长计算平均下降速度。IMU 不会提供可靠的垂直速度或离地高度。</small></div>
+      <div id="descent-calibration-status" class="route-status" role="status">正在读取标定状态…</div>
+      <div class="calibration-actions"><button id="descent-calibration-start" class="primary" onclick="startDescentCalibrationCapture()">开始记录当前手动下降</button><button id="descent-calibration-stop" onclick="stopDescentCalibrationCapture()">停止记录</button><button id="descent-calibration-download" onclick="downloadDescentCalibrationCsv()">下载原始记录</button></div>
+      <div class="calibration-card"><strong>记录测量结果</strong><div class="calibration-fields"><label for="descent-drop-distance">实测高度差（米）</label><input id="descent-drop-distance" type="number" min="0.1" max="100" step="0.1" placeholder="例如 2.0"><button onclick="addDescentCalibrationPoint()">添加实测点</button></div><p id="descent-calibration-measurement" class="route-status">需要一段有效且稳定的标定记录。</p></div>
+      <div class="calibration-card"><strong>实测点与推力建议</strong><div id="descent-calibration-points" class="calibration-points">此浏览器还没有保存实测点。</div><div class="calibration-fields"><label for="descent-target-speed">期望最大下降速度（米/秒）</label><input id="descent-target-speed" type="number" min="0.05" max="5" step="0.05" placeholder="输入目标"><button onclick="recommendDescentCalibrationPoint()">查找实测点</button></div><p id="descent-calibration-recommendation" class="route-status">只会推荐速度不超过目标值的实测点；不会插值或外推。</p><div class="calibration-actions"><button id="descent-calibration-apply" class="primary" onclick="applyDescentCalibrationRecommendation()" disabled>确认保存下降推力</button><button onclick="clearDescentCalibrationPoints()">清除此浏览器的实测点</button></div></div>
+      <div class="calibration-card"><strong>能力边界</strong><p>这是经验推力标定，不是自动着陆。迫降仍是定推力下降；飞控没有高度、垂直速度或触地反馈，不能据此保证下降速度或避免撞地。飞手必须保持接管能力，并在触地后明确上锁。电池、载荷、螺旋桨、风和地面效应变化都会影响结果。</p></div>
     </div>
   </section>
   <!-- 版权页脚 -->
@@ -382,6 +412,10 @@ let selfCheckOpen = false;
 let selfCheckRequestSequence = 0;
 let selfCheckHasData = false;
 let routeTimer = null;
+let descentCalibrationTimer = null;
+let descentCalibrationRecommendation = null;
+let descentCalibrationLatestStatus = null;
+const DESCENT_CALIBRATION_POINTS_KEY = 'cfDroneDescentCalibrationPointsV1';
 let flightRouteRunning = false;
 let routeStarting = false;
 let routeHold = false;
@@ -409,13 +443,14 @@ function init() {
   initConsoleTouchScrolling();
   loadRoute();
   refreshRouteStatus();
+  refreshDescentCalibrationStatus();
   requestAnimationFrame(animationLoop);
   requestAnimationFrame(initKnobPositions);
 }
 
 const defaultRouteText=`# 每行：持续秒数 油门百分比 横滚输入 俯仰输入 偏航输入
 # 格式示例（注释不会执行）：1.0 0 0 0 0
-# 请填写经机体验证的指令。这里只执行定时动作，不规划空间航线。`;
+# 请填写经机体验证的遥控输出序列；按段执行油门、横滚、俯仰和偏航输入，不使用坐标航点。`;
 function routeMessage(message){document.getElementById('route-message').textContent=message;}
 function parseRouteText(){
   const text=document.getElementById('route-editor').value;
@@ -459,6 +494,122 @@ function loadRoute(){
 }
 function openRoutePage(){document.getElementById('route-page').style.display='block';document.getElementById('route-page').setAttribute('aria-hidden','false');refreshRouteStatus();startRouteMonitor();}
 function closeRoutePage(){document.getElementById('route-page').style.display='none';document.getElementById('route-page').setAttribute('aria-hidden','true');}
+
+function handleDescentCalibrationEntry(){
+  if(descentCalibrationTimer){stopDescentCalibrationCapture();return;}
+  openDescentCalibrationPage();
+}
+function openDescentCalibrationPage(){
+  const page=document.getElementById('descent-calibration-page');page.style.display='block';page.setAttribute('aria-hidden','false');
+  renderDescentCalibrationPoints();refreshDescentCalibrationStatus();
+}
+function closeDescentCalibrationPage(){
+  const page=document.getElementById('descent-calibration-page');page.style.display='none';page.setAttribute('aria-hidden','true');
+}
+function setDescentCalibrationRecording(recording){
+  if(recording&&!descentCalibrationTimer)descentCalibrationTimer=setInterval(refreshDescentCalibrationStatus,1000);
+  if(!recording&&descentCalibrationTimer){clearInterval(descentCalibrationTimer);descentCalibrationTimer=null;}
+  const button=document.getElementById('descent-calibration-button');
+  button.textContent=recording?'停止标定':'迫降标定';button.classList.toggle('has-fault',recording);
+  updateDescentCalibrationControls();
+}
+function updateDescentCalibrationControls(){
+  const recording=!!descentCalibrationTimer;
+  document.getElementById('descent-calibration-start').disabled=recording||!connectionOk||!currentArmed||currentFlightMode!==2;
+  document.getElementById('descent-calibration-stop').disabled=!recording;
+  const status=descentCalibrationLatestStatus;
+  document.getElementById('descent-calibration-download').disabled=currentArmed||!status||status.samples===0||status.state==='recording';
+  document.getElementById('descent-drop-distance').disabled=!status||!status.usable;
+  const button=document.getElementById('descent-calibration-apply');
+  if(button){
+    const pageOpen=document.getElementById('descent-calibration-page').getAttribute('aria-hidden')==='false';
+    button.disabled=!descentCalibrationRecommendation||!pageOpen||!connectionOk||currentArmed;
+  }
+}
+async function refreshDescentCalibrationStatus(){
+  try{
+    const response=await fetch('/descent-calibration/status',{cache:'no-store'});if(!response.ok)throw new Error('状态读取失败');
+    const data=await response.json();descentCalibrationLatestStatus=data;setDescentCalibrationRecording(data.state==='recording');
+    const status=document.getElementById('descent-calibration-status');
+    const reason=({empty:'尚无标定记录',recording:'正在记录。请关闭标定页，使用摇杆手动下降；从顶部按钮结束记录。',complete:'记录完成',aborted:'记录已中止'})[data.state]||'标定状态未知';
+    status.textContent=`${reason}；${data.samples} 个样本，${(Number(data.duration_ms)/1000).toFixed(1)} 秒。`+
+      (data.state==='complete'?`中位推力 ${Number(data.median_thrust).toFixed(2)}，平均电池 ${Number(data.mean_battery_v).toFixed(2)} V，最大倾角 ${Number(data.max_tilt_deg).toFixed(1)}°。${data.usable?'记录质量通过检查。':'不可用于标定：'+data.reason+'。'}`:'');
+    document.getElementById('descent-calibration-measurement').textContent=data.usable
+      ? `记录有效，持续 ${(Number(data.duration_ms)/1000).toFixed(2)} 秒；中位推力 ${Number(data.median_thrust).toFixed(2)}。请输入对应高度差。`
+      : `当前记录尚不能用于参数标定${data.reason&&data.state!=='empty'?'：'+data.reason:''}。`;
+    updateDescentCalibrationControls();
+  }catch(error){document.getElementById('descent-calibration-status').textContent=error.message||'无法读取标定状态';}
+}
+async function startDescentCalibrationCapture(){
+  if(!connectionOk||!currentArmed||currentFlightMode!==2){showToast('请连接飞控并在自稳模式、已解锁状态下开始记录');return;}
+  try{
+    const response=await fetch('/descent-calibration/start',{method:'POST'});const result=await response.json();
+    if(!response.ok||!result.ok)throw new Error(result.error||'无法开始记录');
+    setDescentCalibrationRecording(true);closeDescentCalibrationPage();showToast('开始记录手动下降；顶部按钮可停止');
+  }catch(error){document.getElementById('descent-calibration-status').textContent=error.message;}
+}
+async function stopDescentCalibrationCapture(){
+  try{
+    const response=await fetch('/descent-calibration/stop',{method:'POST'});const result=await response.json();
+    if(!response.ok||!result.ok)throw new Error(result.error||'当前没有进行中的记录');
+    setDescentCalibrationRecording(false);openDescentCalibrationPage();refreshDescentCalibrationStatus();
+  }catch(error){showToast(error.message||'停止记录失败');}
+}
+function readDescentCalibrationPoints(){try{const value=JSON.parse(localStorage.getItem(DESCENT_CALIBRATION_POINTS_KEY)||'[]');return Array.isArray(value)?value:[];}catch(_){return [];}}
+function saveDescentCalibrationPoints(points){try{localStorage.setItem(DESCENT_CALIBRATION_POINTS_KEY,JSON.stringify(points.slice(-12)));}catch(_){throw new Error('浏览器无法保存标定点');}}
+function renderDescentCalibrationPoints(){
+  const points=readDescentCalibrationPoints();const root=document.getElementById('descent-calibration-points');
+  root.innerHTML=points.length?points.map((point,index)=>`<div>点 ${index+1}：${Number(point.speed).toFixed(2)} m/s，推力 ${Number(point.thrust).toFixed(2)}，电池 ${Number(point.battery).toFixed(2)} V，${new Date(point.at).toLocaleString()}</div>`).join(''):'此浏览器还没有保存实测点。';
+}
+async function addDescentCalibrationPoint(){
+  const distance=Number(document.getElementById('descent-drop-distance').value);
+  if(!Number.isFinite(distance)||distance<0.1||distance>100){showToast('请输入 0.1 到 100 米之间的实测高度差');return;}
+  try{
+    const response=await fetch('/descent-calibration/status',{cache:'no-store'});const data=await response.json();
+    if(!response.ok||!data.usable)throw new Error('当前记录不满足质量条件');
+    const duration=Number(data.duration_ms)/1000;const speed=distance/duration;
+    if(!Number.isFinite(speed)||speed<=0||speed>5)throw new Error('计算速度超出 0 到 5 m/s 范围，请检查高度差和记录区间');
+    const points=readDescentCalibrationPoints();points.push({speed,thrust:Number(data.median_thrust),battery:Number(data.mean_battery_v),tilt:Number(data.max_tilt_deg),at:Date.now()});
+    saveDescentCalibrationPoints(points);renderDescentCalibrationPoints();
+    document.getElementById('descent-calibration-recommendation').textContent=`已保存实测点：平均下降速度 ${speed.toFixed(2)} m/s，对应推力 ${Number(data.median_thrust).toFixed(2)}。`;
+  }catch(error){showToast(error.message||'无法添加实测点');}
+}
+function recommendDescentCalibrationPoint(){
+  const target=Number(document.getElementById('descent-target-speed').value);
+  if(!Number.isFinite(target)||target<0.05||target>5){showToast('请输入 0.05 到 5 m/s 的目标最大下降速度');return;}
+  const candidates=readDescentCalibrationPoints().filter(point=>Number.isFinite(Number(point.speed))&&Number(point.speed)<=target);
+  if(!candidates.length){descentCalibrationRecommendation=null;document.getElementById('descent-calibration-recommendation').textContent='没有速度不超过目标值的实测点；请补充更慢的实测下降数据。';refreshDescentCalibrationSaveState();return;}
+  candidates.sort((a,b)=>Number(b.speed)-Number(a.speed));descentCalibrationRecommendation=candidates[0];
+  document.getElementById('descent-calibration-recommendation').textContent=`推荐已测点：${Number(descentCalibrationRecommendation.speed).toFixed(2)} m/s，对应 SF_DESCEND_THRUST=${Number(descentCalibrationRecommendation.thrust).toFixed(2)}。不会外推。`;
+  refreshDescentCalibrationSaveState();
+}
+async function refreshDescentCalibrationSaveState(){
+  updateDescentCalibrationControls();
+}
+async function applyDescentCalibrationRecommendation(){
+  if(!descentCalibrationRecommendation||currentArmed||!connectionOk){showToast('保存参数前请连接飞控并确认已上锁');return;}
+  const value=Number(descentCalibrationRecommendation.thrust);
+  try{
+    const response=await fetch('/descent-calibration/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({value:String(value)})});
+    const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'参数保存未排队');
+    document.getElementById('descent-calibration-recommendation').textContent='已提交保存；等待飞控写入并确认…';
+    for(let i=0;i<12;i++){
+      await new Promise(resolve=>setTimeout(resolve,1000));
+      const status=await fetch('/descent-calibration/save-status?value='+encodeURIComponent(value),{cache:'no-store'}).then(r=>r.json());
+      if(status.saved){document.getElementById('descent-calibration-recommendation').textContent=`参数已写入并读回确认：SF_DESCEND_THRUST=${Number(status.value).toFixed(2)}。`;return;}
+    }
+    throw new Error('参数仍未确认写入；请检查 NVS 状态，勿重复飞行验证');
+  }catch(error){document.getElementById('descent-calibration-recommendation').textContent=error.message||'参数保存失败';}
+}
+function clearDescentCalibrationPoints(){
+  try{localStorage.removeItem(DESCENT_CALIBRATION_POINTS_KEY);}catch(_){}
+  descentCalibrationRecommendation=null;renderDescentCalibrationPoints();refreshDescentCalibrationSaveState();
+  document.getElementById('descent-calibration-recommendation').textContent='已清除此浏览器保存的实测点。';
+}
+function downloadDescentCalibrationCsv(){
+  if(currentArmed){showToast('请先上锁后下载标定数据');return;}
+  const link=document.createElement('a');link.href='/descent-calibration.csv';link.download='cf-drone-descent-calibration.csv';link.click();
+}
 async function uploadRoute(){
   if(routeStarting||routePending)return;
   if(currentArmed||!connectionOk){routeMessage('上传前请连接飞控并保持上锁、电机停止。');return;}
@@ -735,6 +886,7 @@ function sendToESP(url, data) {
       }
 
       updateRouteControls();
+      refreshDescentCalibrationSaveState();
       // 按钮松开确认 toast（rt=2, bs=0）
       if (resp.rt === 2 && resp.bs === 0) {
         if (resp.bi >= 0 && resp.bi <= 2) {

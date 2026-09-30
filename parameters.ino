@@ -440,6 +440,24 @@ bool parameterPersistencePending() {
 	return pending;
 }
 
+bool parameterPersistenceReady() {
+	return parameterStorageReady;
+}
+
+bool isParameterDirty(const char *name) {
+	if (!name) return false;
+	bool dirty = false;
+	portENTER_CRITICAL(&parameterMux);
+	for (auto &parameter : parameters) {
+		if (strcasecmp(parameter.name, name) == 0) {
+			dirty = parameter.dirty;
+			break;
+		}
+	}
+	portEXIT_CRITICAL(&parameterMux);
+	return dirty;
+}
+
 bool persistDirtyParametersInBatch() {
 	if (!parameterStorageReady) return false;
 	bool wroteAny = false;
@@ -456,6 +474,8 @@ bool persistDirtyParametersInBatch() {
 
 		const size_t written = storage.putFloat(parameter.name, value);
 		if (written != sizeof(float)) continue; // Keep dirty for the next locked batch.
+		const float readBack = storage.getFloat(parameter.name, NAN);
+		if (!isfinite(readBack) || readBack != value) continue; // Keep dirty unless NVS confirms the exact value.
 		wroteAny = true;
 		portENTER_CRITICAL(&parameterMux);
 		const float current = parameter.getValue();

@@ -32,6 +32,7 @@ float levelBiasGain = 0;  // Mahony I 项增益（关闭，无法区分陀螺温
 Vector levelGyroBias(0, 0, 0); // 由 applyLevel() 估计的虚拟陀螺偏置（rad/s）
 
 extern float controlRoll, controlPitch; // 飞手摇杆输入，定义于 CF-Drone.ino
+extern bool armed;
 LowPassFilter<Vector> ratesFilter(0.2f); // 1 ms reference coefficient; about 35.5 Hz
 
 void estimate() {
@@ -50,15 +51,32 @@ void applyGyro() {
 }
 
 void applyAcc() {
-	// test should we apply accelerometer gravity correction
 	float accNorm = acc.norm();
-	landed = !motorsActive() && abs(accNorm - ONE_G) < ONE_G * 0.1f;
+	landed = isfinite(accNorm) && !motorsActive() && fabsf(accNorm - ONE_G) < ONE_G * 0.1f;
+	if (!isfinite(accNorm) || accNorm < 1e-3f) return;
 
-	if (!landed) return;
+	float correctionConfidence = 1.0f;
+	if (!landed) {
+		// Accelerometer direction is a gravity reference only when the measured
+		// specific-force magnitude is near 1g. Never use it during disarmed motor
+		// tests, and fade its influence during deliberate roll/pitch commands.
+		if (!armed) return;
+		const float normError = fabsf(accNorm - ONE_G);
+		const float normTolerance = ONE_G * 0.15f;
+		correctionConfidence = constrain(1.0f - normError / normTolerance, 0.0f, 1.0f);
+
+		const float stickDeflection = max(fabsf(controlRoll), fabsf(controlPitch));
+		const float stickGate = levelGateThreshold > 0.0f
+			? constrain(1.0f - stickDeflection / levelGateThreshold, 0.0f, 1.0f)
+			: (stickDeflection == 0.0f ? 1.0f : 0.0f);
+		correctionConfidence *= stickGate;
+	}
+	if (correctionConfidence <= 0.0f) return;
 
 	// calculate accelerometer correction
 	Vector up = Quaternion::rotateVector(Vector(0, 0, 1), attitude);
-	Vector correction = Vector::rotationVectorBetween(acc, up) * (accWeight * (dt / ESTIMATE_NOMINAL_DT));
+	Vector correction = Vector::rotationVectorBetween(acc, up) *
+		(accWeight * correctionConfidence * (dt / ESTIMATE_NOMINAL_DT));
 
 	// apply correction
 	attitude = Quaternion::rotate(attitude, Quaternion::fromRotationVector(correction));

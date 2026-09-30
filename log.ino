@@ -14,6 +14,7 @@ extern float motors[4], dt, thrustTarget, motorMixScale;
 extern Vector gyro, acc;
 extern int mode;
 extern PID rollRatePID, pitchRatePID, yawRatePID;
+extern void recordDescentCalibrationSample();
 
 static FlightLogStore flightLog;
 static portMUX_TYPE logBufferMux = portMUX_INITIALIZER_UNLOCKED;
@@ -106,6 +107,7 @@ size_t readFrozenLogBytes(uint32_t generation, uint32_t ofs, uint8_t *destinatio
     return status.state == FROZEN && status.generation == generation ? copied : 0;
 }
 void logData() {
+    recordDescentCalibrationSample();
     const uint64_t now = esp_timer_get_time();
     static bool wasArmed = false;
     portENTER_CRITICAL(&logBufferMux);

@@ -1,0 +1,52 @@
+#pragma once
+
+#include <math.h>
+#include <stdint.h>
+
+// Sensor feedback contracts for later altitude and near-ground control work.
+// These interfaces intentionally do not imply that a sensor is installed or
+// that its data is currently used by the estimator or landing controller.
+struct BarometerSample {
+	float pressurePa = 0.0f;
+	float temperatureC = 0.0f;
+	float altitudeMeters = 0.0f;
+	uint32_t timestampUs = 0;
+	bool valid = false;
+};
+
+struct DownwardRangeSample {
+	float distanceMeters = 0.0f;
+	uint8_t quality = 0;
+	uint32_t timestampUs = 0;
+	bool valid = false;
+};
+
+inline bool sensorSampleFresh(uint32_t nowUs, uint32_t timestampUs, uint32_t maxAgeUs) {
+	return (uint32_t)(nowUs - timestampUs) <= maxAgeUs;
+}
+
+inline bool barometerSampleUsable(const BarometerSample &sample, uint32_t nowUs,
+	uint32_t maxAgeUs) {
+	return sample.valid && isfinite(sample.pressurePa) && sample.pressurePa > 0.0f &&
+		isfinite(sample.altitudeMeters) && sensorSampleFresh(nowUs, sample.timestampUs, maxAgeUs);
+}
+
+inline bool downwardRangeSampleUsable(const DownwardRangeSample &sample, uint32_t nowUs,
+	uint32_t maxAgeUs, uint8_t minimumQuality) {
+	return sample.valid && isfinite(sample.distanceMeters) && sample.distanceMeters > 0.0f &&
+		sample.quality >= minimumQuality && sensorSampleFresh(nowUs, sample.timestampUs, maxAgeUs);
+}
+
+class BarometerInterface {
+public:
+	virtual ~BarometerInterface() = default;
+	virtual bool begin() = 0;
+	virtual bool readSample(BarometerSample &sample) = 0;
+};
+
+class DownwardRangeInterface {
+public:
+	virtual ~DownwardRangeInterface() = default;
+	virtual bool begin() = 0;
+	virtual bool readSample(DownwardRangeSample &sample) = 0;
+};

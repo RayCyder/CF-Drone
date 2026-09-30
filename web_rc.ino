@@ -13,6 +13,7 @@
 #include "system_log.h"
 #include "web_rc_input.h"
 #include "open_loop_sequence.h"
+#include "descent_calibration.h"
 #include "control.h"
 #include "flight_log.h"
 
@@ -78,6 +79,16 @@ extern bool armed;
 extern bool motorsActive();
 extern void descend();
 extern bool isControlledLandingActive();
+extern bool startDescentCalibration();
+extern bool stopDescentCalibration();
+extern void clearDescentCalibration();
+extern DescentCalibrationSummary getDescentCalibrationSummary();
+extern bool copyDescentCalibrationSample(uint16_t index, DescentCalibrationSample &sample);
+extern bool setParameter(const char *name, float value);
+extern float getParameter(const char *name);
+extern bool saveParameterNow(const char *name);
+extern bool isParameterDirty(const char *name);
+extern bool parameterPersistenceReady();
 extern float webRCThrottleScale, webRCStickScale, webRCYawScale;
 extern float stickDeadzone, throttleDeadzone;
 extern WebServer webRCServer;
@@ -94,6 +105,23 @@ static const char *flightLogStateName(FlightLogState state) {
         case FROZEN: return "FROZEN";
         default: return "UNKNOWN";
     }
+}
+
+static const char *descentCalibrationStateName(DescentCalibrationState state) {
+    switch (state) {
+        case DESCENT_CALIBRATION_RECORDING: return "recording";
+        case DESCENT_CALIBRATION_COMPLETE: return "complete";
+        case DESCENT_CALIBRATION_ABORTED: return "aborted";
+        default: return "empty";
+    }
+}
+
+static bool parseCalibrationValueArg(float &value) {
+    const String text = webRCServer.arg("value");
+    if (text.isEmpty()) return false;
+    char *end = nullptr;
+    value = strtof(text.c_str(), &end);
+    return end != text.c_str() && *end == '\0' && isfinite(value);
 }
 
 static bool appendCsvFloat(char *line, size_t capacity, int &used, float value, bool first) {
@@ -313,6 +341,29 @@ WebServer webRCServer(80);          // 主服务器：80端口（标准HTTP，�
 extern bool isWiFiConfigPortalActive();
 extern bool configWiFi(bool ap, const char *ssid, const char *password);
 extern void scheduleWiFiRestart();
+extern const char *wifiConfigLastError();
+extern int getWiFiProfileCount();
+extern bool getWiFiProfileSsid(int index, char *destination, size_t capacity);
+extern bool removeWiFiProfile(const char *ssid);
+extern size_t getWiFiProfileStorageUsedBytes();
+extern size_t getWiFiProfileStorageTotalBytes();
+
+static String wifiJsonQuote(const char *value) {
+    String result = "\"";
+    if (value) {
+        for (const uint8_t *p = (const uint8_t *)value; *p; ++p) {
+            const uint8_t c = *p;
+            if (c == '"' || c == '\\') { result += '\\'; result += (char)c; }
+            else if (c < 0x20) {
+                char escaped[7];
+                snprintf(escaped, sizeof(escaped), "\\u%04x", c);
+                result += escaped;
+            } else result += (char)c;
+        }
+    }
+    result += '"';
+    return result;
+}
 #endif
 
 // ------旧PCB印刷地址访问 :8080 → 301跳转到80端口；旧地址全部淘汰后可删除------------
@@ -751,6 +802,19 @@ void setupWebRC() {
     webRCServer.on("/wifi", HTTP_GET, []() {
         webRCServer.send_P(200, "text/html; charset=utf-8", wifiConfigHtml);
     });
+    webRCServer.on("/wifi/profiles", HTTP_GET, []() {
+        String json = "{\"profiles\":[";
+        const int count = getWiFiProfileCount();
+        for (int i = 0; i < count; ++i) {
+            char ssid[33] = {};
+            if (!getWiFiProfileSsid(i, ssid, sizeof(ssid))) continue;
+            if (json[json.length() - 1] != '[') json += ',';
+            json += "{\"ssid\":" + wifiJsonQuote(ssid) + ",\"priority\":" + String(i + 1) + "}";
+        }
+        json += "],\"limit\":4,\"storage_used\":" + String((unsigned)getWiFiProfileStorageUsedBytes()) +
+            ",\"storage_total\":" + String((unsigned)getWiFiProfileStorageTotalBytes()) + "}";
+        webRCServer.send(200, "application/json", json);
+    });
     webRCServer.on("/telemetry", HTTP_GET, []() {
         webRCServer.send_P(200, "text/html; charset=utf-8", telemetryHtml);
     });
@@ -808,11 +872,25 @@ void setupWebRC() {
             return;
         }
         if (!configWiFi(false, ssid.c_str(), password.c_str())) {
-            webRCServer.send(500, "application/json", "{\"ok\":0,\"message\":\"保存失败：飞控未能验证配置写入，请重试；本次不会重启。\"}");
+            const char *reason = wifiConfigLastError();
+            String message = "保存失败（" + String(reason) + "）；飞控未重启。";
+            String json = "{\"ok\":0,\"reason\":" + wifiJsonQuote(reason) + ",\"message\":" + wifiJsonQuote(message.c_str()) + "}";
+            webRCServer.send(500, "application/json", json);
             return;
         }
-        webRCServer.send(200, "application/json", "{\"ok\":1,\"message\":\"配置已保存，飞控即将重启。请稍后将手机连接到同一路由器。\"}");
+        webRCServer.send(200, "application/json", "{\"ok\":1,\"message\":\"网络已加入优先列表（最多4个），新添加的网络优先尝试。飞控即将重启。\"}");
         scheduleWiFiRestart();
+    });
+    webRCServer.on("/wifi/remove", HTTP_POST, []() {
+        const String ssid = webRCServer.arg("ssid");
+        if (!removeWiFiProfile(ssid.c_str())) {
+            const char *reason = wifiConfigLastError();
+            String message = "删除失败（" + String(reason) + "）。";
+            String json = "{\"ok\":0,\"reason\":" + wifiJsonQuote(reason) + ",\"message\":" + wifiJsonQuote(message.c_str()) + "}";
+            webRCServer.send(500, "application/json", json);
+            return;
+        }
+        webRCServer.send(200, "application/json", "{\"ok\":1,\"message\":\"已删除网络配置。\"}");
     });
 #endif
     webRCServer.on("/web_rc",           HTTP_POST, handleWebRCRequest);
@@ -939,6 +1017,119 @@ void setupWebRC() {
             (unsigned)(index < count ? index + 1 : count), totalMs / 1000.0,
             (unsigned long)revision, pending ? "true" : "false", reason, (int)armed, mode);
         webRCServer.send(200, "application/json", response);
+    });
+
+    webRCServer.on("/descent-calibration/start", HTTP_POST, []() {
+        portENTER_CRITICAL(&openLoopMux);
+        const bool routeBusy = openLoopState == OPEN_LOOP_STATE_RUNNING ||
+            openLoopState == OPEN_LOOP_STATE_START_PENDING || openLoopState == OPEN_LOOP_STATE_LANDING;
+        portEXIT_CRITICAL(&openLoopMux);
+        if (routeBusy || !armed || mode != STAB || isControlledLandingActive()) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires_armed_manual_stab_flight\"}");
+            return;
+        }
+        if (!startDescentCalibration()) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"capture_already_active_or_unavailable\"}");
+            return;
+        }
+        webRCServer.send(202, "application/json", "{\"ok\":1,\"state\":\"recording\"}");
+    });
+    webRCServer.on("/descent-calibration/stop", HTTP_POST, []() {
+        if (!stopDescentCalibration()) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"capture_not_recording\"}");
+            return;
+        }
+        const DescentCalibrationSummary summary = getDescentCalibrationSummary();
+        char response[192];
+        snprintf(response, sizeof(response),
+            "{\"ok\":1,\"state\":\"%s\",\"samples\":%u,\"duration_ms\":%lu}",
+            descentCalibrationStateName(summary.state), (unsigned)summary.sampleCount,
+            (unsigned long)summary.durationMs);
+        webRCServer.send(200, "application/json", response);
+    });
+    webRCServer.on("/descent-calibration/clear", HTTP_POST, []() {
+        if (armed || motorsActive()) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires_disarmed_motors_stopped\"}");
+            return;
+        }
+        clearDescentCalibration();
+        webRCServer.send(200, "application/json", "{\"ok\":1,\"state\":\"empty\"}");
+    });
+    webRCServer.on("/descent-calibration/status", HTTP_GET, []() {
+        const DescentCalibrationSummary summary = getDescentCalibrationSummary();
+        char response[320];
+        snprintf(response, sizeof(response),
+            "{\"state\":\"%s\",\"reason\":\"%s\",\"samples\":%u,\"duration_ms\":%lu,"
+            "\"usable\":%s,\"median_thrust\":%.3f,\"mean_battery_v\":%.3f,\"max_tilt_deg\":%.2f,"
+            "\"thrust_spread\":%.3f,\"faults\":%u,\"armed\":%s,\"mode\":%d}",
+            descentCalibrationStateName(summary.state), summary.reason ? summary.reason : "unknown",
+            (unsigned)summary.sampleCount, (unsigned long)summary.durationMs,
+            summary.usable ? "true" : "false", summary.medianThrust, summary.meanBatteryV,
+            summary.maxTiltDeg, summary.thrustP90MinusP10, (unsigned)summary.faults,
+            armed ? "true" : "false", mode);
+        webRCServer.send(200, "application/json", response);
+    });
+    webRCServer.on("/descent-calibration/save", HTTP_POST, []() {
+        float value;
+        if (armed || motorsActive() || !parameterPersistenceReady() ||
+            !parseCalibrationValueArg(value) || !isfinite(value) || value < 0.05f || value > 0.5f) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires_valid_calibration_and_disarmed_persistent_storage\"}");
+            return;
+        }
+        if (!setParameter("SF_DESCEND_THRUST", value) || !saveParameterNow("SF_DESCEND_THRUST")) {
+            webRCServer.send(500, "application/json", "{\"ok\":0,\"error\":\"parameter_save_not_queued\"}");
+            return;
+        }
+        char response[96];
+        snprintf(response, sizeof(response), "{\"ok\":1,\"pending\":%s,\"value\":%.3f}",
+            isParameterDirty("SF_DESCEND_THRUST") ? "true" : "false", getParameter("SF_DESCEND_THRUST"));
+        webRCServer.send(202, "application/json", response);
+    });
+    webRCServer.on("/descent-calibration/save-status", HTTP_GET, []() {
+        float requested;
+        if (!parseCalibrationValueArg(requested) || requested < 0.05f || requested > 0.5f) {
+            webRCServer.send(400, "application/json", "{\"ok\":0,\"error\":\"invalid_value\"}");
+            return;
+        }
+        const float current = getParameter("SF_DESCEND_THRUST");
+        const bool dirty = isParameterDirty("SF_DESCEND_THRUST");
+        char response[128];
+        snprintf(response, sizeof(response), "{\"ok\":1,\"saved\":%s,\"dirty\":%s,\"value\":%.3f}",
+            (!dirty && fabsf(current - requested) < 0.0005f) ? "true" : "false",
+            dirty ? "true" : "false", current);
+        webRCServer.send(200, "application/json", response);
+    });
+    webRCServer.on("/descent-calibration.csv", HTTP_GET, []() {
+        if (armed || motorsActive()) {
+            webRCServer.send(409, "text/plain", "motors active; disarm before downloading calibration data\n");
+            return;
+        }
+        const DescentCalibrationSummary summary = getDescentCalibrationSummary();
+        if (summary.state != DESCENT_CALIBRATION_COMPLETE && summary.state != DESCENT_CALIBRATION_ABORTED) {
+            webRCServer.send(409, "text/plain", "no completed calibration capture\n");
+            return;
+        }
+        WiFiClient client = webRCServer.client();
+        client.setNoDelay(true);
+        client.setTimeout(100);
+        client.print("HTTP/1.1 200 OK\r\nContent-Type: text/csv; charset=utf-8\r\n");
+        client.print("Cache-Control: no-store\r\nConnection: close\r\n");
+        client.printf("X-Calibration-Rows: %u\r\n", (unsigned)summary.sampleCount);
+        client.print("Content-Disposition: attachment; filename=\"cf-drone-descent-calibration.csv\"\r\n\r\n");
+        client.print("elapsed_ms,thrust_target,battery_v,roll_deg,pitch_deg,rc_throttle,faults,flight_mode,control_source\n");
+        char line[160];
+        for (uint16_t i = 0; i < summary.sampleCount && client.connected(); ++i) {
+            DescentCalibrationSample sample;
+            if (!copyDescentCalibrationSample(i, sample)) break;
+            const int length = snprintf(line, sizeof(line), "%lu,%.2f,%.3f,%.2f,%.2f,%.4f,%u,%u,%u\n",
+                (unsigned long)sample.elapsedMs, sample.thrustCenti / 100.0f, sample.batteryMv / 1000.0f,
+                sample.rollCentiDeg / 100.0f, sample.pitchCentiDeg / 100.0f,
+                sample.rcThrottleCenti / 10000.0f, (unsigned)sample.faults,
+                (unsigned)sample.mode, (unsigned)sample.controlSource);
+            if (length <= 0 || length >= (int)sizeof(line) || client.write((const uint8_t *)line, length) != (size_t)length) break;
+            if ((i & 0x0f) == 0x0f) vTaskDelay(pdMS_TO_TICKS(1));
+        }
+        client.stop();
     });
 
     webRCServer.on("/console", HTTP_GET, []() {
