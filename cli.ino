@@ -18,7 +18,11 @@ static uint32_t serialLogGeneration = 0, serialLogRows = 0, serialLogRow = 0;
 static bool showMotd = true;
 static bool serialImuCaptureActive = false;
 static bool serialImuCaptureIncludeTemp = false;
+static bool serialImuCaptureHeaderPending = false;
 static uint16_t serialImuCaptureRow = 0;
+static char serialImuCaptureLine[128];
+static size_t serialImuCaptureLineLength = 0;
+static size_t serialImuCaptureLineOffset = 0;
 static ConsoleOutputQueue serialConsoleOutputQueue;
 static portMUX_TYPE serialConsoleOutputMux = portMUX_INITIALIZER_UNLOCKED;
 extern ImuCaptureBuffer imuCapture;
@@ -255,12 +259,10 @@ void doCommand(String str, bool echo = false) {
 			} else {
 				serialImuCaptureRow = 0;
 				serialImuCaptureIncludeTemp = arg0 == "dump-temp";
+				serialImuCaptureHeaderPending = true;
+				serialImuCaptureLineLength = 0;
+				serialImuCaptureLineOffset = 0;
 				serialImuCaptureActive = true;
-				if (serialImuCaptureIncludeTemp) {
-					print("time_us,gyro_x_rad_s,gyro_y_rad_s,gyro_z_rad_s,acc_x_m_s2,acc_y_m_s2,acc_z_m_s2,temperature_c\n");
-				} else {
-					print("time_us,gyro_x_rad_s,gyro_y_rad_s,gyro_z_rad_s,acc_x_m_s2,acc_y_m_s2,acc_z_m_s2\n");
-				}
 			}
 		} else {
 			print("usage: imucap start|stop|status|dump|dump-temp\n");
@@ -477,44 +479,77 @@ void serviceImuCaptureExport() {
 	if (!serialImuCaptureActive) return;
 	if (armed || motorsActive()) {
 		serialImuCaptureActive = false;
+		serialImuCaptureHeaderPending = false;
+		serialImuCaptureLineLength = 0;
+		serialImuCaptureLineOffset = 0;
 		return;
 	}
-	if (serialImuCaptureRow >= imuCapture.size()) {
+	if (serialImuCaptureHeaderPending) {
+		// Console text is drained before the CSV export. Wait until it has been
+		// queued to UART, then send the header through the same ordered stream;
+		// print() is asynchronous and could otherwise interleave with data rows.
+		portENTER_CRITICAL(&serialConsoleOutputMux);
+		const bool consoleOutputPending = serialConsoleOutputQueue.available() > 0;
+		portEXIT_CRITICAL(&serialConsoleOutputMux);
+		if (consoleOutputPending) return;
+		const char *header = serialImuCaptureIncludeTemp
+			? "time_us,gyro_x_rad_s,gyro_y_rad_s,gyro_z_rad_s,acc_x_m_s2,acc_y_m_s2,acc_z_m_s2,temperature_c\n"
+			: "time_us,gyro_x_rad_s,gyro_y_rad_s,gyro_z_rad_s,acc_x_m_s2,acc_y_m_s2,acc_z_m_s2\n";
+		serialImuCaptureLineLength = strlen(header);
+		memcpy(serialImuCaptureLine, header, serialImuCaptureLineLength);
+	}
+	if (!serialImuCaptureHeaderPending && serialImuCaptureLineLength == 0 &&
+		serialImuCaptureRow >= imuCapture.size()) {
 		serialImuCaptureActive = false;
 		const uint16_t exportedRows = imuCapture.size();
 		imuCapture.release();
-		Serial.printf("IMU_CAPTURE_DONE rows=%u\n", exportedRows);
+		print("IMU_CAPTURE_DONE rows=%u\n", exportedRows);
 		return;
+	}
+	if (!serialImuCaptureHeaderPending && serialImuCaptureLineLength == 0) {
+		ImuCaptureSample sample;
+		if (!imuCapture.copy(serialImuCaptureRow, sample)) {
+			serialImuCaptureActive = false;
+			return;
+		}
+		const char *format = serialImuCaptureIncludeTemp
+			? "%lu,%.6f,%.6f,%.6f,%.2f,%.2f,%.2f,%.2f\n"
+			: "%lu,%.6f,%.6f,%.6f,%.2f,%.2f,%.2f\n";
+		const int length = serialImuCaptureIncludeTemp ? snprintf(serialImuCaptureLine, sizeof(serialImuCaptureLine), format,
+			(unsigned long)sample.timeUs,
+			sample.gyroMicroRadPerSec[0] * 1.0e-6f,
+			sample.gyroMicroRadPerSec[1] * 1.0e-6f,
+			sample.gyroMicroRadPerSec[2] * 1.0e-6f,
+			sample.accCentiMetersPerSec2[0] * 0.01f,
+			sample.accCentiMetersPerSec2[1] * 0.01f,
+			sample.accCentiMetersPerSec2[2] * 0.01f,
+			sample.temperatureCentiC * 0.01f) : snprintf(serialImuCaptureLine, sizeof(serialImuCaptureLine), format,
+			(unsigned long)sample.timeUs,
+			sample.gyroMicroRadPerSec[0] * 1.0e-6f,
+			sample.gyroMicroRadPerSec[1] * 1.0e-6f,
+			sample.gyroMicroRadPerSec[2] * 1.0e-6f,
+			sample.accCentiMetersPerSec2[0] * 0.01f,
+			sample.accCentiMetersPerSec2[1] * 0.01f,
+			sample.accCentiMetersPerSec2[2] * 0.01f);
+		if (length <= 0 || length >= (int)sizeof(serialImuCaptureLine)) {
+			serialImuCaptureActive = false;
+			return;
+		}
+		serialImuCaptureLineLength = (size_t)length;
 	}
 	const int available = Serial.availableForWrite();
 	if (available <= 0) return;
-	ImuCaptureSample sample;
-	if (!imuCapture.copy(serialImuCaptureRow, sample)) {
-		serialImuCaptureActive = false;
-		return;
-	}
-	char line[128];
-	const char *format = serialImuCaptureIncludeTemp
-		? "%lu,%.6f,%.6f,%.6f,%.2f,%.2f,%.2f,%.2f\n"
-		: "%lu,%.6f,%.6f,%.6f,%.2f,%.2f,%.2f\n";
-	const int length = serialImuCaptureIncludeTemp ? snprintf(line, sizeof(line), format,
-		(unsigned long)sample.timeUs,
-		sample.gyroMicroRadPerSec[0] * 1.0e-6f,
-		sample.gyroMicroRadPerSec[1] * 1.0e-6f,
-		sample.gyroMicroRadPerSec[2] * 1.0e-6f,
-		sample.accCentiMetersPerSec2[0] * 0.01f,
-		sample.accCentiMetersPerSec2[1] * 0.01f,
-		sample.accCentiMetersPerSec2[2] * 0.01f,
-		sample.temperatureCentiC * 0.01f) : snprintf(line, sizeof(line), format,
-		(unsigned long)sample.timeUs,
-		sample.gyroMicroRadPerSec[0] * 1.0e-6f,
-		sample.gyroMicroRadPerSec[1] * 1.0e-6f,
-		sample.gyroMicroRadPerSec[2] * 1.0e-6f,
-		sample.accCentiMetersPerSec2[0] * 0.01f,
-		sample.accCentiMetersPerSec2[1] * 0.01f,
-		sample.accCentiMetersPerSec2[2] * 0.01f);
-	if (length > 0 && length < (int)sizeof(line) && available >= length &&
-		Serial.write((const uint8_t *)line, (size_t)length) == (size_t)length) {
-		++serialImuCaptureRow;
+	// Keep each UART write below 1 ms of wire time at 115200 baud. The UART
+	// driver can wait for its TX ring when a whole CSV row is written at once.
+	const size_t chunk = min((size_t)8, min((size_t)available,
+		serialImuCaptureLineLength - serialImuCaptureLineOffset));
+	if (!chunk) return;
+	if (Serial.write((const uint8_t *)serialImuCaptureLine + serialImuCaptureLineOffset, chunk) != chunk) return;
+	serialImuCaptureLineOffset += chunk;
+	if (serialImuCaptureLineOffset == serialImuCaptureLineLength) {
+		serialImuCaptureLineLength = 0;
+		serialImuCaptureLineOffset = 0;
+		if (serialImuCaptureHeaderPending) serialImuCaptureHeaderPending = false;
+		else ++serialImuCaptureRow;
 	}
 }
