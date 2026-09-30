@@ -29,10 +29,13 @@ struct Sample {
 };
 
 int main(int argc, char **argv) {
-	if (argc != 2 && argc != 5) return 2;
-	if (argc == 5) {
+	if (argc != 2 && argc != 9) return 2;
+	Vector injectedGyroBias;
+	if (argc == 9) {
 		const Vector initialEuler(radians(atof(argv[2])), radians(atof(argv[3])), radians(atof(argv[4])));
 		attitude = Quaternion::fromEuler(initialEuler);
+		accWeight = (float)atof(argv[5]);
+		injectedGyroBias = Vector((float)atof(argv[6]), (float)atof(argv[7]), (float)atof(argv[8]));
 	}
 	FILE *file = fopen(argv[1], "r");
 	if (!file) return 3;
@@ -53,12 +56,11 @@ int main(int argc, char **argv) {
 	levelWeight = 0.0f;
 	levelBiasGain = 0.0f;
 	levelGyroBias = Vector();
-	accWeight = 0.003f;
 	for (size_t i = 0; i < samples.size(); ++i) {
 		dt = i ? (uint32_t)(samples[i].timeUs - samples[i - 1].timeUs) * 1e-6f : 0.001f;
 		if (!(dt > 0.0f && dt < 0.01f)) dt = 0.001f;
 		t += dt;
-		gyro = samples[i].gyro;
+		gyro = samples[i].gyro + injectedGyroBias;
 		acc = samples[i].acc;
 		// The first 450 samples are stationary pre-roll. Replay the motor window
 		// as armed and motor-active so both estimators exercise airborne fusion.
