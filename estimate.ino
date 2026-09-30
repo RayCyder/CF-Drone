@@ -116,6 +116,13 @@ void applyAcc() {
 			? constrain(1.0f - stickDeflection / levelGateThreshold, 0.0f, 1.0f)
 			: (stickDeflection == 0.0f ? 1.0f : 0.0f);
 		correctionConfidence *= stickGate;
+		// The filtered norm protects against translational acceleration, but can
+		// hide short motor-vibration peaks. Fade gravity correction using the raw
+		// specific-force magnitude as an independent confidence signal.
+		const float rawNormTolerance = ONE_G * 0.1f;
+		const float rawNormConfidence = constrain(1.0f - fabsf(accNorm - ONE_G) / rawNormTolerance,
+			0.0f, 1.0f);
+		correctionConfidence *= rawNormConfidence;
 	}
 	if (correctionConfidence <= 0.0f) return;
 

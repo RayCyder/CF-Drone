@@ -8,9 +8,14 @@
 #ifndef ATTITUDE_ESTIMATOR_VQF
 #define ATTITUDE_ESTIMATOR_VQF 0
 #endif
+#ifndef VQF_TAU_ACC
+#define VQF_TAU_ACC 3.0
+#endif
 
 class VqfAttitudeEstimator {
 public:
+	VqfAttitudeEstimator() : filter(makeParams(), NOMINAL_SAMPLE_TIME) {}
+
 	void update(Quaternion &attitude, const Vector &gyro, const Vector &acc,
 		float dt, bool allowGravityUpdate) {
 		if (!initialized) {
@@ -37,8 +42,13 @@ public:
 
 private:
 	static constexpr vqf_real_t NOMINAL_SAMPLE_TIME = 0.001;
-	BasicVQF filter{NOMINAL_SAMPLE_TIME};
+	BasicVQF filter;
 	bool initialized = false;
+	static BasicVQFParams makeParams() {
+		BasicVQFParams params;
+		params.tauAcc = VQF_TAU_ACC;
+		return params;
+	}
 
 	void seedFromAttitude(const Quaternion &attitude) {
 		BasicVQFState state = filter.getState();
