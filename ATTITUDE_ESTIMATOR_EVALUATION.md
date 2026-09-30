@@ -200,4 +200,10 @@ ESP32-D0WD-V3 构建数据（含后续原始模长置信度更新）：默认固
 
 从飞控 `/diag/trace.csv` 读取的 32 行实时环路 trace 已保存为 [loop-overrun-trace-20261001.csv](data/attitude/loop-overrun-trace-20261001.csv)。最大 `dt` 为 `79.668 ms`；三个最大事件的 `serial_input` 阶段分别占 `78.948 ms`、`67.405 ms`、`53.520 ms`。另有两个事件的 `imu_wait` 阶段分别为 `54.847 ms`、`51.368 ms`，显著超过驱动请求的 5 ms 等待上限。`estimate` 阶段最大 `1.330 ms`，本组 trace 不支持将卡顿归因于姿态算法计算量。`fault_mask=128` 是故障活动位，置位后可保持最多 10 秒，不能按每行出现次数统计新的超时。
 
-`serial_input` 汇总了 CLI 命令处理、日志导出等工作；其中 `print()` 原先同步调用 `Serial.print()`，大量 `diag`/状态文本在 115200 baud 下会占用数十毫秒。现在 CLI 文本进入 1,536 字节固定环形缓冲区，主循环每轮只按 UART 可用空间、最多 64 字节发送；新增回归覆盖环形队列顺序与容量。该修复针对已观测到的串口输出卡顿，仍需刷入此构建后重抓 trace 验证。`imu_wait` 的 50 ms 级事件尚未归因；应结合 scheduler trace 和 IMU DRDY/软件定时唤醒继续定位，不能把它归为互补滤波或 VQF 的计算负载。
+`serial_input` 汇总了 CLI 命令处理、日志导出等工作；其中 `print()` 原先同步调用 `Serial.print()`，大量 `diag`/状态文本在 115200 baud 下会占用数十毫秒。现在 CLI 文本进入 1,536 字节固定环形缓冲区，主循环每轮只按 UART 可用空间、最多 64 字节发送；新增回归覆盖环形队列顺序与容量。当前已刷入构建中包含该限额，但本次新的启动 trace 主要捕获了 NVS callback；历史串口导出造成的超长 `serial_input` 修复还需用无 CLI 输出的对照窗口单独验收。此前观测到的 `imu_wait` 长事件现有一次已由 SPI flash callback 解释，其他历史事件仍需继续区分，不能归为互补滤波或 VQF 的计算负载。
+
+### NVS 闪存操作导致的启动期主循环停顿（2026-10-01）
+
+刷入最长 SPI-flash callback 保留版后，重现并直接关联了一次启动期停顿：同一 loop 序号的 `dt_us=52.255 ms`、`imu_wait_us=51.001 ms`、`estimate_us=203 us`；调度器记录 `loopTask` 被 `ipc1` 排除 `50.903 ms`，闪存 cache callback 自身运行 `50.882 ms`。IPC 调用方是 `nvs_maintenance`，调用点位于 `spi_flash_disable_interrupts_caches_and_other_cpu()`。原始数据见 [loop trace](data/attitude/loop-overrun-nvs-reproduced-20261001.csv)、[task-switch trace](data/attitude/task-switch-nvs-reproduced-20261001.csv) 和 [flash IPC trace](data/attitude/flash-ipc-nvs-reproduced-20261001.csv)。采集时 `armed=false`、油门为零、电压 `4.08 V`；随后活动故障位恢复为 0。
+
+该证据将这次启动期长停顿归因于已有的 NVS 持久化维护，不支持归因于姿态估计计算。当前持久化策略只在未解锁且电机停止时写入，并在写入期间及成功后 10 秒阻止解锁；所以这不是飞行中滤波器计算超时的证据，也不构成更换互补滤波器、启用 VQF 或调整其增益的理由。历史上约 6,055 秒运行时出现的另外两次长 `imu_wait` 仍待复现并定位；估计器改进继续以真值轨迹和受控机械振动下的误差指标为准。
