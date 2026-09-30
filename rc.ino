@@ -30,6 +30,13 @@ float rollChannel = NAN, pitchChannel = NAN, throttleChannel = NAN, yawChannel =
 #define CRSF_MAX_FRAME_SIZE 64
 static uint8_t crsfBuf[CRSF_MAX_FRAME_SIZE];
 static int     crsfBufLen = 0;
+// Diagnostic counters distinguish a live receiver UART from accepted RC channel
+// updates. They are read only by the disarmed CLI and do not affect control.
+uint32_t rcSerialBytesRead = 0;
+uint32_t rcProtocolFramesValid = 0;
+uint32_t rcChannelFramesAccepted = 0;
+uint32_t rcCrcRejects = 0;
+uint32_t rcResyncBytesDropped = 0;
 
 // CRC8 查表（poly 0xD5），覆盖 TYPE + PAYLOAD
 static uint8_t crsf_crc8(const uint8_t *buf, int len) {
@@ -61,11 +68,13 @@ static bool parseCRSFBuffer() {
 	while (crsfBufLen >= 4) {
 		// CRSF 帧头地址字节：0xC8=飞控, 0x00=广播, 0xEE=发射机
 		if (crsfBuf[0] != 0xC8 && crsfBuf[0] != 0x00 && crsfBuf[0] != 0xEE) {
+			++rcResyncBytesDropped;
 			memmove(crsfBuf, crsfBuf + 1, --crsfBufLen);
 			continue;
 		}
 		uint8_t frameLen = crsfBuf[1]; // TYPE + PAYLOAD + CRC 字节数
 		if (frameLen < 2 || frameLen > 62) {
+			++rcResyncBytesDropped;
 			memmove(crsfBuf, crsfBuf + 1, --crsfBufLen);
 			continue;
 		}
@@ -76,12 +85,16 @@ static bool parseCRSFBuffer() {
 		uint8_t calcCrc  = crsf_crc8(&crsfBuf[2], frameLen - 1);
 		uint8_t frameCrc = crsfBuf[2 + frameLen - 1];
 		if (calcCrc != frameCrc) {
+			++rcCrcRejects;
+			++rcResyncBytesDropped;
 			memmove(crsfBuf, crsfBuf + 1, --crsfBufLen);
 			continue;
 		}
+		++rcProtocolFramesValid;
 
 		// RC Channels Packed 帧（类型 0x16，payload = 22 字节，frameLen = 24）
 		if (crsfBuf[2] == 0x16 && frameLen == 24) {
+			++rcChannelFramesAccepted;
 			const uint8_t *d = &crsfBuf[3]; // payload 起始
 			channels[ 0] = ((uint16_t)d[ 0]       | (uint16_t)d[ 1] << 8) & 0x7FF;
 			channels[ 1] = ((uint16_t)d[ 1] >>  3 | (uint16_t)d[ 2] << 5) & 0x7FF;
@@ -149,6 +162,7 @@ bool readRC() {
 		while (BOARD_RC_SERIAL.available() &&
 		       crsfBufLen < (int)sizeof(crsfBuf)) {
 			crsfBuf[crsfBufLen++] = BOARD_RC_SERIAL.read();
+			++rcSerialBytesRead;
 		}
 		if (parseCRSFBuffer()) {
 			normalizeRC();
@@ -161,6 +175,8 @@ bool readRC() {
 		if (rc.read()) {
 			SBUSData data = rc.data();
 			for (int i = 0; i < 16; i++) channels[i] = data.ch[i];
+			++rcProtocolFramesValid;
+			++rcChannelFramesAccepted;
 			normalizeRC();
 			controlTime = t;
 			return true;

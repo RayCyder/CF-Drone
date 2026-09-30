@@ -36,6 +36,9 @@ extern double t;
 extern double controlTime;
 extern uint16_t channels[16];
 extern float controlRoll, controlPitch, controlThrottle, controlYaw, controlMode;
+extern int rcRxPin, rcProtocol, rcBaud;
+extern uint32_t rcSerialBytesRead, rcProtocolFramesValid, rcChannelFramesAccepted;
+extern uint32_t rcCrcRejects, rcResyncBytesDropped;
 extern float motors[4];
 extern int mode;
 extern bool armed;
@@ -45,6 +48,9 @@ void setMavlinkConsoleCommandOutput(bool enabled) { mavlinkConsoleCommand = enab
 extern bool requestArm();
 extern void disarm();
 extern bool setFlightMode(int requestedMode);
+#if WEB_RC_ENABLED
+extern bool isUsingWebRC();
+#endif
 
 const char* motd =
 "CLI命令菜单，输入相应命令，回车后执行:\n"
@@ -245,6 +251,17 @@ void doCommand(String str, bool echo = false) {
 		print("time: %.1f\n", controlTime);
 		print("mode: %s\n", getModeName());
 		print("armed: %d\n", armed);
+		print("RC_LINK protocol=%s rx_pin=%d baud=%d rx_bytes=%lu valid_frames=%lu channel_frames=%lu crc_rejects=%lu resync_bytes=%lu control_age_s=%.3f",
+			rcProtocol == 1 ? "CRSF" : "SBUS", rcRxPin, rcBaud,
+			(unsigned long)rcSerialBytesRead, (unsigned long)rcProtocolFramesValid,
+			(unsigned long)rcChannelFramesAccepted, (unsigned long)rcCrcRejects,
+			(unsigned long)rcResyncBytesDropped,
+			controlTime > 0 ? (float)(t - controlTime) : -1.0f);
+#if WEB_RC_ENABLED
+		print(" web_rc_active=%u\n", isUsingWebRC() ? 1 : 0);
+#else
+		print(" web_rc_active=0\n");
+#endif
 	} else if (command == "wifi") {
 #if WIFI_ENABLED
 		printWiFiInfo();
