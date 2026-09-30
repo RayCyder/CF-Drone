@@ -188,8 +188,10 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
 .buttons-container{flex:.55;display:flex;flex-direction:column;gap:10px;padding:12px;background:rgba(0,0,0,.4);border-radius:20px;border:2px solid rgba(150,150,150,.3);box-shadow:inset 0 0 20px rgba(0,0,0,.5)}
 #route-page-button{right:92px}
 #descent-calibration-button{right:174px;border-color:rgba(255,160,60,.65);background:rgba(255,140,0,.16);color:#ffd2a3}
+#vibration-calibration-button{right:266px;border-color:rgba(110,190,255,.65);background:rgba(30,120,200,.16);color:#c4e6ff}
 .route-page{position:fixed;inset:0;z-index:1001;display:none;background:#252525;overflow-y:auto;padding:clamp(14px,4vw,28px);touch-action:pan-y}
 .descent-calibration-page{position:fixed;inset:0;z-index:1002;display:none;background:#252525;overflow-y:auto;padding:clamp(14px,4vw,28px);touch-action:pan-y}
+.vibration-calibration-page{position:fixed;inset:0;z-index:1003;display:none;background:#252525;overflow-y:auto;padding:clamp(14px,4vw,28px);touch-action:pan-y}
 .descent-calibration-shell{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
 .calibration-card{border:1px solid rgba(255,255,255,.14);border-radius:12px;padding:14px;background:rgba(0,0,0,.25)}
 .calibration-card p,.calibration-card small{color:#c4cbd3;font-size:.85rem;line-height:1.5}
@@ -243,8 +245,9 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   .header h1{font-size:clamp(0.85rem,3.5vw,1.1rem)}
   #route-page-button{right:78px}
   #descent-calibration-button{right:148px}
+  #vibration-calibration-button{right:222px}
   .self-check-button{top:6px;right:6px;padding:5px 7px;font-size:.68rem}
-  #route-page-button,#descent-calibration-button{padding:5px 7px;font-size:.68rem}
+  #route-page-button,#descent-calibration-button,#vibration-calibration-button{padding:5px 7px;font-size:.68rem}
   .status-bar{gap:5px;flex-wrap:wrap;justify-content:center}
   .status-item{font-size:clamp(0.6rem,2.5vw,0.7rem);padding:2px 5px}
 }
@@ -275,6 +278,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
     <button id="self-check-button" class="self-check-button" onclick="openSelfCheck()">自检状态</button>
     <button id="route-page-button" class="self-check-button" onclick="openRoutePage()">开环序列</button>
     <button id="descent-calibration-button" class="self-check-button" onclick="handleDescentCalibrationEntry()">迫降标定</button>
+    <button id="vibration-calibration-button" class="self-check-button" onclick="openVibrationCalibrationPage()">振动校准</button>
     <div class="status-bar">
       <div class="status-item"><span class="status-dot" id="status-dot"></span><span id="connection-text">连接中...</span></div>
       <div class="status-item" id="armed-status-item" style="background:rgba(255,51,51,0.15)"><span id="armed-status" style="color:#ff6666">已上锁</span></div>
@@ -371,6 +375,16 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <div class="calibration-card"><strong>能力边界</strong><p>这是经验推力标定，不是自动着陆。迫降仍是定推力下降；飞控没有高度、垂直速度或触地反馈，不能据此保证下降速度或避免撞地。飞手必须保持接管能力，并在触地后明确上锁。电池、载荷、螺旋桨、风和地面效应变化都会影响结果。</p></div>
     </div>
   </section>
+  <section id="vibration-calibration-page" class="vibration-calibration-page" aria-hidden="true">
+    <div class="descent-calibration-shell">
+      <div class="diagnostic-top"><h2>四电机振动校准</h2><div class="diagnostic-actions"><button onclick="closeVibrationCalibrationPage()">返回遥控器</button></div></div>
+      <div class="calibration-card"><strong>开始前：拆下全部桨叶并固定机体</strong><p>飞控保持上锁。系统将按 FR、FL、RR、RL 顺序分别以现有 30% 输出运行 3 秒；每路记录约 1 秒 IMU 数据。关闭页面不会中断流程，固件会在每路 3 秒后自动停止电机。</p><small>请勿触碰机体或电机。本测试比较无桨状态下的振动，不能代替带桨飞行的姿态跟踪验证，也不会自动修改姿态算法参数。</small></div>
+      <div id="vibration-calibration-status" class="route-status" role="status">正在读取校准状态…</div>
+      <div class="calibration-actions"><button id="vibration-calibration-start" class="primary" onclick="startVibrationCalibration()">开始四电机采集</button><button id="vibration-calibration-download" onclick="downloadVibrationCalibrationCsv()" disabled>下载行数表格 CSV</button></div>
+      <div class="calibration-card"><strong>逐电机结果</strong><div id="vibration-calibration-results" class="calibration-points">尚无结果。</div><p id="vibration-calibration-analysis" class="route-status">比较四个电机的加速度振动 RMS；偏高只表示优先复核机械安装、紧固和电机，不直接判定损坏。</p></div>
+      <div class="calibration-card"><strong>姿态算法评估边界</strong><p>该流程可筛查电机振动是否可能污染 IMU 输入。姿态算法的改进需另用静态、手动遥控飞行日志及可信姿态参考评估；仅凭单电机振动数据无法可靠地自动调节加速度计权重或滤波参数。</p></div>
+    </div>
+  </section>
   <!-- 版权页脚 -->
   <div class="footer"><a href="/wifi">Wi-Fi 设置</a> · <a href="/telemetry">实时日志</a> · <a href="https://oshwhub.com/songge8/project_qqqyfdkm" target="_blank">琛光无人机开源项目</a></div>
 </div>
@@ -413,6 +427,7 @@ let selfCheckRequestSequence = 0;
 let selfCheckHasData = false;
 let routeTimer = null;
 let descentCalibrationTimer = null;
+let vibrationCalibrationTimer = null;
 let descentCalibrationRecommendation = null;
 let descentCalibrationLatestStatus = null;
 const DESCENT_CALIBRATION_POINTS_KEY = 'cfDroneDescentCalibrationPointsV1';
@@ -609,6 +624,58 @@ function clearDescentCalibrationPoints(){
 function downloadDescentCalibrationCsv(){
   if(currentArmed){showToast('请先上锁后下载标定数据');return;}
   const link=document.createElement('a');link.href='/descent-calibration.csv';link.download='cf-drone-descent-calibration.csv';link.click();
+}
+function openVibrationCalibrationPage(){
+  const page=document.getElementById('vibration-calibration-page');page.style.display='block';page.setAttribute('aria-hidden','false');
+  refreshVibrationCalibrationStatus();
+}
+function closeVibrationCalibrationPage(){
+  const page=document.getElementById('vibration-calibration-page');page.style.display='none';page.setAttribute('aria-hidden','true');
+}
+function setVibrationCalibrationPolling(active){
+  if(active&&!vibrationCalibrationTimer)vibrationCalibrationTimer=setInterval(refreshVibrationCalibrationStatus,1000);
+  if(!active&&vibrationCalibrationTimer){clearInterval(vibrationCalibrationTimer);vibrationCalibrationTimer=null;}
+}
+function renderVibrationCalibrationResults(motors){
+  const complete=motors&&motors.length===4&&motors.every(item=>Number(item.samples)>0);
+  const root=document.getElementById('vibration-calibration-results');
+  if(!complete){root.textContent='尚无完整四路结果。';return;}
+  const values=motors.map(item=>Number(item.accel_rms)).sort((a,b)=>a-b);const median=(values[1]+values[2])/2;
+  const outliers=motors.filter(item=>median>0&&Number(item.accel_rms)>median*1.5);
+  root.innerHTML='<div><strong>电机　加速度 RMS (m/s²)　陀螺仪 RMS (rad/s)　样本数　相对中位数</strong></div>'+motors.map(item=>{
+    const ratio=median>0?Number(item.accel_rms)/median:0;const flag=median>0&&ratio>1.5;
+    return `<div>${item.name}　${Number(item.accel_rms).toFixed(4)}　${Number(item.gyro_rms).toFixed(5)}　${item.samples}　${median>0?ratio.toFixed(2)+'×':''}${flag?'（优先复核）':''}</div>`;
+  }).join('');
+  document.getElementById('vibration-calibration-analysis').textContent=outliers.length
+    ? `${outliers.map(item=>item.name).join('、')} 的加速度 RMS 高于四路中位数 1.5 倍，建议优先复核机械安装、紧固和电机后复测。该相对阈值用于筛查，不是故障判据。`
+    : '未发现高于四路中位数 1.5 倍的电机；这不等同于绝对振动合格，也不能排除带桨或飞行状态下的问题。';
+}
+async function refreshVibrationCalibrationStatus(){
+  try{
+    const response=await fetch('/vibration-calibration/status',{cache:'no-store'});if(!response.ok)throw new Error('状态读取失败');
+    const data=await response.json();
+    const names=['FR','FL','RR','RL'];
+    const stateText=({empty:'尚无记录',queued:'已排队，准备启动',running:'正在采集',complete:'四路采集完成',aborted:'采集已中止'})[data.state]||'状态未知';
+    const step=Math.min(Number(data.step)||0,4);
+    document.getElementById('vibration-calibration-status').textContent=`${stateText}；已完成 ${step}/4 路${data.state==='running'?`，当前 ${names[Math.min(step,3)]} 电机测试中`:''}${data.state==='aborted'?'；原因：'+data.reason:''}`;
+    document.getElementById('vibration-calibration-start').disabled=data.state==='queued'||data.state==='running'||!connectionOk||currentArmed;
+    document.getElementById('vibration-calibration-download').disabled=data.state!=='complete'||currentArmed;
+    renderVibrationCalibrationResults(data.motors);
+    if(data.state==='queued'||data.state==='running')setVibrationCalibrationPolling(true);else setVibrationCalibrationPolling(false);
+  }catch(error){document.getElementById('vibration-calibration-status').textContent=error.message||'无法读取校准状态';}
+}
+async function startVibrationCalibration(){
+  if(!connectionOk||currentArmed){showToast('请连接飞控并保持上锁');return;}
+  if(!window.confirm('请确认：全部桨叶已拆除、机体已固定，周围无人且电机测试区域安全。现在启动 FR、FL、RR、RL 电机测试？'))return;
+  try{
+    const response=await fetch('/vibration-calibration/start',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({confirm:'1'})});
+    const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'无法开始采集');
+    setVibrationCalibrationPolling(true);refreshVibrationCalibrationStatus();
+  }catch(error){document.getElementById('vibration-calibration-status').textContent=error.message||'启动失败';}
+}
+function downloadVibrationCalibrationCsv(){
+  if(currentArmed){showToast('请先确认飞控已上锁');return;}
+  const link=document.createElement('a');link.href='/vibration-calibration.csv';link.download='cf-drone-vibration-calibration.csv';link.click();
 }
 async function uploadRoute(){
   if(routeStarting||routePending)return;

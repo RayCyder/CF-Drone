@@ -14,6 +14,7 @@
 #include "web_rc_input.h"
 #include "open_loop_sequence.h"
 #include "descent_calibration.h"
+#include "imu_capture.h"
 #include "control.h"
 #include "flight_log.h"
 
@@ -73,10 +74,31 @@ static bool openLoopUploadInProgress = false;
 static uint8_t openLoopState = OPEN_LOOP_STATE_EMPTY;
 static const char *openLoopReason = "empty";
 
+enum VibrationCalibrationState : uint8_t { VIBRATION_EMPTY, VIBRATION_QUEUED, VIBRATION_RUNNING, VIBRATION_COMPLETE, VIBRATION_ABORTED };
+struct VibrationMotorResult { float gyroRms; float accelRms; uint16_t samples; };
+static portMUX_TYPE vibrationCalibrationMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint8_t vibrationCalibrationState = VIBRATION_EMPTY;
+static volatile uint8_t vibrationCalibrationIndex = 0;
+static volatile bool vibrationCalibrationStartRequested = false;
+static volatile uint32_t vibrationCalibrationMotorStartedMs = 0;
+static volatile const char *vibrationCalibrationReason = "empty";
+static VibrationMotorResult vibrationCalibrationResults[4] = {};
+static const int vibrationMotorIds[4] = {MOTOR_FRONT_RIGHT, MOTOR_FRONT_LEFT, MOTOR_REAR_RIGHT, MOTOR_REAR_LEFT};
+static const char *vibrationMotorNames[4] = {"FR", "FL", "RR", "RL"};
+
 extern int mode;
 extern const int STAB, AUTO;
 extern bool armed;
 extern bool motorsActive();
+extern bool motorTestActive;
+extern bool motorOutputsOK;
+extern bool batteryBlocksArming();
+extern bool hasBlockingDiagnosticFault();
+extern bool isAccelCalibrationActive();
+extern void testMotor(int n);
+extern void cancelMotorTest();
+extern ImuCaptureBuffer imuCapture;
+extern const int MOTOR_REAR_LEFT, MOTOR_REAR_RIGHT, MOTOR_FRONT_RIGHT, MOTOR_FRONT_LEFT;
 extern void descend();
 extern bool isControlledLandingActive();
 extern bool startDescentCalibration();
@@ -178,6 +200,94 @@ static void startOpenLoopNow(uint32_t now) {
     openLoopCurrentDeadlineMs = now + openLoopBuffers[openLoopActiveBuffer][0].durationMs;
     openLoopState = OPEN_LOOP_STATE_RUNNING;
     setOpenLoopReason("running");
+}
+
+static bool vibrationRouteBusy() {
+    bool busy;
+    portENTER_CRITICAL(&openLoopMux);
+    busy = openLoopState == OPEN_LOOP_STATE_RUNNING || openLoopState == OPEN_LOOP_STATE_START_PENDING ||
+        openLoopState == OPEN_LOOP_STATE_LANDING;
+    portEXIT_CRITICAL(&openLoopMux);
+    return busy;
+}
+
+static void setVibrationCalibrationState(uint8_t state, const char *reason) {
+    portENTER_CRITICAL(&vibrationCalibrationMux);
+    vibrationCalibrationState = state;
+    vibrationCalibrationReason = reason;
+    portEXIT_CRITICAL(&vibrationCalibrationMux);
+}
+
+static void serviceVibrationCalibration() {
+    if (vibrationCalibrationState == VIBRATION_QUEUED && vibrationCalibrationStartRequested) {
+        vibrationCalibrationStartRequested = false;
+        if (armed || motorsActive() || !motorOutputsOK || isAccelCalibrationActive() ||
+            batteryBlocksArming() || hasBlockingDiagnosticFault() || vibrationRouteBusy() ||
+            !imuCapture.start(armed, motorsActive(), ESP.getFreeHeap())) {
+            setVibrationCalibrationState(VIBRATION_ABORTED, "preflight_failed");
+            return;
+        }
+        testMotor(vibrationMotorIds[vibrationCalibrationIndex]);
+        if (!motorTestActive) {
+            imuCapture.stop();
+            setVibrationCalibrationState(VIBRATION_ABORTED, "motor_test_rejected");
+            return;
+        }
+        vibrationCalibrationMotorStartedMs = millis();
+        setVibrationCalibrationState(VIBRATION_RUNNING, "running");
+        return;
+    }
+    if (vibrationCalibrationState != VIBRATION_RUNNING) return;
+    if (armed || batteryBlocksArming() || hasBlockingDiagnosticFault()) {
+        imuCapture.stop();
+        cancelMotorTest();
+        setVibrationCalibrationState(VIBRATION_ABORTED, "safety_state_changed");
+        return;
+    }
+    if (motorTestActive) {
+        if ((uint32_t)(millis() - vibrationCalibrationMotorStartedMs) > 4000U) {
+            imuCapture.stop();
+            cancelMotorTest();
+            setVibrationCalibrationState(VIBRATION_ABORTED, "motor_test_timeout");
+        }
+        return;
+    }
+    if (imuCapture.state() == IMU_CAPTURE_RUNNING) imuCapture.stop();
+    const uint16_t count = imuCapture.size();
+    if (count < 100) {
+        imuCapture.release();
+        setVibrationCalibrationState(VIBRATION_ABORTED, "insufficient_imu_samples");
+        return;
+    }
+    double sums[6] = {}, squares[6] = {};
+    for (uint16_t i = 0; i < count; ++i) {
+        ImuCaptureSample sample;
+        if (!imuCapture.copy(i, sample)) continue;
+        for (int axis = 0; axis < 3; ++axis) {
+            const double gyro = sample.gyroMicroRadPerSec[axis] / 1000000.0;
+            const double accel = sample.accCentiMetersPerSec2[axis] / 100.0;
+            sums[axis] += gyro; squares[axis] += gyro * gyro;
+            sums[axis + 3] += accel; squares[axis + 3] += accel * accel;
+        }
+    }
+    double gyroVariance = 0, accelVariance = 0;
+    for (int axis = 0; axis < 3; ++axis) {
+        gyroVariance += squares[axis] / count - (sums[axis] / count) * (sums[axis] / count);
+        accelVariance += squares[axis + 3] / count - (sums[axis + 3] / count) * (sums[axis + 3] / count);
+    }
+    VibrationMotorResult result = {
+        (float)sqrt(gyroVariance > 0 ? gyroVariance : 0),
+        (float)sqrt(accelVariance > 0 ? accelVariance : 0), count
+    };
+    imuCapture.release();
+    portENTER_CRITICAL(&vibrationCalibrationMux);
+    vibrationCalibrationResults[vibrationCalibrationIndex] = result;
+    ++vibrationCalibrationIndex;
+    const bool complete = vibrationCalibrationIndex >= 4;
+    vibrationCalibrationState = complete ? VIBRATION_COMPLETE : VIBRATION_QUEUED;
+    vibrationCalibrationStartRequested = !complete;
+    vibrationCalibrationReason = complete ? "complete" : "next_motor";
+    portEXIT_CRITICAL(&vibrationCalibrationMux);
 }
 
 static void enterOpenLoopLandingLocked(const char *reason) {
@@ -1021,6 +1131,72 @@ void setupWebRC() {
         webRCServer.send(200, "application/json", response);
     });
 
+    webRCServer.on("/vibration-calibration/start", HTTP_POST, []() {
+        const bool confirmed = webRCServer.arg("confirm") == "1";
+        portENTER_CRITICAL(&vibrationCalibrationMux);
+        const bool active = vibrationCalibrationState == VIBRATION_QUEUED || vibrationCalibrationState == VIBRATION_RUNNING;
+        portEXIT_CRITICAL(&vibrationCalibrationMux);
+        if (!confirmed || active || armed || motorsActive() || !motorOutputsOK || isAccelCalibrationActive() ||
+            batteryBlocksArming() || hasBlockingDiagnosticFault() || vibrationRouteBusy() ||
+            imuCapture.state() != IMU_CAPTURE_IDLE) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires_confirmation_disarmed_ready_motors_idle_imu_and_no_faults\"}");
+            return;
+        }
+        portENTER_CRITICAL(&vibrationCalibrationMux);
+        vibrationCalibrationIndex = 0;
+        memset(vibrationCalibrationResults, 0, sizeof(vibrationCalibrationResults));
+        vibrationCalibrationState = VIBRATION_QUEUED;
+        vibrationCalibrationReason = "queued";
+        vibrationCalibrationStartRequested = true;
+        portEXIT_CRITICAL(&vibrationCalibrationMux);
+        webRCServer.send(202, "application/json", "{\"ok\":1,\"state\":\"queued\"}");
+    });
+    webRCServer.on("/vibration-calibration/status", HTTP_GET, []() {
+        uint8_t state, index;
+        const char *reason;
+        VibrationMotorResult results[4];
+        portENTER_CRITICAL(&vibrationCalibrationMux);
+        state = vibrationCalibrationState;
+        index = vibrationCalibrationIndex;
+        reason = (const char *)vibrationCalibrationReason;
+        memcpy(results, vibrationCalibrationResults, sizeof(results));
+        portEXIT_CRITICAL(&vibrationCalibrationMux);
+        const char *stateName[] = {"empty", "queued", "running", "complete", "aborted"};
+        char json[480];
+        snprintf(json, sizeof(json),
+            "{\"state\":\"%s\",\"step\":%u,\"reason\":\"%s\",\"motors\":["
+            "{\"name\":\"FR\",\"gyro_rms\":%.6f,\"accel_rms\":%.5f,\"samples\":%u},"
+            "{\"name\":\"FL\",\"gyro_rms\":%.6f,\"accel_rms\":%.5f,\"samples\":%u},"
+            "{\"name\":\"RR\",\"gyro_rms\":%.6f,\"accel_rms\":%.5f,\"samples\":%u},"
+            "{\"name\":\"RL\",\"gyro_rms\":%.6f,\"accel_rms\":%.5f,\"samples\":%u}]}",
+            state < 5 ? stateName[state] : "unknown", (unsigned)index, reason,
+            results[0].gyroRms, results[0].accelRms, results[0].samples,
+            results[1].gyroRms, results[1].accelRms, results[1].samples,
+            results[2].gyroRms, results[2].accelRms, results[2].samples,
+            results[3].gyroRms, results[3].accelRms, results[3].samples);
+        webRCServer.send(200, "application/json", json);
+    });
+    webRCServer.on("/vibration-calibration.csv", HTTP_GET, []() {
+        if (armed || motorsActive() || vibrationCalibrationState != VIBRATION_COMPLETE) {
+            webRCServer.send(409, "text/plain", "complete calibration and stop motors before downloading\n");
+            return;
+        }
+        WiFiClient client = webRCServer.client();
+        client.setNoDelay(true);
+        client.print("HTTP/1.1 200 OK\r\nContent-Type: text/csv; charset=utf-8\r\n");
+        client.print("Cache-Control: no-store\r\nConnection: close\r\nX-Calibration-Rows: 4\r\n");
+        client.print("Content-Disposition: attachment; filename=\"cf-drone-vibration-calibration.csv\"\r\n\r\n");
+        client.print("motor,gyro_rms_rad_s,accel_rms_m_s2,samples\n");
+        for (uint8_t i = 0; i < 4 && client.connected(); ++i) {
+            VibrationMotorResult result;
+            portENTER_CRITICAL(&vibrationCalibrationMux);
+            result = vibrationCalibrationResults[i];
+            portEXIT_CRITICAL(&vibrationCalibrationMux);
+            client.printf("%s,%.6f,%.5f,%u\n", vibrationMotorNames[i], result.gyroRms, result.accelRms, result.samples);
+        }
+        client.stop();
+    });
+
     webRCServer.on("/descent-calibration/start", HTTP_POST, []() {
         portENTER_CRITICAL(&openLoopMux);
         const bool routeBusy = openLoopState == OPEN_LOOP_STATE_RUNNING ||
@@ -1490,6 +1666,7 @@ void setupWebRC() {
 void readWebRC() {
     processWebRCInputQueue();
     stepOpenLoopSequence();
+    serviceVibrationCalibration();
     
     if (isWebRCEnabled()) {
         webRCEnabled = useWebRC = true;

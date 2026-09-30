@@ -38,6 +38,7 @@ Quaternion attitude; // 估计出的姿态（四元数）
 bool landed; // are we landed and stationary
 
 void sendMotors();
+void testMotor(int n);
 void serviceMotorTest();
 extern bool motorTestActive;
 void descend();

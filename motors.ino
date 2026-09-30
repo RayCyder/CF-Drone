@@ -93,6 +93,14 @@ void serviceMotorTest() {
 	print("电机测试结束，全部输出已归零。请人工确认目标电机是否正常转动。\n");
 }
 
+void cancelMotorTest() {
+	if (!motorTestActive) return;
+	memset(motors, 0, sizeof(motors));
+	motorTestActive = false;
+	motorTestArmInhibit = true;
+	sendMotors();
+}
+
 bool motorsActive() {
 	return motors[0] != 0 || motors[1] != 0 || motors[2] != 0 || motors[3] != 0;
 }
