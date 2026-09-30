@@ -108,6 +108,10 @@ For a connected-monitor pair, reproduced the page's two read-only SSE streams on
 
 Across these initial idle and connected pairs, there is no measured overrun-rate increase with tracing. The identical boundary pattern in both builds does not implicate the scheduler wrapper. This still does not resolve microsecond-scale hook cost: P99 is bucketed and no precise loop CPU-time distribution was captured. Keep STALL-6 open for longer repeated windows and finer timing data before claiming observer overhead is negligible.
 
+### Live production-image snapshot (2026-10-01)
+
+A read-only serial `diag` at uptime `609,152 ms` reported `armed=0`, `imu_ok=1`, `motor_ok=1`, battery `4.08 V`, loop rate `990 Hz`, estimate-stage EMA `101 us`, `21` intervals above `1,500 us`, and maximum `2,116 us`. The loop trace contained 21 rows and no overwrite. The last row at uptime `609,154 ms` is adjacent to the diagnostic request and reports `serial_input_us=1,368`; it is treated as probe-contaminated. Other retained rows are mostly `1.59–1.80 ms`, with roughly `1.0–1.16 ms` in IMU wait and no estimator span above `137 us`. This snapshot contains no recurrence of the historical 50 ms event and does not establish tracing overhead or explain the old 6,055 s event. Keep both gaps open; the diagnostic command itself adds a short serial/loop timing disturbance.
+
 ### Stage C — controlled localization and fix
 
 - Requirement IDs: STALL-5, STALL-6.
