@@ -6,6 +6,7 @@
 #include "util.h"
 #include "board_config.h"
 #include "diagnostics.h"
+#include "motor_test_timer.h"
 #include <string.h>
 
 float motors[4]; // normalized motor thrusts in range [0..1]
@@ -23,6 +24,8 @@ int pwmMax = -1; // -1 表示纯占空比模式（接 MOSFET 直驱）；接 ESC
 bool motorOutputsOK = false;
 bool motorTestActive = false;
 bool motorTestArmInhibit = false;
+static uint32_t motorTestDeadlineMs = 0;
+static const uint32_t MOTOR_TEST_DURATION_MS = 3000;
 
 // Motors array indexes:
 const int MOTOR_REAR_LEFT = 0;
@@ -82,6 +85,14 @@ void sendMotors() {
 	}
 }
 
+void serviceMotorTest() {
+	if (!motorTestActive || !motorTestDeadlineReached(millis(), motorTestDeadlineMs)) return;
+	memset(motors, 0, sizeof(motors));
+	motorTestActive = false;
+	sendMotors();
+	print("电机测试结束，全部输出已归零。请人工确认目标电机是否正常转动。\n");
+}
+
 bool motorsActive() {
 	return motors[0] != 0 || motors[1] != 0 || motors[2] != 0 || motors[3] != 0;
 }
@@ -89,25 +100,24 @@ bool motorsActive() {
 void testMotor(int n) {
 	extern bool armed;
 	extern bool isAccelCalibrationActive();
+	extern bool batteryBlocksArming();
+	extern bool hasBlockingDiagnosticFault();
 	if (!motorOutputsOK || n < 0 || n >= 4) {
 		print("电机输出未就绪或编号无效，拒绝测试。\n");
 		return;
 	}
-	if (armed || motorTestActive || isAccelCalibrationActive()) {
+	if (armed || motorTestActive || isAccelCalibrationActive() ||
+		batteryBlocksArming() || hasBlockingDiagnosticFault()) {
 		print("电机测试仅允许在已上锁时执行；当前状态不安全，拒绝测试。\n");
 		return;
 	}
+	// Print before output starts so serial TX never stalls the motor-sampling loop.
+	print("电机 %d 将以 30%% 输出运行 3 秒。确认已拆桨并固定机体。\n", n);
 	// 电机测试期间清空所有输出，只给目标电机输出，避免遗留控制量带动其他电机。
 	memset(motors, 0, sizeof(motors));
 	motorTestActive = true;
 	motorTestArmInhibit = true;
-	print("电机 %d 将以 30%% 输出运行 3 秒。确认已拆桨并固定机体。\n", n);
-	motors[n] = 0.3;
-	delay(50); // ESP32 may need to wait until the end of the current cycle to change duty https://github.com/espressif/arduino-esp32/issues/5306
+	motorTestDeadlineMs = millis() + MOTOR_TEST_DURATION_MS;
+	motors[n] = 0.3f;
 	sendMotors();
-	pause(3);
-	memset(motors, 0, sizeof(motors));
-	sendMotors();
-	motorTestActive = false;
-	print("电机测试结束，全部输出已归零。请人工确认目标电机是否正常转动。\n");
 }

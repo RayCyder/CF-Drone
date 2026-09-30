@@ -38,6 +38,8 @@ Quaternion attitude; // 估计出的姿态（四元数）
 bool landed; // are we landed and stationary
 
 void sendMotors();
+void serviceMotorTest();
+extern bool motorTestActive;
 void descend();
 void updateAccelCalibration();
 #if WIFI_ENABLED
@@ -132,7 +134,8 @@ void loop() {
 	updateBatteryVoltage(); // 更新电池电压采样与低电压保护判断
 	recordLoopStage(LOOP_STAGE_BATTERY_ADC, micros() - stageStarted);
 	stageStarted = micros();
-	control(); // 飞控核心：姿态环PID解算，输出电机控制量
+	serviceMotorTest(); // 命中3秒截止时间时先清零试转输出
+	if (!motorTestActive) control(); // 单电机诊断试转期间维持目标输出，其余飞控循环保持正常频率
 	recordLoopStage(LOOP_STAGE_CONTROL_LAW, micros() - stageStarted);
 	stageStarted = micros();
 	sendMotors(); // 将电机控制量输出到电机（PWM/DShot）
