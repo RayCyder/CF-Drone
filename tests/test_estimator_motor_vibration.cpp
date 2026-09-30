@@ -96,4 +96,63 @@ int main() {
 	const float pitchMean = pitchSum / measuredSamples;
 	assert(fabsf(rollMean - (-1.76f)) < 0.5f);
 	assert(fabsf(pitchMean - (-0.09f)) < 0.2f);
+
+	// Replay measured FR vibration over a known dynamic trajectory. This bounds
+	// tracking error as well as static drift, so extra smoothing alone cannot pass.
+	attitude = Quaternion::fromEuler(Vector(initialRoll, initialPitch, 0.0f));
+	levelGyroBias = Vector();
+	levelWeight = 0.0f;
+	levelBiasGain = 0.0f;
+	accelerationFusionFilter.reset();
+	ratesFilter.reset();
+	armed = false;
+	motorOutputActive = false;
+	float squaredError[3] = {0.0f, 0.0f, 0.0f};
+	int dynamicSamples = 0;
+	for (int i = 0; i < 10000; ++i) {
+		const float seconds = i * 0.001f;
+		const float motionTime = fmaxf(0.0f, seconds - 1.0f);
+		const float rollPhase = 2.0f * PI * 0.35f * motionTime;
+		const float pitchPhase = 2.0f * PI * 0.23f * motionTime;
+		const float yawPhase = 2.0f * PI * 0.17f * motionTime;
+		const float trueRoll = initialRoll + radians(8.0f) * (1.0f - cosf(rollPhase));
+		const float truePitch = initialPitch + radians(5.0f) * (1.0f - cosf(pitchPhase));
+		const float trueYaw = radians(12.0f) * (1.0f - cosf(yawPhase));
+		const float rollRate = radians(8.0f) * 2.0f * PI * 0.35f * sinf(rollPhase);
+		const float pitchRate = radians(5.0f) * 2.0f * PI * 0.23f * sinf(pitchPhase);
+		const float yawRate = radians(12.0f) * 2.0f * PI * 0.17f * sinf(yawPhase);
+		const Vector bodyRate(
+			rollRate - yawRate * sinf(truePitch),
+			pitchRate * cosf(trueRoll) + yawRate * sinf(trueRoll) * cosf(truePitch),
+			-pitchRate * sinf(trueRoll) + yawRate * cosf(trueRoll) * cosf(truePitch));
+		const Quaternion trueAttitude = Quaternion::fromEuler(Vector(trueRoll, truePitch, trueYaw));
+		gyro = bodyRate;
+		acc = Quaternion::rotateVector(Vector(0.0f, 0.0f, ONE_G), trueAttitude);
+		dt = 0.001f;
+		if (i >= 1000) {
+			armed = true;
+			motorOutputActive = true;
+			const ImuSample &sample = vibration[(i - 1000) % vibration.size()];
+			gyro += sample.gyro;
+			acc += sample.acc;
+		}
+		estimate();
+		if (i >= 2000) {
+			const Vector estimated = attitude.toEuler();
+			const float error[3] = {
+				static_cast<float>(degrees(estimated.x - trueRoll)),
+				static_cast<float>(degrees(estimated.y - truePitch)),
+				static_cast<float>(degrees(estimated.z - trueYaw))};
+			for (int axis = 0; axis < 3; ++axis) squaredError[axis] += error[axis] * error[axis];
+			++dynamicSamples;
+		}
+	}
+	const float rollRmse = sqrtf(squaredError[0] / dynamicSamples);
+	const float pitchRmse = sqrtf(squaredError[1] / dynamicSamples);
+	const float yawRmse = sqrtf(squaredError[2] / dynamicSamples);
+	printf("FR vibration dynamic RMSE (deg): roll %.3f pitch %.3f yaw %.3f\n",
+		rollRmse, pitchRmse, yawRmse);
+	assert(rollRmse < 0.5f);
+	assert(pitchRmse < 0.8f);
+	assert(yawRmse < 0.5f);
 }
