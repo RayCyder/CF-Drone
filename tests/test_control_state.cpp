@@ -45,7 +45,8 @@ void sendMotors() {}
 bool motorsActive(){for(float m:motors)if(m!=0)return true;return false;}
 unsigned systemEventCount=0;
 void recordSystemLogEvent(const char*,const char*) {++systemEventCount;}
-void triggerFlightLog(uint32_t) {}
+unsigned flightLogTriggerCount=0;
+void triggerFlightLog(uint32_t) {++flightLogTriggerCount;}
 bool tryArmWithSystemLog();
 void failsafe(); void interpretControls(); void controlAttitude();void controlRates();void controlTorque();
 void desaturate(float&,float&,float&,float&);
@@ -63,7 +64,34 @@ bool tryArmWithSystemLog(){armed=true;return true;}
 int main(){
     armed=true; mode=STAB; controlMode=0; controlThrottle=.7625f;
     control(); // establish the existing RC selector before entering LAND
+    const Quaternion savedAttitudeTarget = attitudeTarget;
+    attitude = Quaternion();
+    attitudeTarget = Quaternion::fromEuler(Vector(0, 0, 0.6f));
+    ratesExtra = Vector(0, 0, 0);
+    thrustTarget = .7f;
+    controlAttitude();
+    assert(fabsf(ratesTarget.z) < 1e-6f); // gyro-only yaw cannot hold an absolute heading
+    ratesExtra.z = .25f;
+    controlAttitude();
+    assert(fabsf(ratesTarget.z - .25f) < 1e-6f); // pilot yaw-rate input remains active
+    mode = AUTO;
+    ratesExtra.z = 0;
+    controlAttitude();
+    assert(fabsf(ratesTarget.z - .6f * YAW_P) < 1e-5f); // external AUTO heading targets retain their yaw loop
+    mode = STAB;
+    attitudeTarget = savedAttitudeTarget;
+    ratesExtra = Vector(0, 0, 0);
     thrustTarget=.7f;
+    float satA=1.15f, satB=.75f, satC=.65f, satD=1.05f;
+    desaturate(satA,satB,satC,satD);
+    assert(fabsf(motorMixScale-1.0f)<1e-6f); // high collective is reduced to preserve full torque
+    assert(fabsf(max(max(satA,satB),max(satC,satD))-1.0f)<1e-6f);
+    assert((satA+satB+satC+satD)*.25f < .9f);
+    satA=.4f; satB=.1f; satC=-.2f; satD=.1f;
+    desaturate(satA,satB,satC,satD);
+    assert(motorMixScale<1.0f); // low collective is preserved; torque is scaled to avoid raising thrust
+    assert(fabsf((satA+satB+satC+satD)*.25f-.1f)<1e-6f);
+    assert(min(min(satA,satB),min(satC,satD))>=0.0f);
     descend(); const float first=thrustTarget;
     descend(); assert(thrustTarget==first); // idempotent within one frame
     controlMode=0; controlThrottle=.7625f; // stale RC selector must not overwrite LAND
@@ -146,8 +174,14 @@ int main(){
     clearDiagnosticHistory();
     recordLoopTiming(0); recordLoopTiming(NAN); recordLoopTiming(.001f); recordLoopTiming(.0015f);
     assert(!(getActiveDiagnosticFaults() & DIAG_LOOP_OVERRUN));
-    recordLoopTiming(.001501f); assert(getActiveDiagnosticFaults() & DIAG_LOOP_OVERRUN);
-    assert(loopTiming.samples==3 && loopTiming.invalid==2 && loopTiming.maximumUs==1501);
+    const unsigned triggerCountBeforeJitter=flightLogTriggerCount;
+    armed=true;
+    dt=.001501f; recordLoopTiming(dt); assert(getActiveDiagnosticFaults() & DIAG_LOOP_OVERRUN);
+    assert(flightLogTriggerCount==triggerCountBeforeJitter); // near-budget jitter is reported but keeps the armed ring rolling
+    dt=.005001f; recordLoopTiming(dt);
+    assert(flightLogTriggerCount==triggerCountBeforeJitter+1); // a sustained-scale stall preserves the armed snapshot
+    armed=false;
+    assert(loopTiming.samples==4 && loopTiming.invalid==2 && loopTiming.maximumUs==5001);
     const unsigned eventCount=systemEventCount;
     for(int i=0;i<1000;i++) recordLoopStage(LOOP_STAGE_CONTROL_LAW,201);
     assert(systemEventCount==eventCount); // hot-path counters do not format/emit events

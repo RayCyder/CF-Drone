@@ -40,6 +40,10 @@ int main() {
     PID d(0,0,1);
     assert(d.update(1,.001f)==0); // first sample has no derivative kick
     d.update(2,.2f); assert(d.derivative==0);
+    PID filteredD(0,0,1,0,.2f);
+    assert(filteredD.update(0,.001f)==0);
+    const float filteredStep = filteredD.update(.01f,.001f);
+    assert(filteredStep > 0 && filteredStep < 10.0f);
     p.reset();
     assert(p.integral==0 && p.derivative==0);
     puts("clock and PID regression: PASS");

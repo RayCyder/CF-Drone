@@ -32,7 +32,7 @@
 #define PITCH_I ROLL_I
 #define PITCH_D ROLL_D
 #define PITCH_I_LIM ROLL_I_LIM
-#define YAW_P 3 // 偏航响应稍慢
+#define YAW_P 3 // 偏航角度环增益（用于具备航向参考的 AUTO 目标）
 
 // // 参数适配50mm轴距的微型四轴飞行器
 // // ============== 角速率环（内环）参数 ==============
@@ -82,7 +82,7 @@ extern uint16_t takeWebRCButtonPressEdges(uint16_t *buttons);
 
 PID rollRatePID(ROLLRATE_P, ROLLRATE_I, ROLLRATE_D, ROLLRATE_I_LIM, RATES_D_LPF_ALPHA);
 PID pitchRatePID(PITCHRATE_P, PITCHRATE_I, PITCHRATE_D, PITCHRATE_I_LIM, RATES_D_LPF_ALPHA);
-PID yawRatePID(YAWRATE_P, YAWRATE_I, YAWRATE_D);
+PID yawRatePID(YAWRATE_P, YAWRATE_I, YAWRATE_D, 0, RATES_D_LPF_ALPHA);
 PID rollPID(ROLL_P, ROLL_I, ROLL_D, ROLL_I_LIM);
 PID pitchPID(PITCH_P, PITCH_I, PITCH_D, PITCH_I_LIM);
 PID yawPID(YAW_P, 0, 0);
@@ -491,8 +491,16 @@ void controlAttitude() {
 	ratesTarget.x = rollPID.update(error.x) + ratesExtra.x;
 	ratesTarget.y = pitchPID.update(error.y) + ratesExtra.y;
 
-	float yawError = wrapAngle(attitudeTarget.getYaw() - attitude.getYaw());
-	ratesTarget.z = yawPID.update(yawError) + ratesExtra.z;
+	if (mode == STAB) {
+		// There is no magnetometer heading correction in this estimator, so
+		// STAB's integrated yaw drifts under gyro bias/vibration. Command yaw
+		// rate from the pilot; do not turn that unobservable drift into torque.
+		ratesTarget.z = ratesExtra.z;
+	} else {
+		// Retain absolute yaw targets for external AUTO attitude commands.
+		const float yawError = wrapAngle(attitudeTarget.getYaw() - attitude.getYaw());
+		ratesTarget.z = yawPID.update(yawError) + ratesExtra.z;
+	}
 	ratesTarget = constrainRatesToConfiguredLimits(ratesTarget);
 }
 
@@ -538,26 +546,30 @@ void controlTorque() {
 }
 
 void desaturate(float& a, float& b, float& c, float& d) {
-	// avg ≈ thrustTarget（力矩分量之和为零），保持 avg 不变，等比缩减力矩偏差
-	float avg = (a + b + c + d) * 0.25f;
-	float maxVal = max(max(a, b), max(c, d));
-	float minVal = min(min(a, b), min(c, d));
-
-	float scale = 1.0f;
-	if (maxVal > 1.0f && maxVal > avg) {
-		scale = min(scale, (1.0f - avg) / (maxVal - avg));
+	// Preserve attitude torque first. At high collective, lower the average
+	// motor command enough to keep the requested torque span; at low collective,
+	// do not raise thrust just to fit torque, so scale torque to stay in range.
+	const float avg = (a + b + c + d) * 0.25f;
+	const float da = a - avg, db = b - avg, dc = c - avg, dd = d - avg;
+	const float minDev = min(min(da, db), min(dc, dd));
+	const float maxDev = max(max(da, db), max(dc, dd));
+	const float span = maxDev - minDev;
+	float scale = span > 1.0f ? 1.0f / span : 1.0f;
+	const float minCollective = max(0.0f, -minDev * scale);
+	const float maxCollective = min(1.0f, 1.0f - maxDev * scale);
+	float collective = constrain(avg, minCollective, maxCollective);
+	if (avg < minCollective) {
+		// Low thrust has insufficient lower rail headroom. Preserve the requested
+		// collective and reduce torque symmetrically instead of raising thrust.
+		if (minDev < 0.0f) scale = min(scale, avg / -minDev);
+		if (maxDev > 0.0f) scale = min(scale, (1.0f - avg) / maxDev);
+		collective = avg;
 	}
-	if (minVal < 0.0f && avg > minVal) {
-		scale = min(scale, avg / (avg - minVal));
-	}
-
-	motorMixScale = scale;
-	if (scale < 1.0f) {
-		a = avg + (a - avg) * scale;
-		b = avg + (b - avg) * scale;
-		c = avg + (c - avg) * scale;
-		d = avg + (d - avg) * scale;
-	}
+	motorMixScale = constrain(scale, 0.0f, 1.0f);
+	a = collective + da * motorMixScale;
+	b = collective + db * motorMixScale;
+	c = collective + dc * motorMixScale;
+	d = collective + dd * motorMixScale;
 }
 
 const char* getModeName() {
@@ -586,7 +598,7 @@ void interpretWebRC() {
 	// 处理解锁/上锁状态变化日志
 	static bool lastArmedState = false;
 	if (armed != lastArmedState) {
-		print(armed ? "Web RC: 已解锁\n" : "Web RC: 已上锁\n");
+		recordSystemLogEvent("FLIGHT_STATE", armed ? "Web RC: 已解锁" : "Web RC: 已上锁");
 		lastArmedState = armed;
 	}
 
@@ -653,7 +665,9 @@ void interpretWebRC() {
 	// 模式切换日志
 	static int lastMode = STAB;
 	if (mode != lastMode) {
-		print("Web RC: 模式切换到 %s\n", getModeName());
+		char event[64];
+		snprintf(event, sizeof(event), "Web RC: 模式切换到 %s", getModeName());
+		recordSystemLogEvent("FLIGHT_MODE", event);
 		lastMode = mode;
 	}
 }

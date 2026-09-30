@@ -90,7 +90,7 @@ Parameter parameters[] = {
 	{"CTL_P_I",  &pitchPID.i},     // 俯仰角度 I 增益（默认 0.5）
 	{"CTL_P_D",  &pitchPID.d},     // 俯仰角度 D 增益（一般为 0）
 	{"CTL_P_WU", &pitchPID.windup},// 俯仰角度积分限幅（rad/s）
-	{"CTL_Y_P",  &yawPID.p},       // 偏航角度 P 增益
+	{"CTL_Y_P",  &yawPID.p},       // 偏航角度 P 增益（AUTO 目标）
 
 	// ===== 控制（限制值）=====
 	{"CTL_P_RATE_MAX", &maxRate.y}, // 俯仰最大角速率限制（rad/s），超出摇杆指令会被截断

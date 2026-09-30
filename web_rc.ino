@@ -563,11 +563,13 @@ void setWebRCInput(float roll, float pitch, float yaw, float throttle) {
         controlTime     = t;
     }
 
-    static float lastPrintedThrottle = -1.0f;
-    if (fabsf(pThrottle - lastPrintedThrottle) > 5.0f) {
-        print("WebRC T=%.0f%% R=%.1f P=%.1f Y=%.1f Btn=0x%04X\n",
-              pThrottle, pRoll, pPitch, pYaw, getWebRCButtons());
-        lastPrintedThrottle = pThrottle;
+    static float lastLoggedThrottle = -1.0f;
+    if (fabsf(pThrottle - lastLoggedThrottle) > 5.0f) {
+        char event[96];
+        snprintf(event, sizeof(event), "T=%.0f%% R=%.1f P=%.1f Y=%.1f Btn=0x%04X",
+                 pThrottle, pRoll, pPitch, pYaw, getWebRCButtons());
+        recordSystemLogEvent("WEB_RC_INPUT", event);
+        lastLoggedThrottle = pThrottle;
     }
 }
 

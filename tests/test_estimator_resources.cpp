@@ -23,6 +23,7 @@ void applyLevel();
 static void resetEstimator(Quaternion q) {
 	attitude = q;
 	levelGyroBias = Vector(0, 0, 0);
+	accelerationFusionFilter.reset();
 	landed = false;
 	controlRoll = controlPitch = 0.0f;
 }
@@ -101,6 +102,20 @@ int main() {
 	applyAcc();
 	assert(fabsf(attitude.x - airborneInitial.x) < 1e-6f);
 	assert(fabsf(attitude.w - airborneInitial.w) < 1e-6f);
+
+	// High-frequency motor vibration can push raw acceleration outside the 1 g
+	// gate; the dedicated fusion filter should recover the gravity direction.
+	resetEstimator(airborneInitial);
+	armed = true;
+	motorOutputActive = true;
+	levelWeight = 0.0f;
+	levelBiasGain = 0.0f;
+	for (int i = 0; i < 2000; ++i) {
+		dt = 0.001f;
+		acc = Vector(12.0f * sinf(2.0f * PI * 200.0f * i * dt), 0.0f, ONE_G);
+		applyAcc();
+	}
+	assert(fabsf(attitude.toEuler().x) < 0.06f);
 
 	// Stick input fades out accelerometer correction during intentional maneuvers.
 	resetEstimator(airborneInitial);

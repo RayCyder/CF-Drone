@@ -34,6 +34,11 @@ Vector levelGyroBias(0, 0, 0); // 由 applyLevel() 估计的虚拟陀螺偏置�
 extern float controlRoll, controlPitch; // 飞手摇杆输入，定义于 CF-Drone.ino
 extern bool armed;
 LowPassFilter<Vector> ratesFilter(0.2f); // 1 ms reference coefficient; about 35.5 Hz
+// Use a separate low-pass path for gravity fusion. The raw MPU9250 acceleration
+// remains available to logging and calibration, while motor vibration is
+// attenuated before the 1 g confidence gate so aliased high-frequency vibration
+// does not disable attitude correction for most of a motor run.
+LowPassFilter<Vector> accelerationFusionFilter(0.2f); // about 35.5 Hz at 1 kHz
 
 void estimate() {
 	applyGyro();
@@ -54,6 +59,9 @@ void applyAcc() {
 	float accNorm = acc.norm();
 	landed = isfinite(accNorm) && !motorsActive() && fabsf(accNorm - ONE_G) < ONE_G * 0.1f;
 	if (!isfinite(accNorm) || accNorm < 1e-3f) return;
+	const Vector gravityReference = accelerationFusionFilter.update(acc, dt, ESTIMATE_NOMINAL_DT);
+	const float gravityNorm = gravityReference.norm();
+	if (!isfinite(gravityNorm) || gravityNorm < 1e-3f) return;
 
 	float correctionConfidence = 1.0f;
 	if (!landed) {
@@ -61,7 +69,7 @@ void applyAcc() {
 		// specific-force magnitude is near 1g. Never use it during disarmed motor
 		// tests, and fade its influence during deliberate roll/pitch commands.
 		if (!armed) return;
-		const float normError = fabsf(accNorm - ONE_G);
+		const float normError = fabsf(gravityNorm - ONE_G);
 		const float normTolerance = ONE_G * 0.15f;
 		correctionConfidence = constrain(1.0f - normError / normTolerance, 0.0f, 1.0f);
 
@@ -75,7 +83,7 @@ void applyAcc() {
 
 	// calculate accelerometer correction
 	Vector up = Quaternion::rotateVector(Vector(0, 0, 1), attitude);
-	Vector correction = Vector::rotationVectorBetween(acc, up) *
+	Vector correction = Vector::rotationVectorBetween(gravityReference, up) *
 		(accWeight * correctionConfidence * (dt / ESTIMATE_NOMINAL_DT));
 
 	// apply correction

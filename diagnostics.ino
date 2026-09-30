@@ -43,6 +43,10 @@ static uint32_t loopOverrunCount = 0;
 static float worstLoopDt = 0;
 static uint32_t lastLoopOverrunMs = 0;
 static bool haveLoopOverrun = false;
+// Keep counting/reporting >1.5 ms jitter, but do not freeze the short flight
+// log on a single near-budget cycle. A >5 ms cycle is a meaningful stall and
+// must retain an armed snapshot even if the warning bit was already active.
+static constexpr uint32_t LOOP_STALL_LOG_TRIGGER_US = 5000;
 static LoopTimingMetrics loopTiming;
 struct LoopStageMetrics {
     const char *name;
@@ -212,7 +216,7 @@ void setDiagnosticFault(DiagnosticFault fault, bool active) {
 			state.lastSeen = now;
 			if (active) {
 				extern bool armed;
-				if (armed) triggerFlightLog((uint32_t)fault);
+				if (armed && fault != DIAG_LOOP_OVERRUN) triggerFlightLog((uint32_t)fault);
 				if (state.occurrences < UINT16_MAX) state.occurrences++;
 				if (state.occurrences == 1) state.firstSeen = now;
 				state.activeSince = now;
@@ -232,6 +236,10 @@ void setDiagnosticFault(DiagnosticFault fault, bool active) {
 			recordSystemLogEvent("DIAG", eventMessage);
 			// Fault transitions happen inside the flight loop. Keep them in the
 			// event ring for SSE/diag instead of synchronously draining UART here.
+		}
+		if (fault == DIAG_LOOP_OVERRUN && active && dt * 1000000.0f >= LOOP_STALL_LOG_TRIGGER_US) {
+			extern bool armed;
+			if (armed) triggerFlightLog((uint32_t)fault);
 		}
 		return;
 	}

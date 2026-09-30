@@ -32,7 +32,14 @@ public:
 		} else {
 			integral = 0;
 		}
-		derivative = isfinite(prevError) ? lpf.update((error - prevError) / sampleDt) : 0.0f;
+		if (isfinite(prevError)) {
+			derivative = lpf.update((error - prevError) / sampleDt);
+		} else {
+			// Prime a filtered derivative at zero so the first finite difference
+			// after reset does not bypass the low-pass filter as a full-rate spike.
+			lpf.update(0.0f);
+			derivative = 0.0f;
+		}
 		prevError = error;
 		return p * error + i * integral + d * derivative;
 	}
