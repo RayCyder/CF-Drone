@@ -108,7 +108,7 @@ void setup() {
 void loop() {
 	static uint32_t loopSequence = 0;
 	const uint32_t currentLoopSequence = ++loopSequence;
-	setTaskSwitchTraceLoopSequence(currentLoopSequence);
+	beginTaskSwitchTraceLoop(currentLoopSequence);
 	setLoopTimingSequence(currentLoopSequence);
 	beginLoopTraceCycle();
 	const uint32_t loopStarted = micros();

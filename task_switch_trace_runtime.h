@@ -5,17 +5,18 @@
 
 struct TaskIpcTraceEvent {
     uint32_t sequence;
-    uint32_t startedUs;
-    uint32_t elapsedUs;
+    uint32_t requestUs;
+    uint32_t callbackStartedUs;
+    uint32_t callbackUs;
     uint32_t callerTask;
     uint32_t callerPc;
-    uint32_t callbackPc;
     uint8_t callerCore;
     uint8_t targetCore;
 };
 
 void initializeTaskSwitchTrace();
 void enableTaskSwitchTrace();
+void beginTaskSwitchTraceLoop(uint32_t loopSequence);
 void setTaskSwitchTraceLoopSequence(uint32_t loopSequence);
 bool freezeTaskSwitchTrace();
 void unfreezeTaskSwitchTrace();

@@ -7,7 +7,7 @@
 #if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
 // The flight-loop diagnostic build records only its execution core and uses a
 // smaller ring so the instrumentation still fits the ESP32 internal DRAM.
-constexpr uint8_t TASK_SWITCH_TRACE_CAPACITY = 20;
+constexpr uint8_t TASK_SWITCH_TRACE_CAPACITY = 18;
 constexpr uint8_t TASK_SWITCH_PENDING_CAPACITY = 16;
 #else
 constexpr uint8_t TASK_SWITCH_TRACE_CAPACITY = 64;
@@ -44,6 +44,16 @@ public:
 
     void setFlightTaskHandle(uint32_t taskHandle) { flightTaskHandle_ = taskHandle; }
     void setLoopSequence(uint32_t loopSequence) { loopSequence_ = loopSequence; }
+
+    // The loop itself confirms that the flight task resumed. Close pending
+    // captures here if an ESP-IDF context-restore path bypassed our wrapper.
+    void flightTaskLoopStarted(uint32_t timestampUs, uint32_t loopSequence,
+                               uint8_t coreId) {
+        const uint32_t elapsedUs = timestampUs - startUs_;
+        if (active_ && coreId == coreId_ && elapsedUs < 0x80000000UL)
+            switchedIn(timestampUs, flightTaskHandle_, coreId);
+        loopSequence_ = loopSequence;
+    }
 
     void switchedOut(uint32_t timestampUs, uint32_t taskHandle, uint8_t coreId) {
         if (taskHandle == flightTaskHandle_) {

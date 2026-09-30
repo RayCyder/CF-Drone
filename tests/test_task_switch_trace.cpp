@@ -39,6 +39,20 @@ int main() {
     assert(eventAt(trace, 0).captureId == eventAt(trace, 5).captureId);
     assert(eventAt(trace, 0).loopSequence == 42 && eventAt(trace, 5).loopSequence == 42);
 
+    // The ESP-IDF port can restore a task through paths that bypass the wrapped
+    // scheduler symbol. The next actual loop entry must close that pending span.
+    TaskSwitchTraceRecorder resumed(7);
+    resumed.setLoopSequence(90);
+    resumed.switchedOut(1000, 7, 1);
+    resumed.switchedIn(1100, 8, 1);
+    assert(resumed.captureActive());
+    resumed.flightTaskLoopStarted(900, 91, 1);
+    assert(resumed.captureActive()); // Ignore a timestamp sampled before switch-out.
+    resumed.flightTaskLoopStarted(7000, 92, 1);
+    assert(!resumed.captureActive() && resumed.count() == 3);
+    assert(eventAt(resumed, 2).kind == TASK_SWITCH_LOOP_IN);
+    assert(eventAt(resumed, 0).captureId == eventAt(resumed, 2).captureId);
+
     // Timestamp subtraction is wrap-safe across micros() rollover.
     trace.switchedOut(UINT32_MAX - 999, 1, 1);
     trace.switchedIn(1000, 1, 1);
