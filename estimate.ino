@@ -5,6 +5,7 @@
 #include "vector.h"
 #include "lpf.h"
 #include "util.h"
+#include "attitude_vqf.h"
 
 float accWeight = 0.003;
 static const float ESTIMATE_NOMINAL_DT = 0.001f;
@@ -39,11 +40,41 @@ LowPassFilter<Vector> ratesFilter(0.2f); // 1 ms reference coefficient; about 35
 // attenuated before the 1 g confidence gate so aliased high-frequency vibration
 // does not disable attitude correction for most of a motor run.
 LowPassFilter<Vector> accelerationFusionFilter(0.2f); // about 35.5 Hz at 1 kHz
+#if ATTITUDE_ESTIMATOR_VQF
+static VqfAttitudeEstimator vqfAttitudeEstimator;
+#endif
 
 void estimate() {
+	#if ATTITUDE_ESTIMATOR_VQF
+	const float accNorm = acc.norm();
+	landed = isfinite(accNorm) && !motorsActive() && fabsf(accNorm - ONE_G) < ONE_G * 0.1f;
+	const Vector gravityReference = accelerationFusionFilter.update(acc, dt, ESTIMATE_NOMINAL_DT);
+	float correctionConfidence = 1.0f;
+	if (!landed) {
+		correctionConfidence = 0.0f;
+		if (armed && isfinite(accNorm) && accNorm >= 1e-3f && gravityReference.valid()) {
+			const float gravityNorm = gravityReference.norm();
+			if (isfinite(gravityNorm) && gravityNorm >= 1e-3f) {
+				const float normTolerance = ONE_G * 0.15f;
+				correctionConfidence = constrain(1.0f - fabsf(gravityNorm - ONE_G) / normTolerance,
+					0.0f, 1.0f);
+				const float stickDeflection = max(fabsf(controlRoll), fabsf(controlPitch));
+				const float stickGate = levelGateThreshold > 0.0f
+					? constrain(1.0f - stickDeflection / levelGateThreshold, 0.0f, 1.0f)
+					: (stickDeflection == 0.0f ? 1.0f : 0.0f);
+				correctionConfidence *= stickGate;
+			}
+		}
+	}
+	rates = ratesFilter.update(gyro, dt, ESTIMATE_NOMINAL_DT);
+	vqfAttitudeEstimator.update(attitude, gyro, acc, dt,
+		landed || correctionConfidence > 0.0f);
+	applyLevel();
+	#else
 	applyGyro();
 	applyAcc();
 	applyLevel();
+	#endif
 }
 
 void applyGyro() {
