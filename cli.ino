@@ -8,12 +8,16 @@
 #include "lpf.h"
 #include "flight_log.h"
 #include "log_transfer.h"
+#include "imu_capture.h"
 
 extern LowPassFilter<Vector> gyroBiasFilter;
 static LogOutputChunk serialLogChunk;
 static bool serialLogActive = false;
 static uint32_t serialLogGeneration = 0, serialLogRows = 0, serialLogRow = 0;
 static bool showMotd = true;
+static bool serialImuCaptureActive = false;
+static uint16_t serialImuCaptureRow = 0;
+extern ImuCaptureBuffer imuCapture;
 
 #if WEB_RC_ENABLED
 extern bool webConsoleEnabled;
@@ -52,6 +56,7 @@ const char* motd =
 "preset - 重置飞控参数（保留Wi-Fi凭据和系统日志）\n"
 "mfr, mfl, mrr, mrl - 测试马达 (马达不受算法影响运转，为了安全不要装桨叶！！！)\n"
 "ca - 六面校准加速度计\n"
+"imucap [start|stop|status|dump] - 采集/导出约1秒、1kHz机体坐标系IMU数据（仅上锁）\n"
 "ps - 显示pitch/roll/yaw姿态\n"
 "cr - 校准RC遥控器\n"
 "rc - 显示RC遥控数据\n"
@@ -148,8 +153,8 @@ void doCommand(String str, bool echo = false) {
 	if (command.isEmpty()) return;
     serialLogActive = false; serialLogChunk.clear(); // a new command cancels the previous serial export
 
-    command.toLowerCase();
-    if ((armed || motorsActive()) && command != "disarm" && command != "stab" &&
+	command.toLowerCase();
+	if ((armed || motorsActive()) && command != "disarm" && command != "stab" &&
         command != "acro" && command != "auto" && command != "raw") {
         static uint32_t lastDeniedMs = 0;
         if ((uint32_t)(millis() - lastDeniedMs) >= 1000) {
@@ -164,6 +169,7 @@ void doCommand(String str, bool echo = false) {
 	}
 
 	command.toLowerCase();
+	serialImuCaptureActive = false;
 
 	// execute command
 	if (command == "help" || command == "motd") {
@@ -194,6 +200,29 @@ void doCommand(String str, bool echo = false) {
 		printIMUInfo();
 		printIMUCalibration();
 		print("landed: %d\n", landed);
+	} else if (command == "imucap") {
+		if (arg0 == "start") {
+			if (imuCapture.start(armed, motorsActive(), ESP.getFreeHeap())) print("IMU_CAPTURE state=running capacity=%u sample_period_us~1000\n", IMU_CAPTURE_CAPACITY);
+			else print("IMU_CAPTURE start rejected: require disarmed/stopped motors, >=48 KiB heap, and available memory\n");
+		} else if (arg0 == "stop") {
+			imuCapture.stop();
+			print("IMU_CAPTURE state=%u rows=%u\n", (unsigned)imuCapture.state(), (unsigned)imuCapture.size());
+		} else if (arg0 == "status") {
+			print("IMU_CAPTURE state=%u rows=%u capacity=%u\n", (unsigned)imuCapture.state(),
+				(unsigned)imuCapture.size(), IMU_CAPTURE_CAPACITY);
+		} else if (arg0 == "dump") {
+			if (armed || motorsActive() || imuCapture.state() == IMU_CAPTURE_RUNNING) {
+				print("IMU_CAPTURE dump rejected: stop capture and motors first\n");
+			} else if (!imuCapture.size()) {
+				print("IMU_CAPTURE empty\n");
+			} else {
+				serialImuCaptureRow = 0;
+				serialImuCaptureActive = true;
+				print("time_us,gyro_x_rad_s,gyro_y_rad_s,gyro_z_rad_s,acc_x_m_s2,acc_y_m_s2,acc_z_m_s2\n");
+			}
+		} else {
+			print("usage: imucap start|stop|status|dump\n");
+		}
 	} else if (command == "arm") {
 		if (!requestArm()) print("系统未满足解锁条件，请检查油门、电池、IMU、故障和电机测试状态。\n");
 	} else if (command == "disarm") {
@@ -389,4 +418,39 @@ void serviceFlightLogExport() {
     const int available = Serial.availableForWrite();
     serialLogChunk.send(available > 0 ? (size_t)available : 0, 64,
         [](const uint8_t *data, size_t length) { return Serial.write(data, length); });
+}
+
+void serviceImuCaptureExport() {
+	if (!serialImuCaptureActive) return;
+	if (armed || motorsActive()) {
+		serialImuCaptureActive = false;
+		return;
+	}
+	if (serialImuCaptureRow >= imuCapture.size()) {
+		serialImuCaptureActive = false;
+		const uint16_t exportedRows = imuCapture.size();
+		imuCapture.release();
+		Serial.printf("IMU_CAPTURE_DONE rows=%u\n", exportedRows);
+		return;
+	}
+	const int available = Serial.availableForWrite();
+	if (available <= 0) return;
+	ImuCaptureSample sample;
+	if (!imuCapture.copy(serialImuCaptureRow, sample)) {
+		serialImuCaptureActive = false;
+		return;
+	}
+	char line[128];
+	const int length = snprintf(line, sizeof(line), "%lu,%.6f,%.6f,%.6f,%.2f,%.2f,%.2f\n",
+		(unsigned long)sample.timeUs,
+		sample.gyroMicroRadPerSec[0] * 1.0e-6f,
+		sample.gyroMicroRadPerSec[1] * 1.0e-6f,
+		sample.gyroMicroRadPerSec[2] * 1.0e-6f,
+		sample.accCentiMetersPerSec2[0] * 0.01f,
+		sample.accCentiMetersPerSec2[1] * 0.01f,
+		sample.accCentiMetersPerSec2[2] * 0.01f);
+	if (length > 0 && length < (int)sizeof(line) && available >= length &&
+		Serial.write((const uint8_t *)line, (size_t)length) == (size_t)length) {
+		++serialImuCaptureRow;
+	}
 }

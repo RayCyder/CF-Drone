@@ -8,8 +8,10 @@
 #include "util.h"
 #include "board_config.h"
 #include "diagnostics.h"
+#include "imu_capture.h"
 
 MPU9250 imu(SPI, BOARD_SPI_CS);
+ImuCaptureBuffer imuCapture;
 
 bool imuOK = false; // IMU 初始化是否成功；false 时禁止解锁，readIMU() 跳过等待
 extern bool saveParameterNow(const char *name);
@@ -123,6 +125,7 @@ void readIMU() {
 	}
 	acc  = Quaternion::rotateVector(acc,  _imuRotQuat);
 	gyro = Quaternion::rotateVector(gyro, _imuRotQuat);
+	imuCapture.append(micros(), gyro.x, gyro.y, gyro.z, acc.x, acc.y, acc.z);
 	recordLoopStage(LOOP_STAGE_IMU_PROCESS, micros() - processStarted);
 }
 
