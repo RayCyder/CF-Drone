@@ -39,6 +39,7 @@ bool landed; // are we landed and stationary
 
 void sendMotors();
 void testMotor(int n);
+void serviceSerialConsoleOutput();
 void serviceMotorTest();
 extern bool motorTestActive;
 void descend();
@@ -145,6 +146,7 @@ void loop() {
 	stageStarted = micros();
 	groupStarted = stageStarted;
 	handleInput(); // 处理串口/Web控制台输入命令
+	serviceSerialConsoleOutput(); // UART命令输出限额发送，避免诊断文本阻塞飞控循环
 	serviceFlightLogExport(); // 限额发送，解锁时取消
 	serviceImuCaptureExport(); // 限额发送高频IMU快照，仅上锁导出
 	updateAccelCalibration(); // 六面校准逐帧推进，不阻塞飞控主循环

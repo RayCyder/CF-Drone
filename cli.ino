@@ -9,6 +9,7 @@
 #include "flight_log.h"
 #include "log_transfer.h"
 #include "imu_capture.h"
+#include "console_output_queue.h"
 
 extern LowPassFilter<Vector> gyroBiasFilter;
 static LogOutputChunk serialLogChunk;
@@ -18,7 +19,35 @@ static bool showMotd = true;
 static bool serialImuCaptureActive = false;
 static bool serialImuCaptureIncludeTemp = false;
 static uint16_t serialImuCaptureRow = 0;
+static ConsoleOutputQueue serialConsoleOutputQueue;
+static portMUX_TYPE serialConsoleOutputMux = portMUX_INITIALIZER_UNLOCKED;
 extern ImuCaptureBuffer imuCapture;
+
+static void queueSerialConsoleOutput(const char *data, size_t length) {
+	size_t offset = 0;
+	while (offset < length) {
+		const size_t chunk = min((size_t)64, length - offset);
+		portENTER_CRITICAL(&serialConsoleOutputMux);
+		const size_t accepted = serialConsoleOutputQueue.push(data + offset, chunk);
+		portEXIT_CRITICAL(&serialConsoleOutputMux);
+		offset += accepted;
+		if (accepted != chunk) {
+			recordSystemLogEvent("CONSOLE", "serial output queue full; command text truncated");
+			break;
+		}
+	}
+}
+
+void serviceSerialConsoleOutput() {
+	char output[64];
+	const int uartAvailable = Serial.availableForWrite();
+	if (uartAvailable <= 0) return;
+	const size_t limit = min(sizeof(output), (size_t)uartAvailable);
+	portENTER_CRITICAL(&serialConsoleOutputMux);
+	const size_t count = serialConsoleOutputQueue.pop(output, limit);
+	portEXIT_CRITICAL(&serialConsoleOutputMux);
+	if (count) Serial.write((const uint8_t *)output, count);
+}
 
 #if WEB_RC_ENABLED
 extern bool webConsoleEnabled;
@@ -121,14 +150,14 @@ void print(const char* format, ...) {
 	if (webConsoleCommandTask == xTaskGetCurrentTaskHandle()) {
 		webLog(buf);
 	} else {
-		Serial.print(buf);
+		queueSerialConsoleOutput(buf, strlen(buf));
 #if WIFI_ENABLED
 		mavlinkPrint(buf);
 #endif
 		if (webConsoleEnabled) webLog(buf);
 	}
 #else
-	Serial.print(buf);
+	queueSerialConsoleOutput(buf, strlen(buf));
 #if WIFI_ENABLED
 	mavlinkPrint(buf);
 #endif
@@ -143,6 +172,7 @@ void pause(float duration) {
 		step();
 		estimate();
 		handleInput();
+		serviceSerialConsoleOutput();
 #if WIFI_ENABLED
 		processMavlink();
 #endif

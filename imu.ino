@@ -9,6 +9,7 @@
 #include "board_config.h"
 #include "diagnostics.h"
 #include "imu_capture.h"
+#include "stationary_imu_detector.h"
 
 MPU9250 imu(SPI, BOARD_SPI_CS);
 ImuCaptureBuffer imuCapture;
@@ -131,15 +132,28 @@ void readIMU() {
 
 void calibrateGyroOnce() {
 	static Delay landedDelay(2);
-	if (!landedDelay.update(landed)) return; // calibrate only if definitely stationary
+	static StationaryImuDetector stationaryDetector;
+	extern bool armed;
+	if (armed || !landed) {
+		stationaryDetector.reset();
+		landedDelay.update(false);
+		gyroBiasFilter.reset();
+		return;
+	}
+	Vector stationaryGyroMean;
+	const StationaryImuDetector::Result stationarity = stationaryDetector.update(gyro, acc, stationaryGyroMean);
+	if (stationarity == StationaryImuDetector::WINDOW_COLLECTING) return;
+	if (stationarity != StationaryImuDetector::STATIONARY) {
+		landedDelay.update(false);
+		gyroBiasFilter.reset();
+		return;
+	}
+	if (!landedDelay.update(true)) return; // require 2 seconds of stable windows
 
-	// readIMU() has already subtracted gyroBias, so `gyro` is the residual.
-	// Smooth that residual and make a bounded, slow correction to the stored
-	// bias. Replacing gyroBias with the residual would erase the actual bias.
-	const Vector residual = gyroBiasFilter.update(gyro, dt, 0.001f);
-	if (!residual.valid() || !isfinite(dt) || dt <= 0.0f) return;
-	const float correction = constrain(dt * 0.2f, 0.0f, 0.01f);
-	gyroBias += residual * correction;
+	// `gyro` is still the raw sensor reading here; bias subtraction happens
+	// immediately after this function. Update only from a complete stable window.
+	gyroBias = gyroBiasFilter.update(stationaryGyroMean,
+		StationaryImuDetector::WINDOW_SAMPLES * 0.001f, 0.001f);
 }
 
 void calibrateAccel() {
