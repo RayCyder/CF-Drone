@@ -1560,15 +1560,15 @@ void setupWebRC() {
         client.setTimeout(100);
         client.print("HTTP/1.1 200 OK\r\nContent-Type: text/csv; charset=utf-8\r\n");
         client.print("Cache-Control: no-store\r\nConnection: close\r\n\r\n");
-        client.print("sequence,started_us,elapsed_us,caller_task,caller_pc,callback_pc,result,caller_core,target_core,overwritten\n");
+        client.print("sequence,request_us,dispatch_us,caller_task,caller_pc,callback_pc,caller_core,target_core,overwritten\n");
         for (uint8_t i = 0; i < count && client.connected(); ++i) {
             char line[144];
-            const int length = snprintf(line, sizeof(line), "%lu,%lu,%lu,0x%08lx,0x%08lx,0x%08lx,%ld,%u,%u,%lu\n",
+            const int length = snprintf(line, sizeof(line), "%lu,%lu,%lu,0x%08lx,0x%08lx,0x%08lx,%u,%u,%lu\n",
                 (unsigned long)events[i].sequence, (unsigned long)events[i].startedUs,
                 (unsigned long)events[i].elapsedUs, (unsigned long)events[i].callerTask,
                 (unsigned long)events[i].callerPc, (unsigned long)events[i].callbackPc,
-                (long)events[i].result, (unsigned)events[i].callerCore,
-                (unsigned)events[i].targetCore, (unsigned long)overwritten);
+                (unsigned)events[i].callerCore, (unsigned)events[i].targetCore,
+                (unsigned long)overwritten);
             if (length <= 0 || length >= (int)sizeof(line) ||
                 client.write((const uint8_t *)line, (size_t)length) != (size_t)length) break;
         }

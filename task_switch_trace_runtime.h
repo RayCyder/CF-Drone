@@ -10,7 +10,6 @@ struct TaskIpcTraceEvent {
     uint32_t callerTask;
     uint32_t callerPc;
     uint32_t callbackPc;
-    int32_t result;
     uint8_t callerCore;
     uint8_t targetCore;
 };
