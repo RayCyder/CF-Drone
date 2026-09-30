@@ -47,6 +47,13 @@ static VqfAttitudeEstimator vqfAttitudeEstimator;
 void estimate() {
 	#if ATTITUDE_ESTIMATOR_VQF
 	const float accNorm = acc.norm();
+	if (!isfinite(accNorm) || accNorm < 1e-3f) {
+		landed = false;
+		rates = ratesFilter.update(gyro, dt, ESTIMATE_NOMINAL_DT);
+		vqfAttitudeEstimator.update(attitude, gyro, acc, dt, false);
+		applyLevel();
+		return;
+	}
 	landed = isfinite(accNorm) && !motorsActive() && fabsf(accNorm - ONE_G) < ONE_G * 0.1f;
 	const Vector gravityReference = accelerationFusionFilter.update(acc, dt, ESTIMATE_NOMINAL_DT);
 	float correctionConfidence = 1.0f;
