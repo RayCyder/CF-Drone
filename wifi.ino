@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <WiFiAP.h>
 #include <WiFiUdp.h>
+#include <NetworkEvents.h>
 #include <DNSServer.h>
 #include <stddef.h>
 #include <string.h>
@@ -16,6 +17,7 @@
 #include "system_log.h"
 #include "flight_log.h"
 #include "wifi_profiles.h"
+#include "wifi_recovery_policy.h"
 
 extern Preferences storage;
 extern bool armed;
@@ -260,13 +262,18 @@ static uint32_t wifiTxDropped = 0;
 static WiFiServer telemetryServer(81);
 static DNSServer wifiDnsServer;
 static bool configPortalActive = false;
+static bool configPortalStarting = false;
 static String configPortalSSID;
 static uint32_t wifiAPHealthCheckAtMs = 0;
+static uint32_t wifiAPStartAttemptMs = 0;
+static uint32_t wifiAPActiveSinceMs = 0;
 static bool wifiWasConnected = false;
 static bool wifiRestartScheduled = false;
 static uint32_t wifiConnectStartedMs = 0;
 static uint32_t wifiRestartAtMs = 0;
 static uint32_t wifiAPRetryAtMs = 0;
+static uint32_t wifiSTAReconnectAtMs = 0;
+static bool wifiAPEventStarted = false;
 static const uint32_t TELEMETRY_SAMPLE_INTERVAL_MS = 500; // 遥测样本 2Hz，降低网络任务占用
 static const int TELEMETRY_LOG_COLUMNS_CAPACITY = 40;
 static const int TELEMETRY_FRAME_CAPACITY = 1024;
@@ -384,8 +391,28 @@ static const uint32_t WIFI_CONNECT_TIMEOUT_MS = 20000;
 static const uint32_t WIFI_RESTART_DELAY_MS = 1500;
 static const uint32_t WIFI_AP_RETRY_DELAY_MS = 5000;
 
+static void stopWiFiConfigPortalForRetry(const char *reason) {
+	wifiDnsServer.stop();
+	WiFi.softAPdisconnect(false);
+	__atomic_store_n(&wifiAPEventStarted, false, __ATOMIC_RELEASE);
+	configPortalActive = false;
+	configPortalStarting = false;
+	configPortalSSID = "";
+	wifiAPRetryAtMs = millis() + WIFI_AP_RETRY_DELAY_MS;
+	if (wifiMode == W_STA) {
+		WiFi.mode(WIFI_STA);
+		wifiSTAReconnectAtMs = millis();
+	} else {
+		WiFi.mode(WIFI_OFF);
+	}
+	char eventMessage[64];
+	snprintf(eventMessage, sizeof(eventMessage), "state=RETRY reason=%s", reason);
+	recordSystemLogEvent("WIFI_AP", eventMessage);
+}
+
 static void startWiFiConfigPortal(bool keepStation) {
-	if (configPortalActive) return;
+	if (configPortalActive || configPortalStarting) return;
+	__atomic_store_n(&wifiAPEventStarted, false, __ATOMIC_RELEASE);
 	const wifi_mode_t requestedMode = keepStation ? WIFI_AP_STA : WIFI_AP;
 	const bool modeReady = WiFi.mode(requestedMode);
 	String ssid = storage.getString("WIFI_AP_SSID", "Drone_WiFi");
@@ -394,6 +421,8 @@ static void startWiFiConfigPortal(bool keepStation) {
 	const bool credentialsValid = ssid.length() <= 32 &&
 		(password.isEmpty() || (password.length() >= 8 && password.length() <= 63));
 	bool started = false;
+	configPortalStarting = true;
+	wifiAPStartAttemptMs = millis();
 	if (credentialsValid) {
 		const char *passphrase = password.isEmpty() ? nullptr : password.c_str();
 		started = WiFi.softAP(ssid.c_str(), passphrase);
@@ -404,6 +433,8 @@ static void startWiFiConfigPortal(bool keepStation) {
 		// open default SSID; never print or persist a password in diagnostics.
 		ssid = "Drone_WiFi";
 		password = "";
+		__atomic_store_n(&wifiAPEventStarted, false, __ATOMIC_RELEASE);
+		wifiAPStartAttemptMs = millis();
 		started = WiFi.softAP(ssid.c_str(), nullptr);
 		if (started) {
 			print("WIFI_CONFIG_AP fallback=DEFAULT reason=%s mode_ready=%d\n",
@@ -413,6 +444,7 @@ static void startWiFiConfigPortal(bool keepStation) {
 		}
 	}
 	if (!started) {
+		configPortalStarting = false;
 		wifiAPRetryAtMs = millis() + WIFI_AP_RETRY_DELAY_MS;
 		print("WIFI_CONFIG_AP result=FAIL ssid=%s mode_ready=%d mode=%d retry_ms=%lu credentials_valid=%d\n",
 			ssid.c_str(), modeReady ? 1 : 0, (int)WiFi.getMode(),
@@ -420,15 +452,11 @@ static void startWiFiConfigPortal(bool keepStation) {
 		recordSystemLogEvent("WIFI_AP", "result=FAIL retry_ms=5000");
 		return;
 	}
-	configPortalActive = true;
 	configPortalSSID = ssid;
-	wifiAPHealthCheckAtMs = millis() + 1000;
 	wifiAPRetryAtMs = 0;
-	wifiDnsServer.start(53, "*", WiFi.softAPIP());
-	print("WIFI_CONFIG_AP result=READY ssid=%s security=%s ip=%s\n",
-		ssid.c_str(), password.isEmpty() ? "OPEN" : "WPA2", WiFi.softAPIP().toString().c_str());
-	print("Wi-Fi配网页面: http://%s/wifi\n", WiFi.softAPIP().toString().c_str());
-	String eventMessage = "result=READY ssid=" + ssid + " ip=" + WiFi.softAPIP().toString();
+	print("WIFI_CONFIG_AP result=STARTING ssid=%s security=%s mode_ready=%d\n",
+		ssid.c_str(), password.isEmpty() ? "OPEN" : "WPA2", modeReady ? 1 : 0);
+	String eventMessage = "result=STARTING ssid=" + ssid;
 	recordSystemLogEvent("WIFI_AP", eventMessage.c_str());
 }
 
@@ -439,6 +467,12 @@ void setupWiFi() {
 	// esp_wifi_set_config() or consume more NVS entries.
 	WiFi.persistent(false);
 	WiFi.setSleep(false);
+	WiFi.onEvent([](WiFiEvent_t event) {
+		if (event == ARDUINO_EVENT_WIFI_AP_START)
+			__atomic_store_n(&wifiAPEventStarted, true, __ATOMIC_RELEASE);
+		else if (event == ARDUINO_EVENT_WIFI_AP_STOP)
+			__atomic_store_n(&wifiAPEventStarted, false, __ATOMIC_RELEASE);
+	});
 	loadActiveWifiProfiles();
 	wifiProfileBackupReady = mirrorWifiProfilesToNvs(activeWifiProfiles, activeWifiProfileCount);
 	print("WIFI_PROFILE_BACKUP state=%s profiles=%u\n", wifiProfileBackupReady ? "READY" : "PENDING",
@@ -517,25 +551,48 @@ void serviceWiFi() {
 		recordSystemLogEvent("WIFI", "state=RESTARTING reason=credentials_saved");
 		ESP.restart();
 	}
+	const uint32_t now = millis();
+	if (configPortalStarting) {
+		const String activeSSID = WiFi.softAPSSID();
+		const IPAddress activeAPIP = WiFi.softAPIP();
+		const bool eventStarted = __atomic_load_n(&wifiAPEventStarted, __ATOMIC_ACQUIRE);
+		if (WifiRecoveryPolicy::apReady(eventStarted, activeSSID == configPortalSSID,
+			activeAPIP != IPAddress(0, 0, 0, 0))) {
+			configPortalStarting = false;
+			configPortalActive = true;
+			wifiAPActiveSinceMs = now;
+			wifiAPHealthCheckAtMs = now + 1000;
+			wifiDnsServer.start(53, "*", activeAPIP);
+			print("WIFI_CONFIG_AP result=READY ssid=%s ip=%s event=AP_START\n",
+				configPortalSSID.c_str(), activeAPIP.toString().c_str());
+			print("Wi-Fi配网页面: http://%s/wifi\n", activeAPIP.toString().c_str());
+			String eventMessage = "result=READY ssid=" + configPortalSSID + " ip=" + activeAPIP.toString();
+			recordSystemLogEvent("WIFI_AP", eventMessage.c_str());
+		} else if (WifiRecoveryPolicy::apStartTimedOut(true, now, wifiAPStartAttemptMs)) {
+			print("WIFI_CONFIG_AP result=TIMEOUT event_started=%d ssid=%s ip=%s action=RETRY\n",
+				eventStarted ? 1 : 0, activeSSID.c_str(), activeAPIP.toString().c_str());
+			stopWiFiConfigPortalForRetry("start_timeout");
+		}
+	}
 	if (configPortalActive && (int32_t)(millis() - wifiAPHealthCheckAtMs) >= 0) {
 		wifiAPHealthCheckAtMs = millis() + 1000;
 		const String activeSSID = WiFi.softAPSSID();
 		const IPAddress activeAPIP = WiFi.softAPIP();
-		if (activeSSID != configPortalSSID || activeAPIP == IPAddress(0, 0, 0, 0)) {
+		const bool eventStarted = __atomic_load_n(&wifiAPEventStarted, __ATOMIC_ACQUIRE);
+		if (!WifiRecoveryPolicy::apReady(eventStarted, activeSSID == configPortalSSID,
+			activeAPIP != IPAddress(0, 0, 0, 0))) {
 			print("WIFI_CONFIG_AP state=LOST expected_ssid=%s actual_ssid=%s ip=%s action=RESTART\n",
 				configPortalSSID.c_str(), activeSSID.c_str(), activeAPIP.toString().c_str());
-			recordSystemLogEvent("WIFI_AP", "state=LOST action=RESTART");
-			wifiDnsServer.stop();
-			configPortalActive = false;
-			wifiAPRetryAtMs = millis() + WIFI_AP_RETRY_DELAY_MS;
-			// A failed AP start can leave the global mode set to AP while the AP
-			// interface itself never reached STARTED. Toggle the interface mode so
-			// the Arduino core re-runs its AP enable/disable hooks before retrying.
-			const bool stationModeReady = WiFi.mode(WIFI_STA);
-			const bool apModeReady = WiFi.mode(WIFI_AP);
-			print("WIFI_CONFIG_AP mode_cycle sta=%d ap=%d current=%d\n",
-				stationModeReady ? 1 : 0, apModeReady ? 1 : 0, (int)WiFi.getMode());
+			stopWiFiConfigPortalForRetry("health_lost");
+		} else if (WifiRecoveryPolicy::apRefreshDue(true, WiFi.softAPgetStationNum() > 0,
+			now, wifiAPActiveSinceMs)) {
+			print("WIFI_CONFIG_AP state=NO_CLIENT action=REFRESH\n");
+			stopWiFiConfigPortalForRetry("no_client_refresh");
 		}
+	}
+	if (wifiMode == W_AP && !configPortalActive && !configPortalStarting &&
+		(!wifiAPRetryAtMs || WifiRecoveryPolicy::deadlineReached(now, wifiAPRetryAtMs))) {
+		startWiFiConfigPortal(false);
 	}
 	if (wifiMode != W_STA) return;
 
@@ -545,14 +602,16 @@ void serviceWiFi() {
 			// Avoid String allocation and network-stack queries in the 1 kHz
 			// control loop. Detailed link information remains available via `wifi`.
 			recordSystemLogEvent("WIFI", "state=CONNECTED");
-			if (configPortalActive) {
-				wifiDnsServer.stop();
-				WiFi.softAPdisconnect(false);
-				WiFi.mode(WIFI_STA);
-				configPortalActive = false;
-				configPortalSSID = "";
-				recordSystemLogEvent("WIFI_CONFIG_AP", "state=CLOSED reason=station_connected");
-			}
+		}
+		if (configPortalActive || configPortalStarting) {
+			wifiDnsServer.stop();
+			WiFi.softAPdisconnect(false);
+			WiFi.mode(WIFI_STA);
+			__atomic_store_n(&wifiAPEventStarted, false, __ATOMIC_RELEASE);
+			configPortalActive = false;
+			configPortalStarting = false;
+			configPortalSSID = "";
+			recordSystemLogEvent("WIFI_CONFIG_AP", "state=CLOSED reason=station_connected");
 		}
 		return;
 	}
@@ -571,8 +630,22 @@ void serviceWiFi() {
 		print("WIFI_STATE state=DISCONNECTED reconnect=profile_1\n");
 		recordSystemLogEvent("WIFI", "state=DISCONNECTED reconnect=profile_1");
 	}
+	const bool portalOpen = configPortalActive || configPortalStarting;
+	if (WifiRecoveryPolicy::staRetryDue(activeWifiProfileCount > 0, false, portalOpen,
+		now, wifiSTAReconnectAtMs)) {
+		wifiProfileAttempt = (uint8_t)((wifiProfileAttempt + 1) % activeWifiProfileCount);
+		char ssid[33], password[64];
+		wifiProfileStrings(activeWifiProfiles[wifiProfileAttempt], ssid, sizeof(ssid), password, sizeof(password));
+		WiFi.mode(WIFI_AP_STA);
+		WiFi.setAutoReconnect(true);
+		WiFi.begin(ssid, password);
+		wifiSTAReconnectAtMs = now + WifiRecoveryPolicy::STA_RETRY_INTERVAL_MS;
+		print("WIFI_STATE state=PORTAL_STA_RETRY profile=%u/%u ssid=%s\n",
+			(unsigned)(wifiProfileAttempt + 1), (unsigned)activeWifiProfileCount, ssid);
+		recordSystemLogEvent("WIFI", "state=PORTAL_STA_RETRY");
+	}
 	if (!configPortalActive && (uint32_t)(millis() - wifiConnectStartedMs) >= WIFI_CONNECT_TIMEOUT_MS &&
-		(!wifiAPRetryAtMs || (int32_t)(millis() - wifiAPRetryAtMs) >= 0)) {
+		!configPortalStarting && (!wifiAPRetryAtMs || (int32_t)(millis() - wifiAPRetryAtMs) >= 0)) {
 		if ((uint8_t)(wifiProfileAttempt + 1) < activeWifiProfileCount) {
 			++wifiProfileAttempt;
 			char ssid[33], password[64];
@@ -589,10 +662,9 @@ void serviceWiFi() {
 		}
 		print("WIFI_STATE state=CONNECT_TIMEOUT action=SWITCH_TO_CONFIG_AP\n");
 		recordSystemLogEvent("WIFI", "state=CONNECT_TIMEOUT action=SWITCH_TO_CONFIG_AP");
-		WiFi.setAutoReconnect(false);
-		const bool stationDisconnected = WiFi.disconnect(false, false);
-		print("WIFI_CONFIG_AP sta_disconnect=%d\n", stationDisconnected ? 1 : 0);
-		startWiFiConfigPortal(false);
+		WiFi.setAutoReconnect(true);
+		wifiSTAReconnectAtMs = millis();
+		startWiFiConfigPortal(true);
 	}
 }
 

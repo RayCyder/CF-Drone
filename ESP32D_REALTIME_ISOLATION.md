@@ -16,6 +16,15 @@ Core 0 owns network-facing work:
 
 The flight loop drains at most two parsed MAVLink messages each 200 Hz service pass. Flight commands remain applied by the flight loop, so a communications task cannot directly arm, change mode, or write motor targets. Queue overflow drops parsed messages and is counted. UDP output uses a non-blocking queue and may drop when saturated. No blocking wait is permitted on a flight-loop enqueue.
 
+## Wi-Fi recovery requirements
+
+- `WIFI-REC-1`: A configuration AP is ready only after the ESP32 network event loop reports `AP_START` and the configured SSID and AP address are readable. If the event is absent, the AP is stopped and retried instead of exposing a cached SSID/IP as healthy. An active portal with no associated client is periodically restarted so a stalled beacon path can recover without rebooting the flight controller.
+- `WIFI-REC-2`: When saved STA profiles cannot connect within the bounded startup window, provisioning runs in `AP+STA` mode. The STA side continues bounded reconnect attempts while the portal remains available; a recovered STA connection closes the portal and returns to STA-only mode.
+
+Delivery is split into two independently verifiable stages. Stage 1 adds a platform-independent recovery policy and host regressions for AP event confirmation, AP start timeout, no-client refresh, timer wrap, and portal-time STA retry. Stage 2 connects that policy to Arduino Wi-Fi events and the core-0 `wifi_service` task, then verifies the host suite and ESP32-D firmware build. Device acceptance requires forcing the saved network unavailable, observing the provisioning SSID, restoring the network without rebooting, and confirming HTTP recovery at the STA address.
+
+Implementation status (2026-09-30): Stages 1 and 2 are complete. The full host suite passes, the ESP32-D `min_spiffs` image builds at 1,284,687 bytes (65% of its application slot), and the verified image was flashed to the target at 115200 baud after the adapter proved unreliable at 921600 baud. The target rebooted disarmed with no active diagnostic fault and served `/web_rc/status` at its saved STA address. The forced network-loss/AP-beacon/automatic-STA-return scenario remains the required device acceptance check; normal STA boot alone does not prove that recovery path.
+
 ## Sensor contracts
 
 `flight_sensor_interfaces.h` defines timestamped barometer and downward-range samples, validity checks, and driver interfaces. No sensor driver, altitude estimator, near-ground controller, or touchdown behavior is enabled by these declarations. Missing, stale, non-finite, or low-quality samples must be rejected by future estimator/control code; existing controlled-descent behavior remains the fallback.
