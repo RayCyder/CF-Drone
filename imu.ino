@@ -133,7 +133,13 @@ void calibrateGyroOnce() {
 	static Delay landedDelay(2);
 	if (!landedDelay.update(landed)) return; // calibrate only if definitely stationary
 
-	gyroBias = gyroBiasFilter.update(gyro, dt, 0.001f);
+	// readIMU() has already subtracted gyroBias, so `gyro` is the residual.
+	// Smooth that residual and make a bounded, slow correction to the stored
+	// bias. Replacing gyroBias with the residual would erase the actual bias.
+	const Vector residual = gyroBiasFilter.update(gyro, dt, 0.001f);
+	if (!residual.valid() || !isfinite(dt) || dt <= 0.0f) return;
+	const float correction = constrain(dt * 0.2f, 0.0f, 0.01f);
+	gyroBias += residual * correction;
 }
 
 void calibrateAccel() {
