@@ -111,7 +111,7 @@ private:
 		diagnosticLastWait_ = {};
 		diagnosticLastWait_.waitStartedUs = (uint32_t)micros();
 		diagnosticLastWait_.interruptSource = !usingInterrupt ? IMU_INTERRUPT_NONE :
-			interruptPin == -1 ? IMU_INTERRUPT_SOFTWARE_TIMER : IMU_INTERRUPT_DRDY_PIN;
+			interruptPin == -1 ? IMU_INTERRUPT_GPTIMER : IMU_INTERRUPT_DRDY_PIN;
 		const uint32_t interruptCountAtStart = __atomic_load_n(&diagnosticInterruptCount_, __ATOMIC_ACQUIRE);
 		if (this->status() && interruptPin != -1) {
 			finishDiagnosticWait(false, interruptCountAtStart);
@@ -175,7 +175,7 @@ private:
 
 		float rate = getRate();
 		uint32_t frequency = 1000000;
-		// The software timer substitutes for an unwired DRDY pin. Make it wake
+		// The hardware GPTimer substitutes for an unwired DRDY pin. Make it wake
 		// slightly after the nominal sensor period so phase drift cannot make the
 		// loop poll a not-yet-ready sample and then wait through another full tick.
 		constexpr uint64_t IMU_TIMER_PHASE_MARGIN_US = 10;
