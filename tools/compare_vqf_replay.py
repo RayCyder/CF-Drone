@@ -21,14 +21,15 @@ DEFAULT_CAPTURES = (
 )
 
 
-def compile_driver(compiler: str, output: Path, vqf: bool) -> None:
+def compile_driver(compiler: str, output: Path, vqf: bool, tau_acc: float = 3.0) -> None:
     command = [
         compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-Wno-vla",
         "-I", str(ROOT / "tests/stubs"), "-I", str(ROOT),
         f'-DESTIMATOR_SOURCE="{ROOT / "estimate.ino"}"',
     ]
     if vqf:
-        command.extend(("-DATTITUDE_ESTIMATOR_VQF=1", "-DVQF_SINGLE_PRECISION"))
+        command.extend(("-DATTITUDE_ESTIMATOR_VQF=1", "-DVQF_SINGLE_PRECISION",
+                        f"-DVQF_TAU_ACC={tau_acc:.9g}"))
     command.append(str(ROOT / "tests/estimator_replay_driver.cpp"))
     if vqf:
         command.append(str(ROOT / "basicvqf.cpp"))
@@ -79,6 +80,8 @@ def main() -> int:
                         help="current estimator EST_ACC_WEIGHT (default: 0.003)")
     parser.add_argument("--skip-start-ms", type=float, default=100.0,
                         help="motor-start transient to exclude (default: 100 ms)")
+    parser.add_argument("--tau-acc", type=float, action="append", dest="tau_acc_values",
+                        help="VQF acceleration correction time constant in seconds; repeat to compare values (default: 3.0)")
     args = parser.parse_args()
     if not math.isfinite(args.acc_weight) or not 0.0 <= args.acc_weight <= 1.0:
         parser.error("--acc-weight must be finite and in [0, 1]")
@@ -93,19 +96,28 @@ def main() -> int:
     for capture in captures:
         if not capture.is_file():
             raise SystemExit(f"capture not found: {capture}")
+    tau_acc_values = args.tau_acc_values or [3.0]
+    if any(not math.isfinite(value) or value <= 0.0 for value in tau_acc_values):
+        parser.error("--tau-acc values must be finite and greater than zero")
 
     with tempfile.TemporaryDirectory(prefix="cf-drone-vqf-replay-") as directory:
         current_bin = Path(directory) / "current-estimator"
-        vqf_bin = Path(directory) / "vqf-single-precision"
         compile_driver(compiler, current_bin, vqf=False)
-        compile_driver(compiler, vqf_bin, vqf=True)
+        vqf_bins = []
+        for index, tau_acc in enumerate(tau_acc_values):
+            vqf_bin = Path(directory) / f"vqf-single-precision-{index}"
+            compile_driver(compiler, vqf_bin, vqf=True, tau_acc=tau_acc)
+            vqf_bins.append((tau_acc, vqf_bin))
         print("Capture | estimator | roll mean/std/pp (deg) | pitch mean/std/pp (deg)")
         for capture in captures:
             _, median_dt_us = read_capture_timing(capture)
             first_index = 450 + round(args.skip_start_ms * 1000.0 / median_dt_us)
             current = run_driver(current_bin, capture, args.acc_weight)
-            vqf = run_driver(vqf_bin, capture, args.acc_weight)
-            for name, samples in (("current", current), ("VQF 6D", vqf)):
+            outputs = [("current", current)]
+            outputs.extend((f"VQF 6D tauAcc={tau_acc:g}s",
+                            run_driver(vqf_bin, capture, args.acc_weight))
+                           for tau_acc, vqf_bin in vqf_bins)
+            for name, samples in outputs:
                 roll = axis_summary(samples, 0, first_index)
                 pitch = axis_summary(samples, 1, first_index)
                 print(f"{capture.name} | {name} | "

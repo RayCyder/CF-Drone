@@ -192,6 +192,8 @@ ESP32-D0WD-V3 构建数据（含后续原始模长置信度更新）：默认固
 
 复用上述五段 FR（更换后重复三次）、FL、RL 采集，将 VQF `tauAcc` 从原型默认 3.0 s 改为 0.3、0.5、1.0 s 做主机回放；当前估计器保持 `EST_ACC_WEIGHT=0.003`。五段合并的 roll/pitch 标准差均值如下（单位：度）：
 
+可用 `python3 tools/compare_vqf_replay.py --tau-acc 0.3 --tau-acc 0.5 --tau-acc 1.0 --tau-acc 3.0` 重现每段结果；省略 `--tau-acc` 时仍只回放原型默认的 3.0 s。
+
 | 算法/参数 | Roll 标准差均值 | Pitch 标准差均值 | FR1/FR2/FR3 Roll 标准差 |
 |---|---:|---:|---|
 | 当前估计器 | 0.1021 | 0.0562 | 0.0663 / 0.0887 / 0.1635 |
