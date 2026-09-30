@@ -1,6 +1,6 @@
 # Control-loop stall localization
 
-Status: diagnostic build now fits target; device-level capture and overhead acceptance pending.
+Status: diagnostic build fits and has been flashed; one startup scheduler delay is localized, while the prior intermittent IMU wait delays and observer-overhead acceptance remain open.
 Updated: 2026-10-01
 
 ## Goal and scope
@@ -60,10 +60,18 @@ The firmware uses accelerometer and gyroscope inputs only. No GPS, barometer, or
 
 - Requirement IDs: STALL-1, STALL-4, STALL-5.
 - The Arduino package links a precompiled `libfreertos.a`, so sketch-defined FreeRTOS trace macros cannot instrument its context-switch path. The project-owned diagnostic build instead uses GNU ld `--wrap=vTaskSwitchContext`, which the current ESP32 port calls from `portasm.S`; `tools/build_task_trace.sh` applies the wrapper only to the diagnostic build. The normal build has no scheduler wrapper.
-- The wrapper records outgoing/incoming task handles around the real scheduler switch on the flight-loop core only. The diagnostic build keeps the recorder ring and console queue smaller to fit internal DRAM; default builds retain their original recorder and output queue sizes. It uses one timestamp per switch, fixed memory, no formatting, sockets, heap, or flash operations in the hook. The web endpoint freezes recording and waits for in-flight wrappers before reading the ring. The endpoint currently emits CSV directly; it has no separate host formatter test yet.
+- The wrapper records outgoing/incoming task handles around the real scheduler switch on the flight-loop core only. A second diagnostic wrapper records the longest `esp_ipc_call_blocking()` call targeting that core when its elapsed time is at least 1.5 ms; it stores the caller task, call-site address, callback address, duration, and result in one fixed slot. `/diag/ipc.csv` exports that slot while disarmed. Espressif documents that this API waits for callback completion and that task-context IPC callbacks must not block or yield ([IPC API](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/ipc.html)). The diagnostic build keeps the recorder ring and console queue smaller to fit internal DRAM; default builds retain their original recorder and output queue sizes. Hooks use fixed memory, no formatting, sockets, heap, or flash operations. The web endpoints freeze recording and wait for in-flight wrappers before reading the data. CSV serialization has no separate host formatter test yet.
 - Acceptance: diagnostic target compiles; a hardware trace must show loop task switch-out/in and known handles; `sys` maps handles to task names. Confirm tracing overhead and no extra >1.5 ms intervals before using the data to attribute a flight issue.
 
-Build the diagnostic image with `tools/build_task_trace.sh esp32:esp32:esp32`. After installing that image, keep the aircraft disarmed and download `http://<device-address>/diag/scheduler.csv`; match its `task_handle` values to the `Handle` column printed by the `sys` console command. The regular Arduino build does not include the scheduler wrapper. This implementation compiles the diagnostic image but does not flash it.
+Build the diagnostic image with `tools/build_task_trace.sh esp32:esp32:esp32`. Keep the aircraft disarmed and download `http://<device-address>/diag/scheduler.csv`; match its `task_handle` values to the `Handle` column printed by the `sys` console command. The regular Arduino build does not include the scheduler wrapper.
+
+### Device capture (2026-10-01)
+
+The initial diagnostic image was flashed to the ESP32-D at 115200 baud and verified by esptool hash. The aircraft stayed disarmed with zero throttle, 4.08 V, and no active faults. The scheduler capture is saved as [task-switch-trace-20261001.csv](data/attitude/task-switch-trace-20261001.csv). It records one 52.2 ms interval at loop sequence 40 on core 1: `loopTask` (`0x3ffb8188`) switched out to `ipc1` (`0x3ffb7d60`) at 1,450,275 us, then switched back at 1,502,475 us. The matching loop trace row has `dt_us=53,273`, `control_law_us=52,412`, and `estimate_us=129`. This establishes that this particular control-stage wall-time spike was preemption by `ipc1`; it does not identify which core-0 caller submitted the IPC callback. It is a startup event about 1.5 seconds after boot, so it does not explain the two IMU-wait spikes observed hours into the earlier run.
+
+The `sys` task table mapped the handle to `ipc1`, priority 24 on core 1. A later check at about 146 seconds uptime found no additional scheduler capture. Its newest loop row showed a 6.231 ms `serial_input` span caused by the `sys` command itself; that command-induced sample must not be treated as a normal-load baseline. The live status endpoint still reported `armed=false`, zero throttle, and no faults.
+
+A follow-up diagnostic build wraps `esp_ipc_call_blocking()` and was built at 1,300,959 bytes (99% of the 1,310,720-byte app partition; 124,572 bytes of globals, 38% of DRAM). It was flashed and hash-verified. Its first loop trace row at 1,430 ms uptime was nominal (`dt_us=1,850`, `imu_wait_us=103`); `/diag/scheduler.csv` and `/diag/ipc.csv` were empty. The status endpoint returned disarmed, zero throttle, and no faults. The IPC wrapper is now available for a later recurrence, but this brief post-boot sample does not validate the rare-stall fix or the wrapper's effect during a representative long run.
 
 ### Stage C — controlled localization and fix
 
@@ -79,7 +87,9 @@ Build the diagnostic image with `tools/build_task_trace.sh esp32:esp32:esp32`. A
 
 ## Known gaps before claiming root cause
 
-- Firmware is not yet flashed to the device. The diagnostic target now compiles within the ESP32-D partition/DRAM budget, but hook behavior, raw task-handle mapping, and measured overhead remain unverified.
-- This trace records task switches, not ISR entry/exit. A long ISR or long instruction path may appear as the flight task remaining current; if the switch trace does not explain a gap, add temporary SystemView/ISR or nested function markers before assigning a cause.
-- Existing live evidence does not establish which task/ISR accounts for the recurring 50 ms delay.
-- Unit tests and target compilation cannot prove instrumentation overhead or flight behavior; target-only disarmed tests remain mandatory.
+- One startup control-stage stall is correlated with the core-1 `ipc1` task, but the origin and work of its cross-core callback remain unknown.
+- The IPC wrapper has not yet captured a long blocking call; its caller/callback address fields are therefore build-verified but not device-validated against a recurrence.
+- The two earlier 50 ms-class `imu_wait` spikes occurred at about 6,055 seconds uptime and were not reproduced during the 146-second diagnostic run. The startup `ipc1` capture is temporally and stage-wise distinct; do not attribute those IMU waits to it.
+- This trace records task switches, not ISR entry/exit. A long ISR or long instruction path may appear as the flight task remaining current; if a representative IMU wait is not explained by scheduler events, add timer-ISR/semaphore timestamps or targeted markers around the wait path.
+- Matched tracing-off/on runs without CLI output have not been collected, so observer-overhead acceptance is still open. The `sys`-command sample is not a valid baseline for this comparison.
+- Host tests and target compilation cannot prove instrumentation overhead or flight behavior; target-only disarmed tests remain mandatory.

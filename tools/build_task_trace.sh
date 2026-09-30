@@ -15,5 +15,5 @@ fi
     --fqbn "$fqbn" \
     --build-path "$build_dir" \
     --build-property compiler.cpp.extra_flags=-DCF_DRONE_ENABLE_TASK_SWITCH_TRACE \
-    --build-property compiler.c.elf.extra_flags=-Wl,--wrap=vTaskSwitchContext \
+    --build-property compiler.c.elf.extra_flags=-Wl,--wrap=vTaskSwitchContext,--wrap=esp_ipc_call_blocking \
     "$repo_dir"

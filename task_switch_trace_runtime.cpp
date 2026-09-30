@@ -5,6 +5,7 @@
 #include <esp_timer.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_ipc.h"
 
 static constexpr uint8_t TASK_TRACE_CORE_COUNT = 1;
 
@@ -13,6 +14,12 @@ static uint32_t loopTaskHandleValue = 0;
 static uint8_t loopTaskCore = 0;
 static volatile uint32_t taskTraceEnabled = 0;
 static volatile uint32_t taskTraceWriters = 0;
+static constexpr uint8_t TASK_IPC_TRACE_CAPACITY = 1;
+static TaskIpcTraceEvent taskIpcTrace[TASK_IPC_TRACE_CAPACITY] = {};
+static uint32_t taskIpcTraceNext = 0;
+static uint32_t taskIpcTraceCount = 0;
+static uint32_t taskIpcTraceOverwritten = 0;
+static portMUX_TYPE taskIpcTraceMux = portMUX_INITIALIZER_UNLOCKED;
 
 static uint32_t currentTaskHandleValue() {
     return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(xTaskGetCurrentTaskHandle()));
@@ -69,7 +76,63 @@ bool copyTaskSwitchTrace(uint8_t coreId, uint32_t sequence,
     return coreId < TASK_TRACE_CORE_COUNT && taskSwitchTrace.copy(sequence, destination);
 }
 
+uint8_t copyTaskIpcTrace(TaskIpcTraceEvent *destination, uint8_t capacity,
+                         uint32_t &overwritten) {
+    if (!destination || !capacity) { overwritten = taskIpcTraceOverwritten; return 0; }
+    const uint32_t count = taskIpcTraceCount < capacity ? taskIpcTraceCount : capacity;
+    const uint32_t first = taskIpcTraceNext - count;
+    for (uint32_t i = 0; i < count; ++i)
+        destination[i] = taskIpcTrace[(first + i) % TASK_IPC_TRACE_CAPACITY];
+    overwritten = taskIpcTraceOverwritten;
+    return static_cast<uint8_t>(count);
+}
+
 extern "C" void __real_vTaskSwitchContext(void);
+extern "C" esp_err_t __real_esp_ipc_call_blocking(uint32_t cpuId,
+                                                    esp_ipc_func_t function,
+                                                    void *argument);
+
+extern "C" esp_err_t __wrap_esp_ipc_call_blocking(uint32_t cpuId,
+                                                    esp_ipc_func_t function,
+                                                    void *argument) {
+    if (!__atomic_load_n(&taskTraceEnabled, __ATOMIC_ACQUIRE) || cpuId != loopTaskCore)
+        return __real_esp_ipc_call_blocking(cpuId, function, argument);
+
+    __atomic_add_fetch(&taskTraceWriters, 1, __ATOMIC_ACQUIRE);
+    if (!__atomic_load_n(&taskTraceEnabled, __ATOMIC_ACQUIRE)) {
+        __atomic_sub_fetch(&taskTraceWriters, 1, __ATOMIC_RELEASE);
+        return __real_esp_ipc_call_blocking(cpuId, function, argument);
+    }
+    const uint32_t startedUs = static_cast<uint32_t>(esp_timer_get_time());
+    const BaseType_t callerCoreValue = xPortGetCoreID();
+    const uint8_t callerCore = callerCoreValue < 0 ? UINT8_MAX : static_cast<uint8_t>(callerCoreValue);
+    const uint32_t callerTask = currentTaskHandleValue();
+    const uint32_t callerPc = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+    const uint32_t callbackPc = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(function));
+    const esp_err_t result = __real_esp_ipc_call_blocking(cpuId, function, argument);
+    const uint32_t elapsedUs = static_cast<uint32_t>(esp_timer_get_time()) - startedUs;
+
+    if (elapsedUs >= TASK_SWITCH_TRACE_MIN_US) {
+        portENTER_CRITICAL(&taskIpcTraceMux);
+        if (!taskIpcTraceCount || elapsedUs >= taskIpcTrace[0].elapsedUs) {
+            TaskIpcTraceEvent &event = taskIpcTrace[0];
+            event.sequence = taskIpcTraceNext++;
+            event.startedUs = startedUs;
+            event.elapsedUs = elapsedUs;
+            event.callerTask = callerTask;
+            event.callerPc = callerPc;
+            event.callbackPc = callbackPc;
+            event.result = result;
+            event.callerCore = callerCore;
+            event.targetCore = static_cast<uint8_t>(cpuId);
+            if (taskIpcTraceCount < TASK_IPC_TRACE_CAPACITY) ++taskIpcTraceCount;
+            else if (taskIpcTraceOverwritten < UINT32_MAX) ++taskIpcTraceOverwritten;
+        }
+        portEXIT_CRITICAL(&taskIpcTraceMux);
+    }
+    __atomic_sub_fetch(&taskTraceWriters, 1, __ATOMIC_RELEASE);
+    return result;
+}
 
 extern "C" void __wrap_vTaskSwitchContext(void) {
     if (!__atomic_load_n(&taskTraceEnabled, __ATOMIC_ACQUIRE)) {
@@ -109,4 +172,8 @@ void taskSwitchTraceRange(uint8_t, uint32_t &oldest, uint32_t &next, uint32_t &o
     oldest = next = overwritten = 0;
 }
 bool copyTaskSwitchTrace(uint8_t, uint32_t, TaskSwitchTraceEvent &) { return false; }
+uint8_t copyTaskIpcTrace(TaskIpcTraceEvent *, uint8_t, uint32_t &overwritten) {
+    overwritten = 0;
+    return 0;
+}
 #endif
