@@ -29,7 +29,11 @@ struct Sample {
 };
 
 int main(int argc, char **argv) {
-	if (argc != 2) return 2;
+	if (argc != 2 && argc != 5) return 2;
+	if (argc == 5) {
+		const Vector initialEuler(radians(atof(argv[2])), radians(atof(argv[3])), radians(atof(argv[4])));
+		attitude = Quaternion::fromEuler(initialEuler);
+	}
 	FILE *file = fopen(argv[1], "r");
 	if (!file) return 3;
 	char line[512];
@@ -61,7 +65,7 @@ int main(int argc, char **argv) {
 		armed = i >= 450;
 		motorOutputActive = i >= 450;
 		estimate();
-		if (i >= 450) {
+		if (i >= 350) {
 			const Vector euler = attitude.toEuler();
 			printf("%zu,%.8f,%.8f,%.8f\n", i,
 				degrees(euler.x), degrees(euler.y), degrees(euler.z));
