@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Compare current and VQF 6D attitude output on identical IMU captures."""
+
+from __future__ import annotations
+
+import argparse
+import math
+import shutil
+import statistics
+import subprocess
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CAPTURES = (
+    "data/attitude/motor-fr-20261001-001156.csv",
+    "data/attitude/motor-fr-20261001-001909.csv",
+    "data/attitude/motor-fr-20261001-001918.csv",
+    "data/attitude/motor-fl-20261001-001301.csv",
+    "data/attitude/motor-rl-20261001-001310.csv",
+)
+
+
+def compile_driver(compiler: str, output: Path, vqf: bool) -> None:
+    command = [
+        compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-Wno-vla",
+        "-I", str(ROOT / "tests/stubs"), "-I", str(ROOT),
+        f'-DESTIMATOR_SOURCE="{ROOT / "estimate.ino"}"',
+    ]
+    if vqf:
+        command.extend(("-DATTITUDE_ESTIMATOR_VQF=1", "-DVQF_SINGLE_PRECISION"))
+    command.append(str(ROOT / "tests/estimator_replay_driver.cpp"))
+    if vqf:
+        command.append(str(ROOT / "basicvqf.cpp"))
+    command.extend(("-o", str(output)))
+    subprocess.run(command, check=True)
+
+
+def read_capture_timing(path: Path) -> tuple[list[int], int]:
+    timestamps: list[int] = []
+    with path.open(encoding="utf-8") as stream:
+        next(stream, None)
+        for line in stream:
+            try:
+                timestamps.append(int(line.split(",", 1)[0]))
+            except ValueError:
+                continue
+    if len(timestamps) < 500:
+        raise RuntimeError(f"too few capture samples in {path}: {len(timestamps)}")
+    intervals = [((b - a) & 0xFFFFFFFF) for a, b in zip(timestamps, timestamps[1:])]
+    median_dt_us = int(statistics.median(intervals))
+    return timestamps, median_dt_us
+
+
+def run_driver(binary: Path, capture: Path, acc_weight: float) -> dict[int, tuple[float, float, float]]:
+    result = subprocess.run(
+        [str(binary), str(capture), "0", "0", "0", str(acc_weight), "0", "0", "0"],
+        check=True, capture_output=True, text=True,
+    )
+    samples: dict[int, tuple[float, float, float]] = {}
+    for line in result.stdout.splitlines():
+        index, roll, pitch, yaw = line.split(",")
+        samples[int(index)] = (float(roll), float(pitch), float(yaw))
+    return samples
+
+
+def axis_summary(samples: dict[int, tuple[float, float, float]], axis: int,
+                 first_index: int) -> tuple[float, float, float]:
+    values = [sample[axis] for index, sample in samples.items() if index >= first_index]
+    if len(values) < 100:
+        raise RuntimeError(f"insufficient replay samples after index {first_index}: {len(values)}")
+    return statistics.fmean(values), statistics.pstdev(values), max(values) - min(values)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("captures", nargs="*", help="IMU CSV captures (defaults to post-replacement FR, FL, RL)")
+    parser.add_argument("--acc-weight", type=float, default=0.003,
+                        help="current estimator EST_ACC_WEIGHT (default: 0.003)")
+    parser.add_argument("--skip-start-ms", type=float, default=100.0,
+                        help="motor-start transient to exclude (default: 100 ms)")
+    args = parser.parse_args()
+    if not math.isfinite(args.acc_weight) or not 0.0 <= args.acc_weight <= 1.0:
+        parser.error("--acc-weight must be finite and in [0, 1]")
+    if not math.isfinite(args.skip_start_ms) or args.skip_start_ms < 0:
+        parser.error("--skip-start-ms must be finite and nonnegative")
+
+    compiler = shutil.which("clang++") or shutil.which("g++")
+    if not compiler:
+        raise SystemExit("A C++17 compiler is required")
+    captures = [Path(path) if Path(path).is_absolute() else ROOT / path
+                for path in (args.captures or DEFAULT_CAPTURES)]
+    for capture in captures:
+        if not capture.is_file():
+            raise SystemExit(f"capture not found: {capture}")
+
+    with tempfile.TemporaryDirectory(prefix="cf-drone-vqf-replay-") as directory:
+        current_bin = Path(directory) / "current-estimator"
+        vqf_bin = Path(directory) / "vqf-single-precision"
+        compile_driver(compiler, current_bin, vqf=False)
+        compile_driver(compiler, vqf_bin, vqf=True)
+        print("Capture | estimator | roll mean/std/pp (deg) | pitch mean/std/pp (deg)")
+        for capture in captures:
+            _, median_dt_us = read_capture_timing(capture)
+            first_index = 450 + round(args.skip_start_ms * 1000.0 / median_dt_us)
+            current = run_driver(current_bin, capture, args.acc_weight)
+            vqf = run_driver(vqf_bin, capture, args.acc_weight)
+            for name, samples in (("current", current), ("VQF 6D", vqf)):
+                roll = axis_summary(samples, 0, first_index)
+                pitch = axis_summary(samples, 1, first_index)
+                print(f"{capture.name} | {name} | "
+                      f"{roll[0]:+.4f}/{roll[1]:.4f}/{roll[2]:.4f} | "
+                      f"{pitch[0]:+.4f}/{pitch[1]:.4f}/{pitch[2]:.4f}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
