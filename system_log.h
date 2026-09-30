@@ -12,6 +12,7 @@ struct SystemLogEvent {
 
 void recordSystemLogEvent(const char *tag, const char *message);
 void initializeSystemLog();
+void startPersistentWriteTaskBeforeLoop();
 bool tryArmWithSystemLog();
 bool beginPersistentWriteBatch();
 bool systemLogPersistencePending();

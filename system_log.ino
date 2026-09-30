@@ -69,6 +69,18 @@ void initializeSystemLog() {
 	if (history.nextSequence == 0) history.nextSequence = 1;
 	systemLogBootId = esp_random();
 	if (systemLogBootId == 0) systemLogBootId = 1;
+}
+
+void startPersistentWriteTaskBeforeLoop() {
+	// Persist boot events and any migrated parameters before the 1 kHz loop
+	// starts. SPI flash cache suspension can hold the other core for ~50 ms;
+	// doing this in setup avoids recording that startup write as a loop stall.
+	bool wroteAny = false;
+	if (beginPersistentWriteBatch()) {
+		if (systemLogPersistencePending()) wroteAny = persistSystemLogInBatch();
+		wroteAny = persistDirtyParametersInBatch() || wroteAny;
+		finishPersistentWriteBatch(wroteAny);
+	}
 	if (xTaskCreatePinnedToCore(persistentWriteTask, "nvs_maintenance", 4096,
 		nullptr, 1, nullptr, 0) != pdPASS) {
 		Serial.println("NVS_MAINTENANCE state=DISABLED reason=task_create_failed");

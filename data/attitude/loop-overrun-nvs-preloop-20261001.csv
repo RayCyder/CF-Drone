@@ -1,0 +1,2 @@
+sequence,uptime_ms,dt_us,loop_sequence,imu_wait_us,imu_process_us,rc_web_us,estimate_us,battery_adc_us,control_law_us,motor_out_us,serial_input_us,mavlink_us,flight_log_us,param_sync_us,led_us,diagnostics_us,wifi_service_us,loop_gap_us,unaccounted_us
+0,1388,1887,2,96,84,78,128,590,230,71,290,75,121,1,12,23,0,13,75

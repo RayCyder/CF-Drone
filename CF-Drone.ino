@@ -99,6 +99,7 @@ void setup() {
 	setupIMU(); // 初始化IMU（陀螺仪/加速度计）
 	setupRC(); // 初始化遥控接收机（SBUS/ELRS等协议）
 	initializeDiagnostics();
+	startPersistentWriteTaskBeforeLoop(); // 启动期 NVS 刷写在首个控制循环之前完成
 	setLED(false); // 熄灭LED，提示初始化完成
 	print("程序初始化完成！\n");
 	print("================================\n");

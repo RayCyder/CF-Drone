@@ -1,6 +1,6 @@
 # Control-loop stall localization
 
-Status: a startup scheduler delay is correlated with `ipc1`; the prior long IMU waits remain unexplained. Diagnostic tracing now measures slow SPI-flash cache callbacks and closes pending spans at the next actual loop entry.
+Status: the boot-time NVS batch now completes in `setup()` before the first control-loop iteration, avoiding the previously measured ~50 ms startup loop interval. Later runtime flash writes remain guarded while disarmed. The separate historical long IMU waits remain unexplained; diagnostic tracing measures slow SPI-flash cache callbacks and closes pending spans at the next actual loop entry.
 Updated: 2026-10-01
 
 ## Goal and scope
@@ -125,6 +125,14 @@ Across these initial idle and connected pairs, there is no measured overrun-rate
 A normal-build capture during `imucap dump-temp` recorded `dt_us=11,963` with `serial_input_us=11,234`; three later exports produced similar ~11.2 ms `serial_input` spans. A task-trace build reproduced one such row at uptime 106,528 ms: `dt_us=11,887`, `serial_input_us=11,205`. Its scheduler events show `loopTask` yielding to `IDLE1` on core 1 in repeated ~1 ms handoffs; there is no matching IPC callback. The row coincided with the serial export and was not in `estimate`, but the trace does not isolate which UART call blocked.
 
 The exporter now serializes the header after pending console text and streams its CSV line buffer in chunks of at most 8 bytes per loop iteration. The target was rebuilt and reflashed with this change, then a complete 1,024-row temperature capture was exported on the trace-enabled image. No new >1.5 ms loop row or task-away capture was recorded during the export interval. The image's separate startup event remained: `dt_us=52,826`, with `control_law_us=52,077`; IPC trace reports a 51,906 us SPI flash cache callback from caller handle `0x3ffb8eac`, and the `sys` task table maps that handle to `nvs_maintenance`, targeting core 1. Thus the startup stall remains the known guarded NVS flash operation; the serial export stall was reduced below the trace threshold in this one target retest. Data are in [pre-chunk loop trace](data/attitude/loop-overrun-imu-export-trace-20261001.csv), [pre-chunk scheduler trace](data/attitude/task-switch-imu-export-trace-20261001.csv), [post-chunk loop trace](data/attitude/loop-overrun-imu-export-trace-chunked-20261001.csv), [post-chunk scheduler trace](data/attitude/task-switch-imu-export-trace-chunked-20261001.csv), and [startup IPC trace](data/attitude/flash-ipc-imu-export-trace-chunked-20261001.csv).
+
+### Move the boot persistence batch before the first control loop (2026-10-01)
+
+The recurring boot write was the pending `BOOT` system-log event. `initializeSystemLog()` previously started `nvs_maintenance` immediately; its first 1 s delay expired while the 1 kHz loop was already running. The setup path now loads the persisted log first, records boot/setup events, then calls `startPersistentWriteTaskBeforeLoop()` after sensor, RC, motor, and diagnostics initialization. That function uses the existing guarded batch APIs to flush the pending boot log and migrated parameters before `setup()` returns, then starts the same low-priority maintenance task for later runtime writes. `finishPersistentWriteBatch()` still starts the existing 10 s arming interlock after a successful write.
+
+Both the regular and task-trace ESP32-D builds compiled. The trace build was flashed at 115,200 baud and hash-verified; at 28.3 s uptime it reported `loop_rate=990`, `max_us=1,806`, `over_1500=1`, and no active faults. Its only loop trace row was a 1.806 ms interval at 1.56 s; scheduler and IPC exports had no rows. The task-trace hooks are enabled after setup, so they do not measure the setup-time flash callback itself. The regular image was restored and hash-verified; at 15.9 s uptime it reported `loop_rate=990`, `max_us=1,887`, `over_1500=1`, and no active faults, with its only loop row at 1.388 s. The regular startup trace is saved at [loop-overrun-nvs-preloop-20261001.csv](data/attitude/loop-overrun-nvs-preloop-20261001.csv).
+
+This moves the known ~52 ms flash-cache pause into setup, before flight-loop timing begins; boot readiness takes that additional time. It does not remove flash suspension from the platform or change later persistence: runtime batches still run only while disarmed with motors stopped, and the same write/arming interlocks remain. The separate historical 6,055 s IMU-wait event is still unexplained.
 
 ## Known gaps before claiming root cause
 
