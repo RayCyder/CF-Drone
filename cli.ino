@@ -16,6 +16,7 @@ static bool serialLogActive = false;
 static uint32_t serialLogGeneration = 0, serialLogRows = 0, serialLogRow = 0;
 static bool showMotd = true;
 static bool serialImuCaptureActive = false;
+static bool serialImuCaptureIncludeTemp = false;
 static uint16_t serialImuCaptureRow = 0;
 extern ImuCaptureBuffer imuCapture;
 
@@ -62,7 +63,7 @@ const char* motd =
 "preset - 重置飞控参数（保留Wi-Fi凭据和系统日志）\n"
 "mfr, mfl, mrr, mrl - 测试马达 (马达不受算法影响运转，为了安全不要装桨叶！！！)\n"
 "ca - 六面校准加速度计\n"
-"imucap [start|stop|status|dump] - 采集/导出约1秒、1kHz机体坐标系IMU数据（仅上锁）\n"
+"imucap [start|stop|status|dump|dump-temp] - 采集/导出约1秒、1kHz机体坐标系IMU数据（仅上锁）\n"
 "ps - 显示pitch/roll/yaw姿态\n"
 "cr - 校准RC遥控器\n"
 "rc - 显示RC遥控数据\n"
@@ -216,18 +217,23 @@ void doCommand(String str, bool echo = false) {
 		} else if (arg0 == "status") {
 			print("IMU_CAPTURE state=%u rows=%u capacity=%u\n", (unsigned)imuCapture.state(),
 				(unsigned)imuCapture.size(), IMU_CAPTURE_CAPACITY);
-		} else if (arg0 == "dump") {
+		} else if (arg0 == "dump" || arg0 == "dump-temp") {
 			if (armed || motorsActive() || imuCapture.state() == IMU_CAPTURE_RUNNING) {
 				print("IMU_CAPTURE dump rejected: stop capture and motors first\n");
 			} else if (!imuCapture.size()) {
 				print("IMU_CAPTURE empty\n");
 			} else {
 				serialImuCaptureRow = 0;
+				serialImuCaptureIncludeTemp = arg0 == "dump-temp";
 				serialImuCaptureActive = true;
-				print("time_us,gyro_x_rad_s,gyro_y_rad_s,gyro_z_rad_s,acc_x_m_s2,acc_y_m_s2,acc_z_m_s2\n");
+				if (serialImuCaptureIncludeTemp) {
+					print("time_us,gyro_x_rad_s,gyro_y_rad_s,gyro_z_rad_s,acc_x_m_s2,acc_y_m_s2,acc_z_m_s2,temperature_c\n");
+				} else {
+					print("time_us,gyro_x_rad_s,gyro_y_rad_s,gyro_z_rad_s,acc_x_m_s2,acc_y_m_s2,acc_z_m_s2\n");
+				}
 			}
 		} else {
-			print("usage: imucap start|stop|status|dump\n");
+			print("usage: imucap start|stop|status|dump|dump-temp\n");
 		}
 	} else if (command == "arm") {
 		if (!requestArm()) print("系统未满足解锁条件，请检查油门、电池、IMU、故障和电机测试状态。\n");
@@ -458,7 +464,18 @@ void serviceImuCaptureExport() {
 		return;
 	}
 	char line[128];
-	const int length = snprintf(line, sizeof(line), "%lu,%.6f,%.6f,%.6f,%.2f,%.2f,%.2f\n",
+	const char *format = serialImuCaptureIncludeTemp
+		? "%lu,%.6f,%.6f,%.6f,%.2f,%.2f,%.2f,%.2f\n"
+		: "%lu,%.6f,%.6f,%.6f,%.2f,%.2f,%.2f\n";
+	const int length = serialImuCaptureIncludeTemp ? snprintf(line, sizeof(line), format,
+		(unsigned long)sample.timeUs,
+		sample.gyroMicroRadPerSec[0] * 1.0e-6f,
+		sample.gyroMicroRadPerSec[1] * 1.0e-6f,
+		sample.gyroMicroRadPerSec[2] * 1.0e-6f,
+		sample.accCentiMetersPerSec2[0] * 0.01f,
+		sample.accCentiMetersPerSec2[1] * 0.01f,
+		sample.accCentiMetersPerSec2[2] * 0.01f,
+		sample.temperatureCentiC * 0.01f) : snprintf(line, sizeof(line), format,
 		(unsigned long)sample.timeUs,
 		sample.gyroMicroRadPerSec[0] * 1.0e-6f,
 		sample.gyroMicroRadPerSec[1] * 1.0e-6f,

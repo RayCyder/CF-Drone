@@ -13,6 +13,7 @@ struct ImuCaptureSample {
 	uint32_t timeUs;
 	int32_t gyroMicroRadPerSec[3];
 	int16_t accCentiMetersPerSec2[3];
+	int16_t temperatureCentiC;
 };
 static_assert(sizeof(ImuCaptureSample) * IMU_CAPTURE_CAPACITY <= 24 * 1024,
 	"IMU capture RAM budget");
@@ -46,7 +47,7 @@ public:
 	}
 
 	void append(uint32_t timeUs, float gx, float gy, float gz,
-		float ax, float ay, float az) {
+		float ax, float ay, float az, float temperatureC) {
 		if (state_ != IMU_CAPTURE_RUNNING) return;
 		if (count_ >= IMU_CAPTURE_CAPACITY) {
 			state_ = IMU_CAPTURE_READY;
@@ -60,6 +61,7 @@ public:
 		sample.accCentiMetersPerSec2[0] = toInt16(ax * 100.0f);
 		sample.accCentiMetersPerSec2[1] = toInt16(ay * 100.0f);
 		sample.accCentiMetersPerSec2[2] = toInt16(az * 100.0f);
+		sample.temperatureCentiC = toInt16(temperatureC * 100.0f);
 		if (count_ == IMU_CAPTURE_CAPACITY) state_ = IMU_CAPTURE_READY;
 	}
 

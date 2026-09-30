@@ -10,7 +10,7 @@ int main() {
 	assert(!capture.start(false, true, 100000));
 	assert(!capture.start(false, false, IMU_CAPTURE_MIN_FREE_HEAP - 1));
 	assert(capture.start(false, false, 100000));
-	capture.append(1234, 0.012345f, -0.25f, 1.5f, 0.01f, -0.3f, 9.81f);
+	capture.append(1234, 0.012345f, -0.25f, 1.5f, 0.01f, -0.3f, 9.81f, 25.34f);
 	assert(capture.size() == 1);
 	ImuCaptureSample sample;
 	assert(capture.copy(0, sample));
@@ -18,13 +18,14 @@ int main() {
 	assert(sample.gyroMicroRadPerSec[0] == 12345);
 	assert(sample.gyroMicroRadPerSec[1] == -250000);
 	assert(sample.accCentiMetersPerSec2[1] == -30);
+	assert(sample.temperatureCentiC == 2534);
 	assert(capture.stop());
 	assert(capture.state() == IMU_CAPTURE_READY);
-	capture.append(5678, 1, 2, 3, 4, 5, 6);
+	capture.append(5678, 1, 2, 3, 4, 5, 6, 0);
 	assert(capture.size() == 1);
 	assert(capture.start(false, false, 100000));
 	for (uint16_t i = 0; i < IMU_CAPTURE_CAPACITY; ++i)
-		capture.append(i * 1000, 0, 0, 0, 0, 0, 9.80665f);
+		capture.append(i * 1000, 0, 0, 0, 0, 0, 9.80665f, 30.0f);
 	assert(capture.state() == IMU_CAPTURE_READY);
 	assert(capture.size() == IMU_CAPTURE_CAPACITY);
 	assert(capture.copy(IMU_CAPTURE_CAPACITY - 1, sample));

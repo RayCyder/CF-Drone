@@ -125,7 +125,7 @@ void readIMU() {
 	}
 	acc  = Quaternion::rotateVector(acc,  _imuRotQuat);
 	gyro = Quaternion::rotateVector(gyro, _imuRotQuat);
-	imuCapture.append(micros(), gyro.x, gyro.y, gyro.z, acc.x, acc.y, acc.z);
+	imuCapture.append(micros(), gyro.x, gyro.y, gyro.z, acc.x, acc.y, acc.z, imu.getTemp());
 	recordLoopStage(LOOP_STAGE_IMU_PROCESS, micros() - processStarted);
 }
 
