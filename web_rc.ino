@@ -796,7 +796,7 @@ void setupWebRC() {
             return;
         }
 #endif
-        webRCServer.send(200, "text/html", webRCIndexHtml);
+        webRCServer.send_P(200, "text/html; charset=utf-8", webRCIndexHtml);
     });
 #if WIFI_ENABLED
     webRCServer.on("/wifi", HTTP_GET, []() {
