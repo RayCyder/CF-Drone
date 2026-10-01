@@ -27,6 +27,8 @@ python3 -B tools/run_prop_off_route_bench.py \
 
 若需覆盖长保持段的完整估计姿态时间线，可附加 `--capture-web-attitude`；脚本每秒最多读取一次现有 `/level-calibration/status` 中的 roll/pitch，单次诊断请求超时为 `0.25 s`，失败只记为采样缺失。固件在电机运行期间拒绝串口 `ps`，不能为采集绕过这项门禁。网页低频姿态是估计输出，不是外部角度真值，也不会改变 100 Hz 飞行日志只保留最近约 4 秒的事实。
 
+脚本现在从预检开始持续保存串口原始字节到同名 `-serial.log` 文件，Web 轮询期间也由独立读取线程排空串口。若板端意外重启，保留启动 banner、`reset=...` 和 `SLOW_LOOP_RETENTION` 行；记录文件与控制 JSONL 一起保存，避免收尾命令超时后丢失复位原因。主机伪串口检查已验证后台持续收集和命令读取共用一条串口；该改动尚未用于新的板端电机测试。
+
 ## 2026-10-02 首轮结果
 
 [逐步控制记录](data/attitude/prop-off-route-20261002-021158.jsonl)显示已上传版本 1，飞控先后报告第 1、2、3 段 `running`，随后以 `sequence_complete` 进入 `landing`。串口随后报告上锁、IMU/电机正常、四路输出零；上锁后[航线状态](data/attitude/prop-off-route-20261002-021158.jsonl)为 `complete`。首次脚本把任何累计漏采都判失败，故进程以拒绝结果退出；离线定位表明该拒绝过严。

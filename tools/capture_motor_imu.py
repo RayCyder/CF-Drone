@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import threading
 import math
 import os
 import re
@@ -30,7 +31,8 @@ MOTOR_COMMANDS = {"FR": "mfr", "FL": "mfl", "RR": "mrr", "RL": "mrl"}
 
 
 class SerialConsole:
-    def __init__(self, path: str, baud: int = 115200) -> None:
+    def __init__(self, path: str, baud: int = 115200,
+                 capture_path: Path | None = None) -> None:
         self.fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         attrs = termios.tcgetattr(self.fd)
         attrs[0] = 0
@@ -44,8 +46,42 @@ class SerialConsole:
         attrs[6][termios.VTIME] = 0
         termios.tcsetattr(self.fd, termios.TCSANOW, attrs)
         self.pending = bytearray()
+        self.capture = capture_path.open('wb') if capture_path else None
+        self.capture_stop = threading.Event()
+        self.capture_ready = threading.Condition()
+        self.capture_error: OSError | None = None
+        self.capture_thread = None
+        if self.capture:
+            self.capture_thread = threading.Thread(target=self._record_serial,
+                                                    name='serial-capture', daemon=True)
+            self.capture_thread.start()
+
+    def _record_serial(self) -> None:
+        try:
+            while not self.capture_stop.is_set():
+                ready, _, _ = select.select([self.fd], [], [], 0.1)
+                if not ready:
+                    continue
+                try:
+                    chunk = os.read(self.fd, 8192)
+                except BlockingIOError:
+                    continue
+                if chunk:
+                    self.capture.write(chunk)
+                    self.capture.flush()
+                    with self.capture_ready:
+                        self.pending.extend(chunk)
+                        self.capture_ready.notify_all()
+        except OSError as error:
+            with self.capture_ready:
+                self.capture_error = error
+                self.capture_ready.notify_all()
 
     def close(self) -> None:
+        if self.capture_thread:
+            self.capture_stop.set()
+            self.capture_thread.join(timeout=1)
+            self.capture.close()
         os.close(self.fd)
 
     def send(self, command: str) -> None:
@@ -53,6 +89,20 @@ class SerialConsole:
 
     def read_line(self, timeout: float) -> str | None:
         deadline = time.monotonic() + timeout
+        if self.capture_thread:
+            with self.capture_ready:
+                while time.monotonic() < deadline:
+                    newline = self.pending.find(b"\n")
+                    if newline >= 0:
+                        line = bytes(self.pending[:newline]).decode("utf-8", "replace").strip("\r\x00 ")
+                        del self.pending[:newline + 1]
+                        if line:
+                            return line
+                        continue
+                    if self.capture_error:
+                        raise self.capture_error
+                    self.capture_ready.wait(max(0, deadline - time.monotonic()))
+            return None
         while time.monotonic() < deadline:
             newline = self.pending.find(b"\n")
             if newline >= 0:

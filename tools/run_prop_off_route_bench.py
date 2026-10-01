@@ -104,7 +104,8 @@ def main():
     host, port = url.hostname, url.port or 80
     args.output_dir.mkdir(parents=True, exist_ok=True)
     output = args.output_dir / ('prop-off-route-' + dt.datetime.now().strftime('%Y%m%d-%H%M%S') + '.jsonl')
-    serial = SerialConsole(args.serial_port)
+    serial_capture = output.with_name(output.stem + '-serial.log')
+    serial = SerialConsole(args.serial_port, capture_path=serial_capture)
     token = None
     arm_command_sent = False
     route_error = None
@@ -130,6 +131,7 @@ def main():
 
     signal.signal(signal.SIGALRM, hard_deadline)
     with output.open('w', encoding='utf-8') as stream:
+        record(stream, 'serial_capture', path=str(serial_capture))
         try:
             preflight(serial)
             serial.send('mot')
