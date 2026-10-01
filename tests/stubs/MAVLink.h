@@ -49,6 +49,7 @@ struct mavlink_manual_control_t { int16_t x = 0, y = 0, z = 0, r = 0; uint16_t b
 struct mavlink_param_request_list_t { uint8_t target_system = 0; };
 struct mavlink_param_request_read_t { uint8_t target_system = 0; int16_t param_index = -1; char param_id[MAVLINK_MSG_PARAM_REQUEST_READ_FIELD_PARAM_ID_LEN] = {}; };
 struct mavlink_param_set_t { uint8_t target_system = 0; float param_value = 0; char param_id[MAVLINK_MSG_PARAM_SET_FIELD_PARAM_ID_LEN] = {}; };
+struct mavlink_param_value_t { float param_value = 0; uint16_t param_count = 0, param_index = 0; char param_id[16] = {}; };
 struct mavlink_mission_request_list_t { uint8_t target_system = 0; };
 struct mavlink_serial_control_t { uint8_t target_system = 0, target_component = 0, device = 0, count = 0; uint8_t data[MAVLINK_MSG_SERIAL_CONTROL_FIELD_DATA_LEN] = {}; };
 struct mavlink_set_attitude_target_t { uint8_t target_system = 0, target_component = 0; uint8_t type_mask = 0; float q[4] = {}; float body_roll_rate = 0, body_pitch_rate = 0, body_yaw_rate = 0, thrust = 0; };
@@ -67,6 +68,7 @@ struct mavlink_message_t {
     mavlink_param_request_list_t paramRequestList;
     mavlink_param_request_read_t paramRequestRead;
     mavlink_param_set_t paramSet;
+    mavlink_param_value_t paramValue;
     mavlink_mission_request_list_t missionRequestList;
     mavlink_serial_control_t serialControl;
     mavlink_set_attitude_target_t attitudeTarget;
@@ -100,7 +102,14 @@ inline void mavlink_msg_attitude_quaternion_pack(...) {}
 inline void mavlink_msg_rc_channels_raw_pack(...) {}
 inline void mavlink_msg_actuator_control_target_pack(...) {}
 inline void mavlink_msg_scaled_imu_pack(...) {}
-inline void mavlink_msg_param_value_pack(...) {}
+inline void mavlink_msg_param_value_pack(int, int, mavlink_message_t* msg, const char* id,
+                                         float value, uint8_t, uint16_t count, uint16_t index) {
+    msg->msgid = 22;
+    msg->paramValue.param_value = value;
+    msg->paramValue.param_count = count;
+    msg->paramValue.param_index = index;
+    std::memcpy(msg->paramValue.param_id, id, std::strlen(id) < 16 ? std::strlen(id) : 16);
+}
 inline void mavlink_msg_mission_count_pack(...) {}
 inline void mavlink_msg_log_entry_pack(...) {}
 inline void mavlink_msg_log_data_pack(...) {}

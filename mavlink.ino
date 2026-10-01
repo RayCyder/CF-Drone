@@ -9,6 +9,7 @@
 #include "control.h"
 #include "flight_log.h"
 #include "log_transfer.h"
+#include "parameter_storage_key.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 
@@ -238,10 +239,12 @@ void handleMavlink(const void *_msg) {
         memcpy(name, m.param_id, sizeof(name)-1); name[sizeof(name)-1] = 0;
         if (m.param_index < -1 || m.param_index >= parametersCount()) return;
         float value = m.param_index >= 0 ? getParameter(m.param_index) : getParameter(name);
-        if (m.param_index >= 0) snprintf(name, sizeof(name), "%s", getParameterName(m.param_index));
+		const int index = m.param_index >= 0 ? m.param_index : parameterIndex(name);
+		if (index < 0) return;
+		snprintf(name, sizeof(name), "%s", parameterMavlinkKey(getParameterName(index)));
 		mavlink_message_t msg;
 		mavlink_msg_param_value_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &msg,
-			name, value, MAV_PARAM_TYPE_REAL32, parametersCount(), m.param_index);
+			name, value, MAV_PARAM_TYPE_REAL32, parametersCount(), index);
 		sendMessage(&msg);
 	}
 
@@ -255,10 +258,13 @@ void handleMavlink(const void *_msg) {
         memcpy(name, m.param_id, sizeof(name)-1); name[sizeof(name)-1] = 0;
 		bool success = setParameter(name, m.param_value);
 		if (!success) return;
+		const int index = parameterIndex(name);
+		if (index < 0) return;
 		// send ack
 		mavlink_message_t msg;
 		mavlink_msg_param_value_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &msg,
-			m.param_id, getParameter(name), MAV_PARAM_TYPE_REAL32, parametersCount(), 0); // index is unknown
+			parameterMavlinkKey(getParameterName(index)), getParameter(index),
+			MAV_PARAM_TYPE_REAL32, parametersCount(), index);
 		sendMessage(&msg);
 	}
 
@@ -415,7 +421,8 @@ void serviceMavlinkParameterList() {
     const int i = mavlinkParameterCursor++;
     mavlink_message_t response;
     mavlink_msg_param_value_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &response,
-        getParameterName(i), getParameter(i), MAV_PARAM_TYPE_REAL32, parametersCount(), i);
+        parameterMavlinkKey(getParameterName(i)), getParameter(i),
+        MAV_PARAM_TYPE_REAL32, parametersCount(), i);
     sendMessage(&response);
 }
 

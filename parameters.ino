@@ -444,7 +444,7 @@ float getParameter(int index) {
 
 float getParameter(const char *name) {
 	for (auto &parameter : parameters) {
-		if (strcasecmp(parameter.name, name) == 0) {
+		if (parameterNameMatches(parameter.name, name)) {
 			return parameter.getValue();
 		}
 	}
@@ -453,7 +453,7 @@ float getParameter(const char *name) {
 
 bool setParameter(const char *name, const float value) {
 	for (auto &parameter : parameters) {
-		if (strcasecmp(parameter.name, name) == 0) {
+		if (parameterNameMatches(parameter.name, name)) {
 			if (!validParameterValue(parameter.name, parameter.integer, value)) return false;
 			portENTER_CRITICAL(&parameterMux);
 			parameter.setValue(value);
@@ -472,6 +472,13 @@ bool setParameter(const char *name, const float value) {
 		}
 	}
 	return false;
+}
+
+int parameterIndex(const char *name) {
+	for (int i = 0; i < parametersCount(); ++i) {
+		if (parameterNameMatches(parameters[i].name, name)) return i;
+	}
+	return -1;
 }
 
 void syncParameters() {

@@ -10,6 +10,7 @@
 #include "../quaternion.h"
 #include "../control.h"
 #include "../flight_log.h"
+#include "../parameter_storage_key.h"
 #include "MAVLink.h"
 
 int testCriticalDepth = 0;
@@ -50,11 +51,23 @@ bool canAcceptMavlinkManualControl() { return acceptMavlinkManual; }
 void markManualControlInput(ControlSource source) { markedManualSource = source; currentSource = source; }
 bool submitAutoAttitudeTarget(const AutoAttitudeCommand&) { return true; }
 bool submitAutoActuatorTarget(const AutoActuatorCommand&) { return true; }
-int parametersCount() { return 0; }
-const char* getParameterName(int) { return ""; }
-float getParameter(int) { return 0.0f; }
-float getParameter(const char*) { return 0.0f; }
-bool setParameter(const char*, float) { return false; }
+const char* testParameterNames[] = {"EST_LVL_BIAS_GAIN", "SF_DESCEND_THRUST"};
+float testParameterValues[] = {0.1f, 0.2f};
+int parametersCount() { return 2; }
+const char* getParameterName(int index) { return testParameterNames[index]; }
+int parameterIndex(const char* name) {
+    for (int i = 0; i < parametersCount(); ++i)
+        if (parameterNameMatches(testParameterNames[i], name)) return i;
+    return -1;
+}
+float getParameter(int index) { return testParameterValues[index]; }
+float getParameter(const char* name) { const int i = parameterIndex(name); return i < 0 ? NAN : getParameter(i); }
+bool setParameter(const char* name, float value) {
+    const int i = parameterIndex(name);
+    if (i < 0) return false;
+    testParameterValues[i] = value;
+    return true;
+}
 void setMavlinkConsoleCommandOutput(bool) {}
 void doCommand(const char*, bool) {}
 FlightLogStatus getFlightLogStatus() { return {FROZEN, 0, 0, 0, 0, 0}; }
@@ -137,5 +150,31 @@ int main() {
     sendMavlinkPrint();
     assert(testLastPackedMessage.serialControl.count == 3);
 
+    for (int i = 0; i < parametersCount(); ++i) {
+        mavlink_message_t request;
+        request.msgid = MAVLINK_MSG_ID_PARAM_REQUEST_LIST;
+        handleMavlink(&request);
+        for (int n = 0; n <= i; ++n) serviceMavlinkParameterList();
+        const mavlink_param_value_t listed = testLastPackedMessage.paramValue;
+        assert(listed.param_index == i);
+        assert(std::strlen(listed.param_id) <= 15);
+
+        mavlink_message_t change;
+        change.msgid = MAVLINK_MSG_ID_PARAM_SET;
+        std::memcpy(change.paramSet.param_id, listed.param_id, sizeof(change.paramSet.param_id));
+        change.paramSet.param_value = 0.3f + i;
+        handleMavlink(&change);
+        assert(std::fabs(testParameterValues[i] - change.paramSet.param_value) < 1e-6f);
+        assert(testLastPackedMessage.paramValue.param_index == i);
+        assert(std::memcmp(testLastPackedMessage.paramValue.param_id,
+                           listed.param_id, sizeof(listed.param_id)) == 0);
+
+        mavlink_message_t read;
+        read.msgid = MAVLINK_MSG_ID_PARAM_REQUEST_READ;
+        std::memcpy(read.paramRequestRead.param_id, listed.param_id, sizeof(read.paramRequestRead.param_id));
+        handleMavlink(&read);
+        assert(testLastPackedMessage.paramValue.param_index == i);
+        assert(std::fabs(testLastPackedMessage.paramValue.param_value - testParameterValues[i]) < 1e-6f);
+    }
     return 0;
 }
