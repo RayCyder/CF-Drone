@@ -63,6 +63,7 @@ static Quaternion runAirborneAccCorrection(float sampleDt, int samples) {
 		dt = sampleDt;
 		applyAcc();
 	}
+	assert(accelCorrectionConfidence == 1.0f);
 	return attitude;
 }
 
@@ -110,6 +111,7 @@ int main() {
 	acc = Vector(0.0f, 0.0f, ONE_G * 1.5f);
 	dt = 0.001f;
 	applyAcc();
+	assert(accelCorrectionConfidence == 0.0f);
 	assert(fabsf(attitude.x - airborneInitial.x) < 1e-6f);
 	assert(fabsf(attitude.w - airborneInitial.w) < 1e-6f);
 

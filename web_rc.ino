@@ -115,7 +115,7 @@ extern float webRCThrottleScale, webRCStickScale, webRCYawScale;
 extern float stickDeadzone, throttleDeadzone;
 extern WebServer webRCServer;
 
-#define WEB_LOG_CSV_COLUMNS_CAPACITY 40
+#define WEB_LOG_CSV_COLUMNS_CAPACITY 41
 #define WEB_LOG_CSV_ROW_CAPACITY 1024
 static_assert(WEB_LOG_CSV_COLUMNS_CAPACITY >= FLIGHT_LOG_COLUMNS, "HTTP CSV export capacity must cover all flight log columns");
 static_assert(WEB_LOG_CSV_ROW_CAPACITY >= 1024, "HTTP CSV rows require at least 1024 bytes");

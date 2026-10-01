@@ -8,6 +8,9 @@
 #include "attitude_vqf.h"
 
 float accWeight = 0.003;
+// Last-sample estimator evidence copied into the bounded flight log. This
+// value is diagnostic only and does not feed the control calculation.
+float accelCorrectionConfidence = 0.0f;
 static const float ESTIMATE_NOMINAL_DT = 0.001f;
 // A long scheduler stall yields only one fresh accelerometer sample, not a
 // history representative of the whole gap. Bound gravity feedback to 5 ms.
@@ -83,6 +86,7 @@ void estimate() {
 	#if ATTITUDE_ESTIMATOR_VQF
 	const float accNorm = acc.norm();
 	if (!isfinite(accNorm) || accNorm < 1e-3f) {
+		accelCorrectionConfidence = 0.0f;
 		landed = false;
 		rates = ratesFilter.update(gyro, dt, ESTIMATE_NOMINAL_DT);
 		vqfAttitudeEstimator.update(attitude, gyro, acc, dt, false);
@@ -108,6 +112,7 @@ void estimate() {
 			}
 		}
 	}
+	accelCorrectionConfidence = correctionConfidence;
 	rates = ratesFilter.update(gyro, dt, ESTIMATE_NOMINAL_DT);
 	vqfAttitudeEstimator.update(attitude, gyro, acc, dt,
 		landed || correctionConfidence > 0.0f);
@@ -129,6 +134,7 @@ void applyGyro() {
 }
 
 void applyAcc() {
+	accelCorrectionConfidence = 0.0f;
 	float accNorm = acc.norm();
 	landed = isfinite(accNorm) && !motorsActive() && fabsf(accNorm - ONE_G) < ONE_G * 0.1f;
 	if (!isfinite(accNorm) || accNorm < 1e-3f) return;
@@ -159,6 +165,7 @@ void applyAcc() {
 			0.0f, 1.0f);
 		correctionConfidence *= rawNormConfidence;
 	}
+	accelCorrectionConfidence = correctionConfidence;
 	if (correctionConfidence <= 0.0f) return;
 
 	// calculate accelerometer correction

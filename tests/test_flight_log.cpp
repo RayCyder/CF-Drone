@@ -10,6 +10,7 @@ float dt=.001f; double t=0, controlTime=0;
 bool armed=false, activeMotors=false;
 float batteryVoltage=4.1f, controlRoll=0, controlPitch=0, controlYaw=0, controlThrottle=0, controlMode=0;
 float motors[4]={}, thrustTarget=0, motorMixScale=1;
+float accelCorrectionConfidence=1;
 Vector gyro,acc,rates,ratesTarget; Quaternion attitude,attitudeTarget;
 int mode=2;
 #include "../pid.h"
@@ -27,23 +28,28 @@ typedef int portMUX_TYPE;
 #include "../log.ino"
 
 static void codecTests(){
-    float values[40]={}; values[1]=.001234f; values[21]=4.123f; values[28]=-1;
+    float values[41]={}; values[1]=.001234f; values[21]=4.123f; values[28]=-1;
     for(int i=2;i<20;++i)values[i]=.123456f;
     values[20]=.6f; values[22]=-.7f; values[27]=4; values[29]=1; values[30]=1023;
     for(int i=31;i<35;++i)values[i]=.6f;
     values[35]=-20; values[36]=20; values[37]=.1234f;values[38]=.25f;values[39]=3;
+    values[40]=.75f;
     const uint64_t now=(UINT64_C(1)<<32)*1000+123456;
-    auto r=FlightLogCodec::encode(values,now); float decoded[40];
-    FlightLogCodec::decode(r,now/1000,decoded,40);
+    auto r=FlightLogCodec::encode(values,now); float decoded[41];
+    FlightLogCodec::decode(r,now/1000,decoded,41);
     assert(sizeof(r)==80 && sizeof(FlightLogStore)<33000);
     assert(decoded[0]==(float)((double)(now/1000)/1000));
     for(int i=2;i<20;++i)assert(fabsf(decoded[i]-values[i])<=.5001f/FlightLogCodec::vectorScale(i-2));
     assert(decoded[28]==-1 && decoded[30]==1023 && decoded[35]==-20 && decoded[36]==20);
     assert(fabsf(decoded[1]-values[1])<=.00000051f);
     assert(fabsf(decoded[21]-values[21])<=.000501f);
+    assert(fabsf(decoded[40]-values[40])<=.5f/63);
+    decoded[40]=-1.0f;
+    FlightLogCodec::decode(r,now/1000,decoded,40);
+    assert(fabsf(decoded[35]-values[35])<=.5f/1024 && decoded[39]==values[39] && decoded[40]==-1.0f);
     values[2]=NAN;values[3]=INFINITY;values[4]=-INFINITY;values[20]=-1;values[21]=INFINITY;
     values[28]=NAN; values[35]=33;
-    r=FlightLogCodec::encode(values,now);FlightLogCodec::decode(r,now/1000,decoded,40);
+    r=FlightLogCodec::encode(values,now);FlightLogCodec::decode(r,now/1000,decoded,41);
     assert(isnan(decoded[2]) && decoded[3]==INFINITY && decoded[4]==-INFINITY);
     assert(decoded[20]==-INFINITY && decoded[21]==INFINITY && isnan(decoded[28]));
     assert(decoded[35]==INFINITY && (r.quality&3)==3);
@@ -53,7 +59,7 @@ static void codecTests(){
     assert(FlightLogCodec::unsignedValue(65532.5f,1,q)==65534);
 }
 static void storeTests(){
-    FlightLogStore store; float row[40]={}; FlightLogRecord r;uint64_t anchor;uint32_t seq;
+    FlightLogStore store; float row[41]={}; FlightLogRecord r;uint64_t anchor;uint32_t seq;
     assert(!store.copyLatest(r,anchor,seq));
     assert(store.freeze() && store.freeze() && store.status().rowCount==0);
     assert(!store.copy(store.status().generation,0,r,anchor));store.resume();
@@ -77,7 +83,7 @@ static void storeTests(){
     store.push(FlightLogCodec::encode(row,wrap-10000),wrap-10000);
     store.push(FlightLogCodec::encode(row,wrap+10000),wrap+10000);store.freeze();
     assert(store.copy(store.status().generation,0,r,anchor));
-    float decoded[40];FlightLogCodec::decode(r,anchor,decoded,40);
+    float decoded[41];FlightLogCodec::decode(r,anchor,decoded,41);
     assert(decoded[0]==(float)((double)(wrap-10000)/1000000));
     store.resume();
     store.push(FlightLogCodec::encode(row,10000),10000);
@@ -85,10 +91,11 @@ static void storeTests(){
     assert(store.status().rowCount==1); // unknown epoch history is never misdated
 }
 static void integrationTests(){
-    assert(getLogColumnCount()==40 && !strcmp(getLogColumnName(34),"motor_fl"));
+    assert(getLogColumnCount()==41 && !strcmp(getLogColumnName(34),"motor_fl"));
     assert(!strcmp(getLogColumnName(35),"rate_i_x"));
-    float row[40];uint32_t seq;
-    assert(!copyLatestLogRow(row,40,&seq));
+    assert(!strcmp(getLogColumnName(40),"accel_correction_confidence"));
+    float row[41];uint32_t seq;
+    assert(!copyLatestLogRow(row,41,&seq));
     armed=true;assert(!freezeFlightLog() && !resumeFlightLog());armed=false;
     activeMotors=true;assert(!freezeFlightLog() && !resumeFlightLog());activeMotors=false;
     for(int i=0;i<410;++i){testUs=i*10000;t=testUs/1e6;gyro.x=i*.01f;logData();}
@@ -111,6 +118,7 @@ static void integrationTests(){
     assert(getFlightLogStatus().reasonMask==FLIGHT_LOG_DISARM_REASON);
     assert(!freezeFlightLog() && !resumeFlightLog());
     testUs+=1500000;logData();assert(getFlightLogStatus().state==FROZEN);
-    assert(copyLatestLogRow(row,40,&seq));assert(row[0]==(float)(testUs/1000)/1000);
+    assert(copyLatestLogRow(row,41,&seq));assert(row[0]==(float)(testUs/1000)/1000);
+    assert(fabsf(row[40]-accelCorrectionConfidence)<=.5f/63);
 }
 int main(){codecTests();storeTests();integrationTests();puts("flight log regressions passed");}

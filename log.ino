@@ -11,6 +11,7 @@ extern bool motorsActive();
 extern float batteryVoltage, controlRoll, controlPitch, controlYaw, controlThrottle, controlMode;
 extern double controlTime;
 extern float motors[4], dt, thrustTarget, motorMixScale;
+extern float accelCorrectionConfidence;
 extern Vector gyro, acc;
 extern int mode;
 extern PID rollRatePID, pitchRatePID, yawRatePID;
@@ -24,7 +25,8 @@ static const char *const logColumnNames[FLIGHT_LOG_COLUMNS] = {
     "attitude.x", "attitude.y", "attitude.z", "attitudeTarget.x", "attitudeTarget.y", "attitudeTarget.z",
     "thrustTarget", "battery_v", "rc_roll", "rc_pitch", "rc_yaw", "rc_throttle", "rc_mode",
     "flight_mode", "rc_age_s", "armed", "fault_mask", "motor_rl", "motor_rr", "motor_fr", "motor_fl",
-    "rate_i_x", "rate_i_y", "rate_i_z", "mix_scale", "control_source"
+    "rate_i_x", "rate_i_y", "rate_i_z", "mix_scale", "control_source",
+    "accel_correction_confidence"
 };
 static_assert((DIAG_IMU_INIT | DIAG_IMU_TIMEOUT | DIAG_IMU_INVALID | DIAG_MOTOR_INIT |
     DIAG_RC_LOSS | DIAG_WEB_RC_LOSS | DIAG_BATTERY_LOW | DIAG_LOOP_OVERRUN | DIAG_PARAMETER |
@@ -126,7 +128,8 @@ void logData() {
         (float)mode, controlTime > 0 ? (float)(t - controlTime) : -1.0f,
         armed ? 1.0f : 0.0f, (float)getActiveDiagnosticFaults(), motors[0], motors[1], motors[2], motors[3],
         rollRatePID.i * rollRatePID.integral, pitchRatePID.i * pitchRatePID.integral,
-        yawRatePID.i * yawRatePID.integral, motorMixScale, (float)getCurrentControlSource()
+        yawRatePID.i * yawRatePID.integral, motorMixScale, (float)getCurrentControlSource(),
+        accelCorrectionConfidence
     };
     const FlightLogRecord record = FlightLogCodec::encode(row, now);
     portENTER_CRITICAL(&logBufferMux);

@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 constexpr int FLIGHT_LOG_LEGACY_COLUMNS = 35;
-constexpr int FLIGHT_LOG_COLUMNS = 40;
+constexpr int FLIGHT_LOG_COLUMNS = 41;
 constexpr uint32_t FLIGHT_LOG_LEGACY_ROW_BYTES = 140;
 constexpr uint32_t FLIGHT_LOG_DISARM_REASON = 0x80000000UL;
 enum FlightLogState : uint8_t { ROLLING, POST_TRIGGER, FROZEN };

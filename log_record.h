@@ -57,6 +57,10 @@ inline FlightLogRecord encode(const float *v, uint64_t nowUs) {
     for (int i = 0; i < 3; ++i) r.integral[i] = signedValue(v[i + 35], 1024, r.quality);
     r.mixScale = unsignedValue(v[38], 32768, r.quality);
     r.source = isfinite(v[39]) && v[39] >= 0 && v[39] < 255 ? (uint8_t)v[39] : 255;
+    float confidence = isfinite(v[40]) ? v[40] : 0.0f;
+    if (confidence < 0.0f) confidence = 0.0f;
+    if (confidence > 1.0f) confidence = 1.0f;
+    r.quality = (uint8_t)((r.quality & 0x03) | ((uint8_t)(confidence * 63.0f + 0.5f) << 2));
     return r;
 }
 inline void decode(const FlightLogRecord &r, uint64_t anchorMs, float *v, int columns) {
@@ -68,9 +72,12 @@ inline void decode(const FlightLogRecord &r, uint64_t anchorMs, float *v, int co
     v[27] = r.mode; v[28] = r.rcAge == 65532 ? -1 : unsignedFloat(r.rcAge, 1000);
     v[29] = r.armed; v[30] = r.faults;
     for (int i = 0; i < 4; ++i) v[i + 31] = unsignedFloat(r.motors[i], 32768);
-    if (columns >= FLIGHT_LOG_COLUMNS) {
+    if (columns >= 40) {
         for (int i = 0; i < 3; ++i) v[i + 35] = signedFloat(r.integral[i], 1024);
         v[38] = unsignedFloat(r.mixScale, 32768); v[39] = r.source;
+    }
+    if (columns >= FLIGHT_LOG_COLUMNS) {
+        v[40] = ((r.quality >> 2) & 0x3f) / 63.0f;
     }
 }
 inline void legacyBytes(const float *row, uint8_t *out) {
