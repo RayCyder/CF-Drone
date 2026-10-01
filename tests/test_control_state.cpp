@@ -10,6 +10,7 @@ using portMUX_TYPE = int;
 #include "../vector.h"
 #include "../quaternion.h"
 #include "../diagnostics.h"
+#include "../level_calibration_state.h"
 
 double t=1,controlTime=0;
 float dt=.001f,loopRate=1000;
@@ -42,8 +43,9 @@ void printInvalidParameterValues(){}
 void print(const char*,...) {}
 bool batteryBlocksArming(){return false;}
 bool isAccelCalibrationActive(){return false;}
-bool levelCalibrationActive=false,parameterWritePending=false;
-bool isLevelCalibrationActive(){return levelCalibrationActive;}
+LevelCalibrationState levelCalibrationState=LEVEL_EMPTY;
+bool parameterWritePending=false;
+bool isLevelCalibrationActive(){return levelCalibrationBlocksArming(levelCalibrationState);}
 bool parameterPersistencePending(){return parameterWritePending;}
 void sendMotors() {}
 bool motorsActive(){for(float m:motors)if(m!=0)return true;return false;}
@@ -68,9 +70,12 @@ void rcLossFailsafe();void autoFailsafe();void invertedFailsafe();void batteryFa
 bool tryArmWithSystemLog(){armed=true;return true;}
 int main(){
     armed=false; mode=STAB; controlThrottle=0;
-    levelCalibrationActive=true;
+    levelCalibrationState=LEVEL_COLLECTING;
     assert(!requestArm());
-    levelCalibrationActive=false;
+    assert(armBlockReason() != nullptr);
+    levelCalibrationState=LEVEL_APPLIED;
+    assert(!requestArm()); // Writing the mounting angles requires a reboot before arming.
+    levelCalibrationState=LEVEL_EMPTY;
     parameterWritePending=true;
     assert(!requestArm());
     parameterWritePending=false;

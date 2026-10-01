@@ -16,6 +16,7 @@
 #include "open_loop_sequence.h"
 #include "descent_calibration.h"
 #include "imu_capture.h"
+#include "level_calibration_state.h"
 #include "quaternion.h"
 #include "control.h"
 #include "flight_log.h"
@@ -135,10 +136,6 @@ extern uint32_t getWiFiLastDisconnectMs();
 static_assert(WEB_LOG_CSV_COLUMNS_CAPACITY >= FLIGHT_LOG_COLUMNS, "HTTP CSV export capacity must cover all flight log columns");
 static_assert(WEB_LOG_CSV_ROW_CAPACITY >= 1024, "HTTP CSV rows require at least 1024 bytes");
 
-enum LevelCalibrationState : uint8_t {
-    LEVEL_EMPTY, LEVEL_QUEUED, LEVEL_COLLECTING, LEVEL_PROCESSING,
-    LEVEL_READY, LEVEL_APPLYING, LEVEL_APPLIED, LEVEL_REJECTED, LEVEL_CANCELLING
-};
 static portMUX_TYPE levelCalibrationMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint8_t levelCalibrationState = LEVEL_EMPTY;
 static const char *levelCalibrationReason = "empty";
@@ -162,8 +159,7 @@ static const uint16_t LEVEL_CALIBRATION_PROCESS_CHUNK = 64;
 
 bool isLevelCalibrationActive() {
     const uint8_t state = __atomic_load_n(&levelCalibrationState, __ATOMIC_ACQUIRE);
-    return state == LEVEL_QUEUED || state == LEVEL_COLLECTING || state == LEVEL_PROCESSING ||
-        state == LEVEL_READY || state == LEVEL_APPLYING || state == LEVEL_CANCELLING;
+    return levelCalibrationBlocksArming((LevelCalibrationState)state);
 }
 
 static void setLevelCalibrationState(uint8_t state, const char *reason) {
@@ -1619,6 +1615,10 @@ void setupWebRC() {
             webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"stale_or_unsafe_level_calibration\"}");
             return;
         }
+        if (!beginPersistentWriteBatch()) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"parameter_write_busy\"}");
+            return;
+        }
         setLevelCalibrationState(LEVEL_APPLYING, "applying");
         const bool saved = setParameter("IMU_ROT_ROLL", levelCalibrationProposedRotation.x) &&
             setParameter("IMU_ROT_PITCH", levelCalibrationProposedRotation.y) &&
@@ -1626,17 +1626,23 @@ void setupWebRC() {
         if (!saved) {
             setParameter("IMU_ROT_ROLL", levelCalibrationBaseRotation.x);
             setParameter("IMU_ROT_PITCH", levelCalibrationBaseRotation.y);
+            finishPersistentWriteBatch(false);
             setLevelCalibrationState(LEVEL_REJECTED, "parameter_save_failed");
             webRCServer.send(500, "application/json", "{\"ok\":0,\"error\":\"parameter_save_failed\"}");
             return;
         }
-        setLevelCalibrationState(LEVEL_APPLIED, "saved_to_disarmed_write_queue");
+        setLevelCalibrationState(LEVEL_APPLIED, "restart_required_after_parameter_write");
+        finishPersistentWriteBatch(false);
         webRCServer.send(202, "application/json", "{\"ok\":1,\"pending\":true}");
     });
     webRCServer.on("/level-calibration/discard", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
         if (!requireWebRCLease()) return;
         const uint8_t state = getLevelCalibrationState();
+        if (state == LEVEL_APPLIED) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"restart_required\"}");
+            return;
+        }
         if (state == LEVEL_APPLYING) {
             webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"capture_busy\"}");
             return;

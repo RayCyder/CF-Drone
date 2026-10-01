@@ -388,7 +388,7 @@ const char* armBlockReason() {
 	if (mode == AUTO && !autoTargetReady()) return "AUTO 模式尚无有效目标，请切回 STAB 或等待目标就绪";
 	if (motorTestActive) return "电机测试正在运行";
 	if (isAccelCalibrationActive()) return "加速度计校准正在运行";
-	if (isLevelCalibrationActive()) return "水平校准待完成";
+	if (isLevelCalibrationActive()) return "水平校准进行中或已保存安装角，重启飞控后才可解锁";
 	if (controlThrottle > ARM_THROTTLE_LIMIT) return "油门高于解锁上限 5%";
 	if (!imuOK) return "IMU 未就绪";
 	if (batteryBlocksArming()) return "电池电压低于解锁门槛 3.5 V";

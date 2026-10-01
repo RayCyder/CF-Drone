@@ -667,15 +667,15 @@ async function refreshLevelCalibrationStatus(){
       detail+=`；采集前重力倾角 Roll ${Number(data.before_roll_deg).toFixed(2)}° / Pitch ${Number(data.before_pitch_deg).toFixed(2)}°；建议安装角变化 X ${r.toFixed(2)}° / Y ${p.toFixed(2)}°；加速度模长 ${Number(data.acc_norm).toFixed(3)} m/s²、最大轴向标准差 ${Number(data.acc_sd).toFixed(3)} m/s²`;
     }
     if(data.state==='rejected')detail+=`（${data.reason}）；请确认机身静止、水平和 IMU 正常后重试`;
-    if(data.state==='applied')detail+=data.persist_pending?'；等待参数写入':'；参数写入已完成，请复核水平读数';
+    if(data.state==='applied')detail+=data.persist_pending?'；等待参数写入，完成后必须重启飞控才能解锁':'；参数写入已完成，必须重启飞控才能解锁';
     if(data.pending&&data.state!=='applied')detail+='；请求已提交，等待飞控处理';
     status.textContent=detail;
     const busy=['queued','collecting','processing','applying','cancelling'].includes(data.state);
-    document.getElementById('level-calibration-start').disabled=data.armed||busy||data.state==='ready';
+    document.getElementById('level-calibration-start').disabled=data.armed||busy||data.state==='ready'||data.state==='applied';
     document.getElementById('level-calibration-apply').disabled=data.armed||data.state!=='ready';
     const discard=document.getElementById('level-calibration-discard');
     discard.textContent=['queued','collecting','processing','cancelling'].includes(data.state)?'取消采集':'放弃建议';
-    discard.disabled=data.state==='applying'||data.state==='cancelling';
+    discard.disabled=data.state==='applying'||data.state==='applied'||data.state==='cancelling';
   }catch(error){status.textContent=error.message||'水平校准状态读取失败';}
 }
 async function startLevelCalibration(){
