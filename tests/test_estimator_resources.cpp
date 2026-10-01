@@ -155,5 +155,24 @@ int main() {
 	landed = true;
 	applyLevel();
 	assert(levelGyroBias.zero()); // landed reset still runs before the disabled-work shortcut
+
+	// After a 50 ms loop stall, rate filtering must use the newest measured rate
+	// without bilinear-coefficient overshoot before integrating across that gap.
+	resetEstimator(Quaternion());
+	ratesFilter.reset();
+	accelerationFusionFilter.reset();
+	levelWeight = 0.0f;
+	levelBiasGain = 0.0f;
+	armed = false;
+	motorOutputActive = true;
+	acc = Vector(0.0f, 0.0f, ONE_G);
+	gyro = Vector();
+	dt = 0.001f;
+	estimate();
+	gyro = Vector(0.2f, 0.0f, 0.0f);
+	dt = 0.050f;
+	estimate();
+	assert(fabsf(rates.x - 0.2f) < 1e-6f);
+	assert(fabsf(attitude.toEuler().x - 0.01f) < 1e-5f);
 	puts("six-axis estimator resource regression: PASS");
 }
