@@ -18,6 +18,7 @@ DEFAULT_CAPTURES = (
     "data/attitude/motor-fr-20261001-001918.csv",
     "data/attitude/motor-fl-20261001-001301.csv",
     "data/attitude/motor-rl-20261001-001310.csv",
+    "data/attitude/motor-rr-20261001-081759.csv",
 )
 
 
@@ -76,7 +77,8 @@ def axis_summary(samples: dict[int, tuple[float, float, float]], axis: int,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("captures", nargs="*", help="IMU CSV captures (defaults to post-replacement FR, FL, RL)")
+    parser.add_argument("captures", nargs="*",
+                        help="IMU CSV captures (defaults to post-replacement FR, FL, RL, and RR)")
     parser.add_argument("--acc-weight", type=float, default=0.003,
                         help="current estimator EST_ACC_WEIGHT (default: 0.003)")
     parser.add_argument("--skip-start-ms", type=float, default=100.0,

@@ -13,12 +13,20 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CAPTURES = (
+PRE_REPLACEMENT_CAPTURES = (
     "data/attitude/motor-fr-vqf-repeat-20260930.csv",
     "data/attitude/motor-fr-20260930-220951.csv",
     "data/attitude/motor-fl-20260930-221327.csv",
     "data/attitude/motor-rl-20260930-221336.csv",
     "data/attitude/motor-rr-20260930-221731.csv",
+)
+POST_REPLACEMENT_CAPTURES = (
+    "data/attitude/motor-fr-20261001-001156.csv",
+    "data/attitude/motor-fr-20261001-001909.csv",
+    "data/attitude/motor-fr-20261001-001918.csv",
+    "data/attitude/motor-fl-20261001-001301.csv",
+    "data/attitude/motor-rl-20261001-001310.csv",
+    "data/attitude/motor-rr-20261001-081759.csv",
 )
 SHARED_HEADERS = ("quaternion.h", "vector.h", "lpf.h", "util.h")
 RAW_TOLERANCE_DECL = "const float rawNormTolerance = ONE_G * 0.1f;"
@@ -96,7 +104,10 @@ def parse_gyro_bias(value: str) -> tuple[float, float, float]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("captures", nargs="*", help="motor IMU CSV files (defaults to the five archived captures)")
+    parser.add_argument("captures", nargs="*", help="explicit motor IMU CSV files (overrides --dataset)")
+    parser.add_argument("--dataset", choices=("post-replacement", "pre-replacement"),
+                        default="post-replacement",
+                        help="default capture set (default: post-replacement, all four motors)")
     parser.add_argument("--baseline-ref", default="65e9e5a", help="git revision before the raw-norm confidence gate")
     parser.add_argument("--skip-start-ms", type=float, default=100.0,
                         help="motor-start transient to exclude (default: 100 ms)")
@@ -124,8 +135,10 @@ def main() -> int:
         baseline_source_text = baseline_source_text.replace(
             f'#include "{header}"', f'#include "{ROOT / header}"')
 
+    default_captures = (POST_REPLACEMENT_CAPTURES if args.dataset == "post-replacement"
+                        else PRE_REPLACEMENT_CAPTURES)
     captures = [Path(path) if Path(path).is_absolute() else ROOT / path
-                for path in (args.captures or DEFAULT_CAPTURES)]
+                for path in (args.captures or default_captures)]
     for capture in captures:
         if not capture.is_file():
             raise SystemExit(f"capture not found: {capture}")
