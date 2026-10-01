@@ -334,9 +334,10 @@ void recordLoopTiming(float dt) {
         portENTER_CRITICAL(&loopTraceMux);
         loopTrace.push(trace);
 #if defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
-        // Preserve the pre-trigger window and first over-budget loop. Read it
-        // after disarming so diagnostics cannot overwrite the control event.
-        if (armed && us > 1500) {
+        // Preserve the pre-trigger window and first stall-sized loop. Minor
+        // 1.5 ms jitter can occur without a perceptible stall, so retain the
+        // rolling window until the same 5 ms threshold used by the flight log.
+        if (armed && us >= LOOP_STALL_LOG_TRIGGER_US) {
             loopTrace.freeze();
             armedLoopTraceTriggered = true;
         }
