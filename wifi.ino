@@ -689,7 +689,7 @@ void scheduleWiFiRestart() {
 }
 
 bool isWiFiConfigPortalActive() {
-	return configPortalActive;
+	return configPortalActive || configPortalStarting;
 }
 
 void sendWiFi(const uint8_t *buf, int len) {
