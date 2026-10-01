@@ -62,7 +62,7 @@ def main() -> int:
     parser.add_argument("--fusion-alphas", type=comma_floats, default=[0.2],
                         help="coefficient for the gravity-fusion accelerometer low-pass path")
     parser.add_argument("--gyro-bias", type=gyro_bias, default=(0.0, 0.0, 0.0),
-                        help="additional bias applied to each generated gyro stream")
+                        help="additional bias applied during replay; retained IMU CSVs do not include it")
     args = parser.parse_args()
     if not math.isfinite(args.duration) or args.duration <= 1.0:
         parser.error("--duration must be finite and greater than one second")
