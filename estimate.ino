@@ -9,6 +9,9 @@
 
 float accWeight = 0.003;
 static const float ESTIMATE_NOMINAL_DT = 0.001f;
+// A long scheduler stall yields only one fresh accelerometer sample, not a
+// history representative of the whole gap. Bound gravity feedback to 5 ms.
+static const float ESTIMATE_MAX_ACCEL_CORRECTION_DT = 0.005f;
 #ifndef EST_RAW_ACCEL_NORM_TOLERANCE
 #define EST_RAW_ACCEL_NORM_TOLERANCE 0.10f
 #endif
@@ -134,7 +137,8 @@ void applyAcc() {
 	// calculate accelerometer correction
 	Vector up = Quaternion::rotateVector(Vector(0, 0, 1), attitude);
 	Vector correction = Vector::rotationVectorBetween(gravityReference, up) *
-		(accWeight * correctionConfidence * (dt / ESTIMATE_NOMINAL_DT));
+		(accWeight * correctionConfidence *
+			(min(dt, ESTIMATE_MAX_ACCEL_CORRECTION_DT) / ESTIMATE_NOMINAL_DT));
 
 	// apply correction
 	attitude = Quaternion::rotate(attitude, Quaternion::fromRotationVector(correction));

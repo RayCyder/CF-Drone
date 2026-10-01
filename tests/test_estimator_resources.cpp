@@ -174,5 +174,23 @@ int main() {
 	estimate();
 	assert(fabsf(rates.x - 0.2f) < 1e-6f);
 	assert(fabsf(attitude.toEuler().x - 0.01f) < 1e-5f);
+
+	// One gravity sample after a long gap must not receive a full-gap correction
+	// gain; otherwise a single 5-degree acceleration disturbance causes a jump.
+	resetEstimator(Quaternion());
+	ratesFilter.reset();
+	accelerationFusionFilter.reset();
+	accWeight = 0.003f;
+	armed = false;
+	motorOutputActive = false;
+	gyro = Vector();
+	acc = Vector(0.0f, 0.0f, ONE_G);
+	dt = 0.001f;
+	estimate();
+	const float accelerationTilt = radians(5.0f);
+	acc = Vector(ONE_G * sinf(accelerationTilt), 0.0f, ONE_G * cosf(accelerationTilt));
+	dt = 0.050f;
+	estimate();
+	assert(fabsf(attitude.toEuler().x) < radians(0.08f));
 	puts("six-axis estimator resource regression: PASS");
 }
