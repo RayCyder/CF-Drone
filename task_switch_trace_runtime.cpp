@@ -30,7 +30,7 @@ static uint32_t pendingFlashRequestCount = 0;
 static bool pendingFlashRequestAmbiguous = false;
 static portMUX_TYPE pendingFlashRequestMux = portMUX_INITIALIZER_UNLOCKED;
 
-static void takePendingFlashRequest(TaskIpcTraceEvent &event) {
+static void IRAM_ATTR takePendingFlashRequest(TaskIpcTraceEvent &event) {
     portENTER_CRITICAL(&pendingFlashRequestMux);
     if (pendingFlashRequestCount == 1 && !pendingFlashRequestAmbiguous) {
         event.requestUs = pendingFlashRequestUs;
