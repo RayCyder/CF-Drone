@@ -31,6 +31,13 @@ static_assert(sizeof(LegacySystemLogEvent) == 64 && sizeof(LegacyPersistedSystem
 static_assert(sizeof(SystemLogEvent) == 68 && sizeof(PersistedSystemLog) == 836,
     "Versioned system-event history must remain bounded");
 
+inline void initializeSystemLogHistoryHeader(PersistedSystemLog &history) {
+    history.magic = SYSTEM_LOG_MAGIC;
+    history.version = SYSTEM_LOG_VERSION;
+    history.recordBytes = sizeof(SystemLogEvent);
+    if (history.nextSequence == 0) history.nextSequence = 1;
+}
+
 inline bool validSystemLogText(const char *text, size_t size) {
     for (size_t i = 0; i < size; ++i) {
         const unsigned char c = (unsigned char)text[i];

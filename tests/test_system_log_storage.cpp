@@ -96,6 +96,26 @@ static void creationTests() {
     const auto truncated = makeSystemLogEvent(2, 3, longText, longText);
     assert(strlen(truncated.tag) == 11 && strlen(truncated.message) == 43);
 }
+static void appendInitializationTests() {
+    PersistedSystemLog history = {};
+    initializeSystemLogHistoryHeader(history);
+    assert(history.magic == SYSTEM_LOG_MAGIC && history.version == SYSTEM_LOG_VERSION);
+    assert(history.recordBytes == sizeof(SystemLogEvent) && history.nextSequence == 1);
+
+    auto event = makeSystemLogEvent(0x10203040, 12, "NVS", "preferences=ready");
+    event.sequence = history.nextSequence++;
+    history.events[history.normalNext] = event;
+    history.normalNext = (history.normalNext + 1) % LOG_CAPACITY;
+    history.normalCount++;
+    history.eventCount = history.normalCount;
+
+    assert(event.sequence == 1);
+    assert(history.nextSequence == 2);
+    assert(validSystemLogHistory(history));
+    PersistedSystemLog restored = {}; bool migrated = true;
+    assert(decodeSystemLogHistory(&history, sizeof(history), restored, migrated) && !migrated);
+    assert(restored.events[0].sequence == 1 && restored.events[0].bootId == 0x10203040);
+}
 static void snapshotCopyTests() {
     PersistedSystemLog snapshot = {}; SystemLogEvent out[12] = {};
     assert(copySystemLogSnapshotAfter(snapshot, 0, out, 12) == 0);
@@ -138,4 +158,4 @@ static void snapshotCopyTests() {
     assert(copySystemLogSnapshotAfter(snapshot, UINT32_MAX, out, 12) == 3);
     assert(out[0].sequence == 0 && out[2].sequence == 2);
 }
-int main(){ migrationTests(); malformedTests(); creationTests(); snapshotCopyTests(); puts("system event persistence migration/copy: PASS"); }
+int main(){ migrationTests(); malformedTests(); creationTests(); appendInitializationTests(); snapshotCopyTests(); puts("system event persistence migration/copy: PASS"); }

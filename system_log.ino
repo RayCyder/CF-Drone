@@ -63,10 +63,7 @@ void initializeSystemLog() {
 		if (decodeSystemLogHistory(saved, length, history, migrated) && migrated)
 			historyDirty = true; // Existing guarded worker persists the migration when disarmed.
 	}
-	history.magic = SYSTEM_LOG_MAGIC;
-	history.version = SYSTEM_LOG_VERSION;
-	history.recordBytes = sizeof(SystemLogEvent);
-	if (history.nextSequence == 0) history.nextSequence = 1;
+	initializeSystemLogHistoryHeader(history);
 	systemLogBootId = esp_random();
 	if (systemLogBootId == 0) systemLogBootId = 1;
 }
@@ -90,6 +87,7 @@ void startPersistentWriteTaskBeforeLoop() {
 void recordSystemLogEvent(const char *tag, const char *message) {
 	SystemLogEvent event = makeSystemLogEvent(systemLogBootId, millis(), tag, message);
 	portENTER_CRITICAL(&systemLogMux);
+	initializeSystemLogHistoryHeader(history);
 	event.sequence = history.nextSequence++;
 	if (isStallEvent(event.tag, event.message)) {
 		if (history.stallCount == 0) {

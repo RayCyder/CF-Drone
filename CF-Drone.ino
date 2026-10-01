@@ -83,8 +83,8 @@ void setup() {
 		(unsigned long)ESP.getCpuFreqMHz(), (unsigned long)ESP.getFlashChipSize(),
 		resetReasonName(esp_reset_reason()), (int)esp_reset_reason(), (unsigned long)ESP.getFreeHeap());
 	print("程序开始初始化！\n");
-	setupParameters(); // 从Flash加载参数（未存储时使用默认值）
 	initializeSystemLog(); // 恢复上次启动的故障/系统事件历史
+	setupParameters(); // 从Flash加载参数（未存储时使用默认值），并记录 NVS/迁移事件
 	recordSystemLogEvent("BOOT", bootEvent);
 	setupLED(); // 初始化状态指示灯
 	setupMotors(); // 初始化电机输出（PWM/DShot）
