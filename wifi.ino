@@ -414,7 +414,8 @@ static void stopWiFiConfigPortalForRetry(const char *reason) {
 }
 
 static void startWiFiConfigPortal(bool keepStation) {
-	if (configPortalActive || configPortalStarting) return;
+	if (configPortalActive || configPortalStarting ||
+		!WifiRecoveryPolicy::portalStartAllowed(armed, motorsActive())) return;
 	__atomic_store_n(&wifiAPEventStarted, false, __ATOMIC_RELEASE);
 	const wifi_mode_t requestedMode = keepStation ? WIFI_AP_STA : WIFI_AP;
 	const bool modeReady = WiFi.mode(requestedMode);
@@ -653,7 +654,8 @@ void serviceWiFi() {
 		recordSystemLogEvent("WIFI", "state=PORTAL_STA_RETRY");
 	}
 	if (!configPortalActive && (uint32_t)(millis() - wifiConnectStartedMs) >= WIFI_CONNECT_TIMEOUT_MS &&
-		!configPortalStarting && (!wifiAPRetryAtMs || (int32_t)(millis() - wifiAPRetryAtMs) >= 0)) {
+		!configPortalStarting && WifiRecoveryPolicy::portalStartAllowed(armed, motorsActive()) &&
+		(!wifiAPRetryAtMs || (int32_t)(millis() - wifiAPRetryAtMs) >= 0)) {
 		if ((uint8_t)(wifiProfileAttempt + 1) < activeWifiProfileCount) {
 			++wifiProfileAttempt;
 			char ssid[33], password[64];

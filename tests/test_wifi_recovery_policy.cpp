@@ -31,6 +31,9 @@ int main() {
     assert(!maintenanceAllowed(false, true));
     assert(flightApiAllowed(false));
     assert(!flightApiAllowed(true));
+    assert(portalStartAllowed(false, false));
+    assert(!portalStartAllowed(true, false));
+    assert(!portalStartAllowed(false, true));
     assert(restartReady(true, true, false, false));
     assert(!restartReady(true, false, false, false));
     assert(!restartReady(true, true, true, false));

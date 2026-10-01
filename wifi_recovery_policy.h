@@ -41,6 +41,10 @@ inline bool flightApiAllowed(bool configPortalActive) {
     return !configPortalActive;
 }
 
+inline bool portalStartAllowed(bool armed, bool motorsActive) {
+    return !armed && !motorsActive;
+}
+
 inline bool restartReady(bool scheduled, bool deadlineReached, bool armed, bool motorsActive) {
     return scheduled && deadlineReached && !armed && !motorsActive;
 }
