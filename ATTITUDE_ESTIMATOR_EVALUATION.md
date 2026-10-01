@@ -307,6 +307,8 @@ python3 tools/compare_estimator_replay.py \
 
 另一次带 IPC、调度器和阶段计时的目标板采集中，三类记录按同一 loop 序号对齐：`loop_sequence=43` 的 `dt_us=52,826`，阶段数组把 `52,077 μs` 计入 `control_law`，但控制估计阶段只有 `174 μs`；IPC 记录的 flash callback 为 `51,906 μs`（请求时间 `1,438,674 μs`，callback 从 `1,438,700 μs` 到 `1,490,606 μs`），调度记录显示 `loopTask` 在 `1,490,623 μs` 重新运行。原始数据见 [阶段 trace](data/attitude/loop-overrun-imu-export-trace-chunked-20261001.csv)、[IPC trace](data/attitude/flash-ipc-imu-export-trace-chunked-20261001.csv) 和 [任务切换 trace](data/attitude/task-switch-imu-export-trace-chunked-20261001.csv)。这组对齐证据表明该 52 ms 间隔是跨核 flash callback 期间主循环被挂起，`control_law` 只是停顿落入的计时区间，不代表控制律计算耗时；它也没有显示姿态估计阶段变慢。另一份未配套 IPC/调度记录的 trace 确有 `estimate_us=54,718`（[阶段 trace](data/attitude/loop-overrun-imu-export-fix-20261001.csv)），其具体原因仍未证实，不能仅凭阶段标签归因于估计器。
 
+这类长 `dt` 还暴露出一个估计器边界问题：[lpf.h](lpf.h) 用双线性变换把标称滤波系数换算到实际采样周期；当 `alpha=0.2` 时，`dt` 超过标称周期 9 倍后换算系数会大于 1。上述 52.826 ms 记录对应速率和重力融合滤波的系数约 1.70，旧实现会越过最新传感器样本产生过冲。现在长间隔时将系数限制到 1，让滤波器直接采用最新样本；常规 1 kHz 及短时抖动沿用原公式。`tests/test_dt_filter.cpp` 增加了 50 ms 过冲回归，`python3 tests/run_host_tests.py` 全部通过。该修正避免停顿后的滤波器数值过冲，但不能补回停顿期间没有读取到的 IMU 样本。
+
 ### 新一轮四电机振动采集与候选参数回放（2026-10-01）
 
 在同一板端以锁定状态、30% 指令各运行 FR/FL/RL/RR 3 秒，无桨，分别保存 1,024 帧；每段用于电机统计的窗口有 574 帧。文件为 [FR](data/attitude/motor-fr-20261001-093111.csv)、[FL](data/attitude/motor-fl-20261001-093122.csv)、[RL](data/attitude/motor-rl-20261001-093133.csv)、[RR](data/attitude/motor-rr-20261001-093143.csv)。各段采样周期中位数均为 `1,010 μs`，P99 为 `1,036–1,040 μs`，最大值为 `1,116–1,333 μs`。测试结束后确认 `armed=0`、电机输出归零、电压 `4.08 V`。采集期间串口预检累计了 LOOP_OVERRUN，历史峰值仍为 `11.776 ms`，与 `diag` 预检期间 `serial_input` 工作相关；因此这些片段用于同输入振动回放，不用于干净的主循环时序评估。

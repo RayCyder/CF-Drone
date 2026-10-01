@@ -33,8 +33,17 @@ public:
 			return update(input);
 		}
 		const float x0 = (2.0f * alpha) / (2.0f - alpha);
-		const float x = x0 * (sampleDt / nominalDt);
-		const float adjustedAlpha = x / (1.0f + 0.5f * x);
+		// The bilinear coefficient exceeds 1 when a long scheduler/flash stall
+		// makes the sample interval much larger than nominal. In that case the
+		// filter should consume the newest sample directly, not extrapolate past it.
+		const float sampleDtRatio = sampleDt / nominalDt;
+		float adjustedAlpha;
+		if (sampleDtRatio >= 2.0f / x0) {
+			adjustedAlpha = 1.0f;
+		} else {
+			const float x = x0 * sampleDtRatio;
+			adjustedAlpha = x / (1.0f + 0.5f * x);
+		}
 		if (!initialized) {
 			output = input;
 			initialized = true;

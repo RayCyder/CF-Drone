@@ -20,5 +20,10 @@ int main() {
 	vectorFilter.update(Vector(0, 0, 0));
 	const Vector first = vectorFilter.update(Vector(1, -1, 0.5f), 0.001f, 0.001f);
 	assert(fabsf(first.x - 0.2f) < 1e-6f && fabsf(first.y + 0.2f) < 1e-6f);
+
+	LowPassFilter<float> stalled(0.2f);
+	assert(stalled.update(0.0f) == 0.0f);
+	const float afterStall = stalled.update(1.0f, 0.050f, 0.001f);
+	assert(fabsf(afterStall - 1.0f) < 1e-6f); // long dt consumes the newest sample without overshoot
 	puts("dt-aware filter regression: PASS");
 }
