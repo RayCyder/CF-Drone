@@ -14,6 +14,7 @@ void recordSystemLogEvent(const char *tag, const char *message);
 void initializeSystemLog();
 void startPersistentWriteTaskBeforeLoop();
 bool tryArmWithSystemLog();
+bool systemLogArmingBlocked();
 bool beginPersistentWriteBatch();
 bool systemLogPersistencePending();
 bool persistSystemLogInBatch();

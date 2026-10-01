@@ -23,6 +23,7 @@ extern double t;
 extern double controlTime;
 extern float controlRoll, controlPitch, controlYaw, controlThrottle, controlMode;
 extern float batteryVoltage;
+extern const char* armBlockReason();
 extern bool ledFastBlinkActive();
 extern const char* motd;
 
@@ -1443,18 +1444,21 @@ void setupWebRC() {
             (now - lastStickUpdate < WEB_RC_TIMEOUT_MS);
         float vbat = batteryVoltage;
         if (isnan(vbat) || vbat < 0.0f) vbat = 0.0f;
-        char json[448];
+        char json[640];
+        const char *armReason = armBlockReason();
         snprintf(json, sizeof(json),
             "{\"armed\":%s,\"led_fast_blink\":%s,\"enabled\":%s,\"active\":%s,"
             "\"voltage\":%.2f,"
-            "\"throttle\":%.1f,\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,\"faults\":%lu}",
+            "\"throttle\":%.1f,\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,\"faults\":%lu,"
+            "\"arm_ready\":%s,\"arm_reason\":\"%s\"}",
             armed ? "true" : "false",
             ledFastBlinkActive() ? "true" : "false",
             enabled ? "true" : "false",
             (useWebRC && enabled) ? "true" : "false",
             vbat,
             throttle, roll, pitch, yaw,
-            (unsigned long)getActiveDiagnosticFaults());
+            (unsigned long)getActiveDiagnosticFaults(),
+            armReason ? "false" : "true", armReason ? armReason : "当前解锁条件已满足");
         webRCServer.send(200, "application/json", json);
     });
 

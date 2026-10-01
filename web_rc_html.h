@@ -340,6 +340,10 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
         <strong>正在读取诊断状态…</strong>
         <small>数据来自飞控当前运行状态。</small>
       </div>
+      <div id="arm-readiness" class="diagnostic-summary offline">
+        <strong>正在检查解锁条件…</strong>
+        <small>此状态依据飞控当前实际解锁门槛。</small>
+      </div>
       <div id="led-alert-reason" class="diagnostic-summary offline">
         <strong>正在读取蓝灯状态…</strong>
       </div>
@@ -1051,6 +1055,18 @@ function renderSelfCheckStatus(data) {
   const faults = data.faults;
   if (typeof faults !== 'number') return;
   const active = diagnosticChecks.filter(check => (faults & check.bit) !== 0);
+  const armReadiness = document.getElementById('arm-readiness');
+  if (typeof data.arm_ready === 'boolean' && typeof data.arm_reason === 'string') {
+    armReadiness.className = 'diagnostic-summary ' + (data.arm_ready ? 'ok' : 'fault');
+    armReadiness.innerHTML = data.armed === true
+      ? '<strong>飞控已解锁</strong><small>飞控报告当前处于解锁状态。</small>'
+      : data.arm_ready
+      ? '<strong>当前可以解锁</strong><small>飞控报告所有解锁门槛均已满足；状态会随电池、油门和飞行模式变化。</small>'
+      : `<strong>当前禁止解锁</strong><small>${data.arm_reason}</small>`;
+  } else {
+    armReadiness.className = 'diagnostic-summary offline';
+    armReadiness.innerHTML = '<strong>当前固件未提供解锁条件</strong><small>刷新或更新飞控固件后，页面才能显示具体解锁阻止原因。</small>';
+  }
   const ledReason = document.getElementById('led-alert-reason');
   const blockingFaults = diagnosticChecks.filter(check =>
     [1, 2, 4, 8, 256].includes(check.bit) && (faults & check.bit) !== 0);
@@ -1095,7 +1111,7 @@ function renderSelfCheckStatus(data) {
   summary.className = 'diagnostic-summary ' + (active.length ? 'fault' : 'ok');
   summary.innerHTML = active.length
     ? `<strong>检测到 ${active.length} 项活动故障</strong><small>如故障涉及 IMU 或电机输出，请勿解锁。处理建议见下方。</small>`
-    : '<strong>自动检查未报告活动故障</strong><small>这表示软件检测项当前正常，仍需完成下方逐电机人工检查；飞控没有转速反馈，无法确认电机本体状态。</small>';
+    : '<strong>诊断自检正常：未报告活动故障</strong><small>解锁条件另见上方状态；仍需完成下方逐电机人工检查，飞控没有转速反馈，无法确认电机本体状态。</small>';
   const activePanel = document.getElementById('diagnostic-active');
   activePanel.style.display = active.length ? 'block' : 'none';
   activePanel.innerHTML = active.length

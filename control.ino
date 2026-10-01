@@ -336,13 +336,24 @@ bool autoTargetTimedOut() {
 	return (uint32_t)(millis() - autoTargetLastValidMs) > AUTO_TARGET_TIMEOUT_MS;
 }
 
+const char* armBlockReason() {
+	if (armed) return "";
+	if (motorTestArmInhibit) return "电机测试后请先释放解锁输入";
+	updateDiagnostics();
+	if (mode == AUTO && !autoTargetReady()) return "AUTO 模式尚无有效目标，请切回 STAB 或等待目标就绪";
+	if (motorTestActive) return "电机测试正在运行";
+	if (isAccelCalibrationActive()) return "加速度计校准正在运行";
+	if (controlThrottle > ARM_THROTTLE_LIMIT) return "油门高于解锁上限 5%";
+	if (!imuOK) return "IMU 未就绪";
+	if (batteryBlocksArming()) return "电池电压低于解锁门槛 3.5 V";
+	if (hasBlockingDiagnosticFault()) return "存在阻止解锁的诊断故障，请查看 diag";
+	if (systemLogArmingBlocked()) return "系统日志或参数正在写入，或写入后保护等待尚未结束";
+	return nullptr;
+}
+
 bool requestArm() {
 	if (armed) return true;
-	if (motorTestArmInhibit) return false;
-	updateDiagnostics();
-	if (mode == AUTO && !autoTargetReady()) return false;
-	if (motorTestActive || isAccelCalibrationActive() || controlThrottle > ARM_THROTTLE_LIMIT || !imuOK ||
-		batteryBlocksArming() || hasBlockingDiagnosticFault()) return false;
+	if (armBlockReason()) return false;
 	return tryArmWithSystemLog();
 }
 
@@ -426,7 +437,10 @@ void interpretControls() {
 				if (requestArm()) {
 					armWarnNotified = false;
 				} else {
-					if (!armWarnNotified) print("系统未满足解锁条件，检查油门、电池、IMU、故障和电机测试状态。\n");
+					if (!armWarnNotified) {
+						const char *reason = armBlockReason();
+						print("禁止解锁：%s\n", reason ? reason : "解锁状态刚发生变化，请重试");
+					}
 					armWarnNotified = true;
 				}
 			}
@@ -622,7 +636,8 @@ void interpretWebRC() {
 			if (requestArm()) {
 				clearWebRCWarn(); // 解锁成功，清除上次遗留的警告
 			} else {
-				setWebRCWarn("系统未满足解锁条件，请检查自检状态");
+				const char *reason = armBlockReason();
+				setWebRCWarn(reason ? reason : "解锁状态刚发生变化，请重试");
 			}
 		}
 	}

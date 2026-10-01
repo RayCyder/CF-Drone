@@ -135,6 +135,13 @@ bool tryArmWithSystemLog() {
 	return allowed;
 }
 
+bool systemLogArmingBlocked() {
+	portENTER_CRITICAL(&systemLogMux);
+	const bool blocked = persistenceBusy || (int32_t)(millis() - armBlockedUntilMs) < 0;
+	portEXIT_CRITICAL(&systemLogMux);
+	return blocked;
+}
+
 bool beginPersistentWriteBatch() {
 	portENTER_CRITICAL(&systemLogMux);
 	const bool allowed = persistentWritesAllowed(armed, motorsActive()) && !motorTestActive && !persistenceBusy;
