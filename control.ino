@@ -437,10 +437,11 @@ void control() {
 
 void interpretControls() {
 	// A locally uploaded sequence owns the stick targets until an explicit mode
-	// change/takeover or disarm. Do not interpret its generated values as RC gestures.
+	// change/takeover or disarm. Its values still need the normal STAB mapping.
 #if WEB_RC_ENABLED
 	extern bool isLocalSequenceRunning();
-	if (isLocalSequenceRunning()) return;
+	const bool localSequenceRunning = isLocalSequenceRunning();
+	if (!localSequenceRunning) {
 #endif
 	if (motorTestArmInhibit && (controlThrottle >= 0.05f || controlYaw <= 0.95f))
 		motorTestArmInhibit = false;
@@ -504,16 +505,18 @@ void interpretControls() {
 	if (controlThrottle < 0.05 && controlYaw < -0.95) disarm(DISARM_REASON_RC_GESTURE); // disarm gesture
 #if WEB_RC_ENABLED
 	}
+	} // Local sequence values must not trigger RC mode changes or arm gestures.
 #endif
 
 	if (mode == AUTO || isControlledLandingActive()) return; // pilot sticks do not drive AUTO/landing targets
 
 #if WEB_RC_ENABLED
+	if (!localSequenceRunning) {
+#endif
 	const ControlSource manualSource = selectedManualControlSource();
 	setCurrentControlSource(manualSource == CONTROL_SOURCE_NONE ? CONTROL_SOURCE_PHYSICAL_RC : manualSource);
-#else
-	const ControlSource manualSource = selectedManualControlSource();
-	setCurrentControlSource(manualSource == CONTROL_SOURCE_NONE ? CONTROL_SOURCE_PHYSICAL_RC : manualSource);
+#if WEB_RC_ENABLED
+	}
 #endif
 
 	if (abs(controlYaw) < 0.1) controlYaw = 0; // yaw dead zone

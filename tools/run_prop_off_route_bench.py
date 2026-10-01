@@ -235,14 +235,18 @@ def main():
                 rows = list(csv.DictReader(output.with_name(output.stem + '-flight-log.csv').open()))
                 sequence_rows = [row for row in rows if row['control_source'] == '3' and row['armed'] == '1']
                 armed_rows = [row for row in rows if row['armed'] == '1']
+                powered_rows = {motor: sum(float(row[motor]) > 0.05 for row in sequence_rows)
+                                for motor in ('motor_fr', 'motor_fl', 'motor_rr', 'motor_rl')}
                 gaps = classify_log_gaps(rows)
                 record(stream, 'flight_log_summary', rows=len(rows), sequence_rows=len(sequence_rows),
+                       powered_rows=powered_rows,
                        max_armed_dt_ms=max((float(row['dt_s']) * 1000 for row in armed_rows), default=0),
                        missed_samples=status.get('missedSamples'), gaps=gaps)
                 total_min = sum(bounds[0] for bounds in gaps.values())
                 total_max = sum(bounds[1] for bounds in gaps.values())
                 if not route_error and (
                     not landing_seen or route.get('state') != 'complete' or len(sequence_rows) < 100 or
+                    any(count < 20 for count in powered_rows.values()) or
                     any(int(row['fault_mask']) != 0 or float(row['dt_s']) > 0.005 or
                         float(row['battery_v']) < 3.5 for row in armed_rows) or
                     gaps['armed'][1] or gaps['transition'][1] or

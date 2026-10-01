@@ -137,6 +137,13 @@ int main(){
     assert(setFlightMode(STAB));
     localSequenceActive=true; armed=false; mode=STAB; controlThrottle=0; controlYaw=1;
     interpretControls(); assert(!armed); // generated sequence values are not RC arm gestures
+    armed=true; controlYaw=0; controlThrottle=.2f;
+    setCurrentControlSource(CONTROL_SOURCE_LOCAL_SEQUENCE);
+    control();
+    assert(getCurrentControlSource()==CONTROL_SOURCE_LOCAL_SEQUENCE);
+    assert(thrustTarget>motThrMin);
+    for(float motor:motors) assert(motor>0); // sequence values reach the motor mixer
+    disarm();
     assert(setFlightMode(STAB) && !localSequenceActive && localSequenceCancelCount==1);
     controlRoll=controlPitch=controlYaw=0; controlThrottle=.3f; controlMode=NAN;
     webRCEnabled=useWebRC=false; localSequenceActive=false; setFlightMode(STAB);
