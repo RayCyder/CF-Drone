@@ -371,8 +371,7 @@ void clearDiagnosticHistory() {
 	print("诊断历史计数已清理；当前故障仍保留。\n");
 }
 
-void printDiagnostics() {
-	updateDiagnostics();
+static void printDiagnosticContextLine() {
 	extern bool armed, imuOK, motorOutputsOK;
 	extern float dt, loopRate, batteryVoltage, controlRoll, controlPitch, controlYaw, controlThrottle;
 	extern double t, controlTime;
@@ -381,6 +380,27 @@ void printDiagnostics() {
 		batteryVoltage, controlTime > 0 ? t - controlTime : -1.0f,
 		controlRoll, controlPitch, controlYaw, controlThrottle, loopRate, dt,
 		(unsigned long)ESP.getFreeHeap());
+}
+
+static void printDiagnosticFaultSummaryLine() {
+	print("故障诊断 active=0x%08lx loop_overruns=%lu worst_dt=%.4fs\n",
+		(unsigned long)getActiveDiagnosticFaults(), (unsigned long)loopOverrunCount, worstLoopDt);
+}
+
+void printDiagnosticsBrief() {
+	updateDiagnostics();
+	extern bool armed, imuOK, motorOutputsOK;
+	extern float batteryVoltage;
+	const uint32_t batteryMilliVolts = isfinite(batteryVoltage) && batteryVoltage > 0.0f
+		? (uint32_t)(batteryVoltage * 1000.0f) : 0;
+	print("PREFLIGHT armed=%u imu_ok=%u motor_ok=%u battery_mv=%lu faults=0x%08lx\n",
+		armed ? 1 : 0, imuOK ? 1 : 0, motorOutputsOK ? 1 : 0,
+		(unsigned long)batteryMilliVolts, (unsigned long)getActiveDiagnosticFaults());
+}
+
+void printDiagnostics() {
+	updateDiagnostics();
+	printDiagnosticContextLine();
     const uint32_t p99 = loopTiming.p99UpperUs();
     char p99Label[24];
     if (!loopTiming.samples) snprintf(p99Label, sizeof(p99Label), "no_samples");
@@ -413,8 +433,7 @@ void printDiagnostics() {
 	print("LOOP_TRACE count=%u overwritten=%lu capacity=%u csv=/diag/trace.csv\n",
 		(unsigned)getLoopTraceCount(), (unsigned long)getLoopTraceOverwrittenCount(), LOOP_TRACE_CAPACITY);
 	bool any = false;
-	print("故障诊断 active=0x%08lx loop_overruns=%lu worst_dt=%.4fs\n",
-		(unsigned long)getActiveDiagnosticFaults(), (unsigned long)loopOverrunCount, worstLoopDt);
+	printDiagnosticFaultSummaryLine();
 	for (size_t i = 0; i < sizeof(diagnosticStates) / sizeof(diagnosticStates[0]); ++i) {
 		const DiagnosticState &state = diagnosticStates[i];
 		if (!state.active && state.occurrences == 0) continue;

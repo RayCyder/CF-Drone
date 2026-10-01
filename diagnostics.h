@@ -23,6 +23,7 @@ uint32_t getActiveDiagnosticFaults();
 void printDiagnostics();
 void clearDiagnosticHistory();
 void updateDiagnostics();
+void printDiagnosticsBrief();
 void recordLoopTiming(float dt);
 void setLoopTimingSequence(uint32_t loopSequence);
 enum LoopStageId : uint8_t {

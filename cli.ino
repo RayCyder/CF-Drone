@@ -114,7 +114,7 @@ const char* motd =
 "time - 显示时间信息\n"
 "mot - 显示motor输出\n"
 "sys - 显示系统info信息\n"
-"diag - 显示故障诊断\n"
+"diag [brief] - 显示故障诊断（brief 为轻量预检）\n"
 "diag clear - 清理诊断历史计数\n"
 "log [dump|status|resume|clear] - 导出快照、恢复采样或清理事件历史\n"
 "reboot - 重启无人机\n"
@@ -381,6 +381,8 @@ void doCommand(String str, bool echo = false) {
 	} else if (command == "diag" && arg0 == "clear") {
 		clearDiagnosticHistory();
 		printDiagnostics();
+	} else if (command == "diag" && arg0 == "brief") {
+		printDiagnosticsBrief();
 	} else if (command == "diag") {
 		printDiagnostics();
 	} else if (command == "reset") {

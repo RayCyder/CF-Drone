@@ -340,3 +340,7 @@ python3 tools/compare_estimator_replay.py data/attitude/motor-*-20261001-*.csv \
 ```
 
 这些仍是固定机架、拆桨单电机输入的反事实 armed 回放；18 段样本扩大了振动条件覆盖，但没有增加姿态真值。标准差下降只说明该样本集里的输出波动下降，不能证明绝对姿态误差或闭环飞行表现更好，生产参数继续保持 `0.003/10%`。
+
+### 轻量串口预检与循环污染复测
+
+最近 trace 中，完整 `diag` 命令的 `serial_input_us` 多次达到 `1.3–1.6 ms`，并伴随约 `2.0–2.2 ms` 的循环间隔。电机采集脚本的预检只需判断 armed、IMU/电机初始化、电池电压和阻塞故障位，因此新增 `diag brief`，以单条整数摘要 `PREFLIGHT armed=… imu_ok=… motor_ok=… battery_mv=… faults=…` 回复；`tools/capture_motor_imu.py` 的预检已切换到此命令。目标板验证输出 `armed=0 imu_ok=1 motor_ok=1 battery_mv=4077 faults=0`。随后的 trace 中该命令对应 `serial_input_us=63`；同一记录 `dt_us=1680`，主要耗时在 `imu_wait_us=1009`，不再是串口摘要格式化。当前板端镜像 SHA-256：`11701d593d9f4b1bbd4a9613057e7d987690328e80e6cf4fb00bac99b4a46c28`。该单次读数确认 CLI 工作量明显下降，但不能代表常态循环统计，也不能用于归因历史数秒级卡顿。

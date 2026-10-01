@@ -90,33 +90,27 @@ class SerialConsole:
 
 def preflight(console: SerialConsole) -> None:
     lines: list[str] = []
-    console.send("diag")
-    console.wait_for(r"DIAG_CONTEXT ", 6, lines)
-    console.wait_for(r"故障诊断 active=", 6, lines)
-    context_record = next((line[line.index("DIAG_CONTEXT "):] for line in lines
-			if "DIAG_CONTEXT " in line), None)
-    faults = next((line for line in lines if "故障诊断 active=" in line), None)
-    if not context_record or not faults:
-        raise RuntimeError("Could not parse DIAG_CONTEXT and active diagnostic faults")
+    console.send("diag brief")
+    summary = console.wait_for(r"PREFLIGHT ", 6, lines)
     required = {
         "armed": r"\barmed=0\b",
         "imu_ok": r"\bimu_ok=1\b",
         "motor_ok": r"\bmotor_ok=1\b",
     }
     for label, pattern in required.items():
-        if not re.search(pattern, context_record):
-            raise RuntimeError(f"Preflight failed: {label} is not in the required state: {context_record}")
-    voltage = re.search(r"\bbattery_v=([\d.]+)", context_record)
-    if not voltage or float(voltage.group(1)) < 3.5:
-        raise RuntimeError(f"Preflight failed: battery voltage is missing/low: {context_record}")
-    active = re.search(r"active=0x([0-9a-fA-F]+)", faults)
+        if not re.search(pattern, summary):
+            raise RuntimeError(f"Preflight failed: {label} is not in the required state: {summary}")
+    voltage = re.search(r"\bbattery_mv=(\d+)\b", summary)
+    if not voltage or int(voltage.group(1)) < 3500:
+        raise RuntimeError(f"Preflight failed: battery voltage is missing/low: {summary}")
+    active = re.search(r"\bfaults=0x([0-9a-fA-F]+)", summary)
     # Match firmware hasBlockingDiagnosticFault(): LOOP_OVERRUN and other
     # warning bits are reported, but do not block this disarmed motor test.
     blocking_fault_mask = 0x10F  # IMU init/timeout/invalid, motor init, parameter
     if not active or int(active.group(1), 16) & blocking_fault_mask:
-        raise RuntimeError(f"Preflight failed: blocking diagnostic fault present: {faults}")
+        raise RuntimeError(f"Preflight failed: blocking diagnostic fault present: {summary}")
     if int(active.group(1), 16):
-        print(f"Preflight warning (non-blocking while disarmed): {faults}")
+        print(f"Preflight warning (non-blocking while disarmed): {summary}")
 
 
 def capture_one(console: SerialConsole, motor: str, out_dir: Path, settle: float) -> Path:
