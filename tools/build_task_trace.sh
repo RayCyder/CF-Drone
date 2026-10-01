@@ -7,6 +7,12 @@ fqbn=${1:-esp32:esp32:esp32}
 build_dir=${2:-/private/tmp/cf-drone-task-trace-build}
 trace_mode=${3:-full}
 
+# Keep the diagnostic image on the same partition layout as the production
+# ESP32 build. The default 1.3 MB app slot no longer fits the current image.
+if [ "$fqbn" = esp32:esp32:esp32 ]; then
+    fqbn=esp32:esp32:esp32:PartitionScheme=min_spiffs
+fi
+
 case "$trace_mode" in
     full)
         trace_defines=
