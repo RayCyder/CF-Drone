@@ -14,6 +14,7 @@ static uint32_t loopTaskHandleValue = 0;
 static uint8_t loopTaskCore = 0;
 static volatile uint32_t taskTraceEnabled = 0;
 static volatile uint32_t taskTraceWriters = 0;
+#if !defined(CF_DRONE_DISABLE_IPC_TRACE_HOOK)
 static constexpr uint8_t TASK_IPC_TRACE_CAPACITY = 1;
 static TaskIpcTraceEvent taskIpcTrace[TASK_IPC_TRACE_CAPACITY] = {};
 static uint32_t taskIpcTraceNext = 0;
@@ -26,6 +27,7 @@ static uint32_t pendingFlashCallerPc = 0;
 static uint8_t pendingFlashCallerCore = UINT8_MAX;
 static uint8_t pendingFlashTargetCore = UINT8_MAX;
 static portMUX_TYPE pendingFlashRequestMux = portMUX_INITIALIZER_UNLOCKED;
+#endif
 
 static uint32_t currentTaskHandleValue() {
     return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(xTaskGetCurrentTaskHandle()));
@@ -93,6 +95,12 @@ bool copyTaskSwitchTrace(uint8_t coreId, uint32_t sequence,
 
 uint8_t copyTaskIpcTrace(TaskIpcTraceEvent *destination, uint8_t capacity,
                          uint32_t &overwritten) {
+#if defined(CF_DRONE_DISABLE_IPC_TRACE_HOOK)
+    (void)destination;
+    (void)capacity;
+    overwritten = 0;
+    return 0;
+#else
     if (!destination || !capacity) { overwritten = taskIpcTraceOverwritten; return 0; }
     const uint32_t count = taskIpcTraceCount < capacity ? taskIpcTraceCount : capacity;
     const uint32_t first = taskIpcTraceNext - count;
@@ -100,9 +108,13 @@ uint8_t copyTaskIpcTrace(TaskIpcTraceEvent *destination, uint8_t capacity,
         destination[i] = taskIpcTrace[(first + i) % TASK_IPC_TRACE_CAPACITY];
     overwritten = taskIpcTraceOverwritten;
     return static_cast<uint8_t>(count);
+#endif
 }
 
+#if !defined(CF_DRONE_DISABLE_SCHEDULER_TRACE_HOOK)
 extern "C" void __real_vTaskSwitchContext(void);
+#endif
+#if !defined(CF_DRONE_DISABLE_IPC_TRACE_HOOK)
 extern "C" esp_err_t __real_esp_ipc_call_nonblocking(uint32_t cpuId,
                                                       esp_ipc_func_t function,
                                                       void *argument);
@@ -184,7 +196,9 @@ extern "C" void IRAM_ATTR __wrap_spi_flash_op_block_func(void *argument) {
     }
     __atomic_sub_fetch(&taskTraceWriters, 1, __ATOMIC_RELEASE);
 }
+#endif
 
+#if !defined(CF_DRONE_DISABLE_SCHEDULER_TRACE_HOOK)
 extern "C" void __wrap_vTaskSwitchContext(void) {
     if (!__atomic_load_n(&taskTraceEnabled, __ATOMIC_ACQUIRE)) {
         __real_vTaskSwitchContext();
@@ -209,6 +223,7 @@ extern "C" void __wrap_vTaskSwitchContext(void) {
     }
     __atomic_sub_fetch(&taskTraceWriters, 1, __ATOMIC_RELEASE);
 }
+#endif
 
 #else
 // Standard production builds do not wrap the FreeRTOS scheduler. The recorder
