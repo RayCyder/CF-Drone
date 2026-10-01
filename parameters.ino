@@ -316,6 +316,26 @@ void printInvalidParameterValues() {
 	if (!found) print("PARAMETER active but all current parameter values pass validation.\n");
 }
 
+static void migrateEstimatorAccelerationDefault() {
+	if (!parameterStorageReady || storage.getUChar("EST_ACC_MIG_V1", 0) == 1) return;
+	bool ready = true;
+	if (storage.isKey("EST_ACC_WEIGHT")) {
+		const float stored = storage.getFloat("EST_ACC_WEIGHT", NAN);
+		// Migrate only the previous shipped default. Any other persisted value is
+		// an explicit user setting and remains untouched.
+		if (stored == 0.003f) {
+			ready = storage.putFloat("EST_ACC_WEIGHT", 0.0005f) == sizeof(float) &&
+				storage.getFloat("EST_ACC_WEIGHT", NAN) == 0.0005f;
+			if (ready) recordSystemLogEvent("PARAM_MIG", "EST_ACC_WEIGHT 0.003->0.0005");
+			else print("[参数迁移] EST_ACC_WEIGHT 写入校验失败；保留原值并在下次启动重试。\n");
+		}
+	}
+	if (ready && (storage.putUChar("EST_ACC_MIG_V1", 1) != sizeof(uint8_t) ||
+		storage.getUChar("EST_ACC_MIG_V1", 0) != 1)) {
+		print("[参数迁移] EST_ACC_MIG_V1 标记写入失败；下次启动会复核。\n");
+	}
+}
+
 void setupParameters() {
 	print("Setup parameters\n");
 	dirtyParameterCount = 0;
@@ -360,6 +380,7 @@ void setupParameters() {
 		recordSystemLogEvent("WIFI_MIG", migrationEvent);
 	}
 #endif
+	migrateEstimatorAccelerationDefault();
 	// Read parameters from storage
 	for (auto &parameter : parameters) {
 		if (!storage.isKey(parameter.name)) {

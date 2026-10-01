@@ -129,10 +129,10 @@ def main() -> int:
     parser.add_argument("--baseline-ref", default="65e9e5a", help="git revision before the raw-norm confidence gate")
     parser.add_argument("--skip-start-ms", type=float, default=100.0,
                         help="motor-start transient to exclude (default: 100 ms)")
-    parser.add_argument("--raw-tolerances", type=parse_tolerances, default=[0.1],
-                        help="comma-separated raw-norm tolerances to replay (default: 0.1)")
-    parser.add_argument("--acc-weights", type=parse_acc_weights, default=[0.003],
-                        help="comma-separated EST_ACC_WEIGHT values (default: 0.003)")
+    parser.add_argument("--raw-tolerances", type=parse_tolerances, default=[0.05],
+                        help="comma-separated raw-norm tolerances to replay (default: 0.05)")
+    parser.add_argument("--acc-weights", type=parse_acc_weights, default=[0.0005],
+                        help="comma-separated EST_ACC_WEIGHT values (default: 0.0005)")
     parser.add_argument("--innovation-max-deg", type=float,
                         help="override the candidate estimator's acceleration-innovation upper threshold in degrees")
     parser.add_argument("--gyro-bias", type=parse_gyro_bias, default=(0.0, 0.0, 0.0),

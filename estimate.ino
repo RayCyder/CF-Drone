@@ -7,7 +7,7 @@
 #include "util.h"
 #include "attitude_vqf.h"
 
-float accWeight = 0.003;
+float accWeight = 0.0005f;
 // Last-sample estimator evidence copied into the bounded flight log. This
 // value is diagnostic only and does not feed the control calculation.
 float accelCorrectionConfidence = 0.0f;
@@ -30,7 +30,7 @@ static const float ESTIMATE_ACCEL_INNOVATION_MAX_RAD = radians(ESTIMATE_ACCEL_IN
 static_assert(ESTIMATE_ACCEL_MIN_ADAPTIVE_WEIGHT >= 0.0f && ESTIMATE_ACCEL_MIN_ADAPTIVE_WEIGHT <= 1.0f,
 	"ESTIMATE_ACCEL_MIN_ADAPTIVE_WEIGHT must be in [0, 1]");
 #ifndef EST_RAW_ACCEL_NORM_TOLERANCE
-#define EST_RAW_ACCEL_NORM_TOLERANCE 0.10f
+#define EST_RAW_ACCEL_NORM_TOLERANCE 0.05f
 #endif
 static_assert(EST_RAW_ACCEL_NORM_TOLERANCE > 0.0f && EST_RAW_ACCEL_NORM_TOLERANCE <= 1.0f,
 	"EST_RAW_ACCEL_NORM_TOLERANCE must be in (0, 1]");

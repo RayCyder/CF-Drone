@@ -68,6 +68,8 @@ static Quaternion runAirborneAccCorrection(float sampleDt, int samples) {
 }
 
 int main() {
+	assert(accWeight == 0.0005f);
+	assert(EST_RAW_ACCEL_NORM_TOLERANCE == 0.05f);
 	assert(fabsf(adaptiveAccelerationWeight(0.003f, 1.0f) - 0.003f) < 1e-7f);
 	assert(fabsf(adaptiveAccelerationWeight(0.003f, cosf(radians(5.0f))) - 0.003f) < 1e-6f);
 	const float midInnovationAngle = (5.0f + ESTIMATE_ACCEL_INNOVATION_MAX_DEG) * 0.5f;
@@ -98,8 +100,8 @@ int main() {
 
 	const Quaternion airborneInitial = Quaternion::fromEuler(Vector(0.1f, 0.0f, 0.0f));
 	const Quaternion airborneCorrected = runAirborneAccCorrection(0.001f, 500);
-	assert(fabsf(airborneCorrected.toEuler().x) < 0.04f);
-	assert(fabsf(airborneCorrected.toEuler().x) < fabsf(airborneInitial.toEuler().x));
+	assert(fabsf(airborneCorrected.toEuler().x) < 0.09f);
+	assert(fabsf(airborneCorrected.toEuler().x) + 0.005f < fabsf(airborneInitial.toEuler().x));
 	const Quaternion airborneJittered = runAirborneAccCorrection(0.0005f, 1000);
 	assert(fabsf(airborneCorrected.x - airborneJittered.x) < 1e-4f);
 	assert(fabsf(airborneCorrected.w - airborneJittered.w) < 1e-4f);
@@ -115,8 +117,8 @@ int main() {
 	assert(fabsf(attitude.x - airborneInitial.x) < 1e-6f);
 	assert(fabsf(attitude.w - airborneInitial.w) < 1e-6f);
 
-	// High-frequency motor vibration can push raw acceleration outside the 1 g
-	// gate; the dedicated fusion filter should recover the gravity direction.
+	// High-frequency vibration can push raw acceleration outside the 1 g gate.
+	// The estimator should limit its correction rather than chase each peak.
 	resetEstimator(airborneInitial);
 	armed = true;
 	motorOutputActive = true;
@@ -127,7 +129,9 @@ int main() {
 		acc = Vector(12.0f * sinf(2.0f * PI * 200.0f * i * dt), 0.0f, ONE_G);
 		applyAcc();
 	}
-	assert(fabsf(attitude.toEuler().x) < 0.06f);
+	assert(fabsf(attitude.toEuler().x) < 0.09f);
+	assert(fabsf(attitude.toEuler().x) + 0.005f < fabsf(airborneInitial.toEuler().x));
+	assert(accelCorrectionConfidence < 0.05f);
 
 	// Stick input fades out accelerometer correction during intentional maneuvers.
 	resetEstimator(airborneInitial);

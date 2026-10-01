@@ -102,8 +102,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("captures", nargs="*",
                         help="IMU CSV captures (defaults to post-replacement FR, FL, RL, and RR)")
-    parser.add_argument("--acc-weight", type=float, default=0.003,
-                        help="current estimator EST_ACC_WEIGHT (default: 0.003)")
+    parser.add_argument("--acc-weight", type=float, default=0.0005,
+                        help="current estimator EST_ACC_WEIGHT (default: 0.0005)")
     parser.add_argument("--skip-start-ms", type=float, default=100.0,
                         help="motor-start transient to exclude (default: 100 ms)")
     parser.add_argument("--tau-acc", type=float, action="append", dest="tau_acc_values",
