@@ -20,6 +20,10 @@ int64_t esp_timer_get_time(){return testUs;}
 bool motorsActive(){return activeMotors;}
 void recordDescentCalibrationSample(){}
 uint32_t getActiveDiagnosticFaults(){return 0;}
+#if defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
+int throttleReleaseFreezeCount=0;
+void freezeArmedLoopTraceForThrottleRelease(){++throttleReleaseFreezeCount;}
+#endif
 ControlSource getCurrentControlSource(){return CONTROL_SOURCE_NONE;}
 DisarmReason getLastDisarmReason(){return DISARM_REASON_WEB_LOCK;}
 typedef int portMUX_TYPE;
@@ -91,6 +95,20 @@ static void storeTests(){
     store.push(FlightLogCodec::encode(row,wrap+20000),wrap+20000);
     assert(store.status().rowCount==1); // unknown epoch history is never misdated
 }
+static void throttleReleaseDetectorTests(){
+    RapidThrottleReleaseDetector detector;
+    assert(!detector.observe(false,1.0f,0));
+    assert(!detector.observe(true,0.95f,100000));
+    assert(!detector.observe(true,0.50f,150000));
+    assert(detector.observe(true,0.10f,200000));
+    assert(!detector.observe(true,0.00f,210000));
+    assert(!detector.observe(true,0.95f,300000));
+    assert(!detector.observe(true,0.50f,1100000));
+    assert(!detector.observe(true,0.00f,1110000));
+    assert(!detector.observe(true,0.95f,1200000));
+    assert(!detector.observe(false,0.00f,1210000));
+    assert(!detector.observe(true,0.00f,1220000));
+}
 static void integrationTests(){
     assert(getLogColumnCount()==41 && !strcmp(getLogColumnName(34),"motor_fl"));
     assert(!strcmp(getLogColumnName(35),"rate_i_x"));
@@ -123,4 +141,21 @@ static void integrationTests(){
     assert(copyLatestLogRow(row,41,&seq));assert(row[0]==(float)(testUs/1000)/1000);
     assert(fabsf(row[40]-accelCorrectionConfidence)<=.5f/63);
 }
-int main(){codecTests();storeTests();integrationTests();puts("flight log regressions passed");}
+#if defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
+static void diagnosticReleaseTests(){
+    armed=false;assert(resumeFlightLog());
+    testUs+=10000;armed=true;controlThrottle=.95f;logData();
+    testUs+=10000;controlThrottle=.10f;logData();
+    const auto status=getFlightLogStatus();
+    assert(status.state==POST_TRIGGER);
+    assert(status.reasonMask==FLIGHT_LOG_THROTTLE_RELEASE_REASON);
+    assert(throttleReleaseFreezeCount==1);
+    testUs+=10000;logData();assert(throttleReleaseFreezeCount==1);
+    armed=false;controlThrottle=0;
+}
+#endif
+int main(){codecTests();storeTests();throttleReleaseDetectorTests();integrationTests();
+#if defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
+    diagnosticReleaseTests();
+#endif
+    puts("flight log regressions passed");}

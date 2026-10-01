@@ -76,6 +76,23 @@ def check_web_link(stream):
     record(stream,'web_link_preflight',samples=len(latencies),
            min_ms=round(min(latencies),1),max_ms=round(max(latencies),1))
 
+def classify_log_gaps(rows):
+    gaps={phase:[0,0] for phase in ('armed','disarmed','transition')}
+    for previous,current in zip(rows,rows[1:]):
+        delta=float(current['t'])-float(previous['t'])
+        if delta < 0.015:
+            continue
+        # Samples are scheduled at 100 Hz, but their recorded timestamps can
+        # slip within a slot. A 57 ms gap may represent four or five misses.
+        minimum=max(0,math.floor(delta/0.01)-1)
+        maximum=max(0,math.ceil(delta/0.01)-1)
+        phase=('armed' if previous['armed']=='1' and current['armed']=='1' else
+               'disarmed' if previous['armed']=='0' and current['armed']=='0' else
+               'transition')
+        gaps[phase][0]+=minimum
+        gaps[phase][1]+=maximum
+    return gaps
+
 def validate_log(path, trace_path, expected_missed=None):
     with path.open(newline='',encoding='utf-8') as stream:
         rows=list(csv.DictReader(stream))
@@ -97,18 +114,12 @@ def validate_log(path, trace_path, expected_missed=None):
                  for row in platform]
     in_gravity_band=sum(9.80665*0.95<=value<=9.80665*1.05
                         for value in accel_norms)
-    gaps={'armed':0,'disarmed':0,'transition':0}
-    for previous,current in zip(rows,rows[1:]):
-        missing=max(0,round((float(current['t'])-float(previous['t']))/0.01)-1)
-        if not missing:
-            continue
-        phase=('armed' if previous['armed']=='1' and current['armed']=='1' else
-               'disarmed' if previous['armed']=='0' and current['armed']=='0' else
-               'transition')
-        gaps[phase]+=missing
-    if gaps['armed'] or gaps['transition']:
+    gaps=classify_log_gaps(rows)
+    if gaps['armed'][1] or gaps['transition'][1]:
         raise RuntimeError(f'flight-log gaps during or near arming require review: {gaps}')
-    if expected_missed is not None and sum(gaps.values()) != expected_missed:
+    minimum_total=sum(bounds[0] for bounds in gaps.values())
+    maximum_total=sum(bounds[1] for bounds in gaps.values())
+    if expected_missed is not None and not minimum_total<=expected_missed<=maximum_total:
         raise RuntimeError(f'flight-log missed samples cannot be fully located: '
                            f'file={gaps}, status={expected_missed}')
     return {'rows':len(rows),'armed_rows':len(armed),'platform_rows':len(platform),
@@ -118,9 +129,9 @@ def validate_log(path, trace_path, expected_missed=None):
             'platform_zero_confidence_rows':sum(value==0 for value in confidence),
             'platform_mean_confidence':round(sum(confidence)/len(confidence),4),
             'platform_accel_norm_in_1g_5pct_rows':in_gravity_band,
-            'missing_samples_in_armed_gaps':gaps['armed'],
-            'missing_samples_in_disarmed_gaps':gaps['disarmed'],
-            'missing_samples_across_arm_transition':gaps['transition'],
+            'possible_missing_in_armed_gaps':gaps['armed'],
+            'possible_missing_in_disarmed_gaps':gaps['disarmed'],
+            'possible_missing_across_arm_transition':gaps['transition'],
             'trace_rows':len(trace_rows)}
 
 def main():

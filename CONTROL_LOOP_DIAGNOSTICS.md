@@ -1,7 +1,15 @@
 # Control-loop stall localization
 
 Status: the boot-time NVS batch now completes in `setup()` before the first control-loop iteration, avoiding the previously measured ~50 ms startup loop interval. Later runtime flash writes remain guarded while disarmed. The separate historical long IMU waits remain unexplained; diagnostic tracing measures slow SPI-flash cache callbacks and closes pending spans at the next actual loop entry.
-Updated: 2026-10-01
+Updated: 2026-10-02
+
+## 2026-10-02 frozen-log recovery after a reported high-throttle session
+
+The controller was later observed disarmed with zero throttle. Its frozen [log status](data/attitude/full-throttle-postlevel-status-20261002.json) reports generation 1, 400 rows, four missed 100 Hz samples and reason `0x81000000` (Web lock). Read-only export recovered the [flight log](data/attitude/full-throttle-postlevel-flight-log-20261002.csv), [loop trace](data/attitude/full-throttle-postlevel-loop-trace-20261002.csv), and [worst trace](data/attitude/full-throttle-postlevel-worst-20261002.json); HTTP status requests briefly timed out before the exports succeeded.
+
+The flight-log window is uptime `265.220–269.250 s`. Its 304 armed rows all have `rc_throttle=0`, so it does **not** contain the previously observed high-throttle command at about 208 s. The only large adjacent-row gap is about 57 ms after disarm; the status counter reports four missed samples. The trace ring's 32 newest rows end at `267.865 s` and peak at `1.779 ms`; its separate worst record is `3.417 ms` at `237.431 s`, before this log window. The armed `fault_mask=128` in the log is a retained warning bit, not 304 distinct overruns. This export cannot confirm or refute a physical motor stutter at high throttle. A later disarm can overwrite high-throttle flight-log prehistory when no 5 ms stall triggers it, so the next diagnostic capture must preserve a rapid high-to-low throttle transition while armed as well as a measured loop stall.
+
+The opt-in `armed-loop` diagnostic build now also triggers the flight log on a throttle transition from at least `0.90` to at most `0.20` within `750 ms` while armed, and freezes its most recent loop-trace window at that transition. It records an intentional rapid stick release as well as an unexpected control drop; the trigger by itself cannot distinguish them. The reason bit is `0x00010000`. The existing ≥5 ms loop-stall trigger remains intact, and production builds do not compile the new transition detector. Host regressions pass in both normal and diagnostic variants; the ESP32-D0WD-V3 diagnostic image compiles at `1,327,339 B` flash and `124,508 B` static RAM, SHA-256 `4b5ec79e2ff85237fd2514bfdafd0f46fb8bdc51bdc6c733bbdf7a915663fd0b`. This image has **not** yet been flashed or run on the target, so there is no new high-throttle capture from it.
 
 ## Goal and scope
 

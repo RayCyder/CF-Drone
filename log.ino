@@ -120,6 +120,13 @@ void logData() {
     const bool due = flightLog.sampleDue(now);
     portEXIT_CRITICAL(&logBufferMux);
     if (!due) return;
+#if defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
+    static RapidThrottleReleaseDetector throttleReleaseDetector;
+    if (throttleReleaseDetector.observe(armed, controlThrottle, now)) {
+        triggerFlightLog(FLIGHT_LOG_THROTTLE_RELEASE_REASON);
+        freezeArmedLoopTraceForThrottleRelease();
+    }
+#endif
     const Vector angles = attitude.toEuler(), targetAngles = attitudeTarget.toEuler();
     const float row[FLIGHT_LOG_COLUMNS] = {
         0, dt, gyro.x, gyro.y, gyro.z, acc.x, acc.y, acc.z,

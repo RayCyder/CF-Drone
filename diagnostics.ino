@@ -215,6 +215,16 @@ void resetLoopTraceState() {
 #endif
 }
 
+#if defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
+void freezeArmedLoopTraceForThrottleRelease() {
+    if (!armed || !armedLoopTraceCaptureStarted || armedLoopTraceTriggered) return;
+    portENTER_CRITICAL(&loopTraceMux);
+    loopTrace.freeze();
+    portEXIT_CRITICAL(&loopTraceMux);
+    armedLoopTraceTriggered = true;
+}
+#endif
+
 void setLoopTimingSequence(uint32_t loopSequence) {
     currentLoopSequence = loopSequence;
 }

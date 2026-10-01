@@ -25,6 +25,9 @@ void clearDiagnosticHistory();
 void updateDiagnostics();
 void printDiagnosticsBrief();
 void recordLoopTiming(float dt);
+#if defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
+void freezeArmedLoopTraceForThrottleRelease();
+#endif
 void setLoopTimingSequence(uint32_t loopSequence);
 enum LoopStageId : uint8_t {
 	LOOP_STAGE_IMU,
