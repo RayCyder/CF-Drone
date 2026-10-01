@@ -1,0 +1,6 @@
+traces=48 configs=3 duration=60s gyro_bias_extra=(0.0, 0.0, 0.0) rad/s
+profiles=p0:translation=0g,vibration=0m/s^2,p1:translation=0g,vibration=0.7m/s^2,p2:translation=0.12g,vibration=0.45m/s^2,p3:translation=0.2g,vibration=0.45m/s^2,p4:translation=0.3g,vibration=0.7m/s^2,p5:translation=0.3g,vibration=0m/s^2
+weight,tolerance,innovation_deg,adaptive_min_weight,fusion_alpha,mean_R_RMSE_deg,mean_P_RMSE_deg,mean_Y_RMSE_deg,worst_profile_R+P_deg,p0_R/P/Y,p1_R/P/Y,p2_R/P/Y,p3_R/P/Y,p4_R/P/Y,p5_R/P/Y
+0.0005,0.05,15,0.0005,0.2,1.7910,1.7600,1.8606,5.7244,0.2221/0.2005/1.8431,0.7295/0.6830/1.8465,1.6872/1.6279/1.8414,2.3692/2.3490/1.8646,2.8660/2.8584/1.8824,2.8721/2.8410/1.8854
+0.001,0.05,15,0.0005,0.2,1.8078,1.7089,1.8702,5.8614,0.1379/0.1136/1.8429,0.3972/0.3690/1.8438,1.6642/1.6025/1.8460,2.6844/2.4366/1.8901,2.9638/2.8696/1.8957,2.9995/2.8619/1.9029
+0.003,0.05,15,0.0005,0.2,2.1618,2.0618,1.9095,7.0314,0.0991/0.0664/1.8430,0.1653/0.1414/1.8429,2.1208/2.3809/1.9074,3.6055/3.2314/1.9536,3.4133/3.0865/1.9498,3.5669/3.4645/1.9605
