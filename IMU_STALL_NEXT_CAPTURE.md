@@ -81,3 +81,9 @@
 随后 10 秒 30% 平台已观测三段 `running` 与 `landing`，运行中 10 个低频姿态样本均返回；约第 6 秒出现一次 1.5 ms 告警。脚本发送收尾 `disarm` 后，串口 `mot` 响应超时；随后网页启动时间从约 277 秒回到约 11 秒，航线状态清空，证明设备在收尾附近重启。重启后网页和独立串口均显示上锁、四路零输出、故障零，校准值仍在。重启后的 [RTC 导出](data/attitude/retained-post-reboot-20261002-0659.csv)保留一条 `dt=1,732 us`、IMU 等待 `1,161 us` 的记录，序号为 `loop_sequence=268553`；这不是重启前最后一个循环，也没有达到 5 ms。串口没有连续录到重启瞬间的 boot banner/reset reason，不能判断是 panic、看门狗、供电还是其他原因。该轮飞行日志因重启未冻结导出，不能宣称完整通过。
 
 已停止电机测试并将此前验证的稳定镜像（SHA-256 `18d1939b80b9a09387e93d69b7ec32171bc565ac182b66c46fa64b3fe431024e`）写回 app0；独立 Flash 校验匹配，启动后上锁、四路零输出、校准值未变。下一次诊断镜像运行必须从解锁前持续录制串口启动与复位信息，同时取得电源轨时序；在找出这次重启原因前，不用该镜像继续加电。标准台架脚本已改为即使收尾串口核对失败也继续尝试保存 Web 安全状态和 RTC 记录，但此修改尚未在板端复测。
+
+### 任务切换钩子的 Flash 取指风险
+
+对本次 full trace ELF 的符号与段表检查发现：原始 `vTaskSwitchContext` 在 IRAM (`0x4008e34c`)，但诊断包装函数 `__wrap_vTaskSwitchContext` 在 `.flash.text` (`0x400ec54c`)，其调用的记录方法也在 Flash。任务切换钩子若在 Flash cache 停用期间运行，会面临取指风险；这是一项确定的链接布局缺陷，**尚不能据此认定它导致了 10 秒平台收尾重启**，因为当时没有 reset reason、panic 栈或电源轨记录。
+
+已将包装函数和它使用的记录方法放入 IRAM，并强制内联以避免 Xtensa 的 IRAM literal 重定位错误。修正后的 full trace ELF 中，包装函数在 `0x40081480`；反汇编列出的所有直接调用目标（FreeRTOS 原函数、`esp_timer_get_time`、任务句柄查询、原子操作、`memcpy`、`memset`）均在 `.iram0.text`。full、full-armed-loop、生产构建及主机 task-switch ring 回归均通过；full 镜像 SHA-256 `db2a0de0816a426f6f7bacce62acdd7f377b10eaa7cb5ec1366e36f4ca77cd84`。该镜像尚未刷入目标板，布局修正只消除一个已发现风险，不等于重启根因已证实或运行稳定性已验证。

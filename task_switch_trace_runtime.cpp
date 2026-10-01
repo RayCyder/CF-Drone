@@ -48,7 +48,7 @@ static void IRAM_ATTR takePendingFlashRequest(TaskIpcTraceEvent &event) {
 }
 #endif
 
-static uint32_t currentTaskHandleValue() {
+static uint32_t IRAM_ATTR currentTaskHandleValue() {
     return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(xTaskGetCurrentTaskHandle()));
 }
 
@@ -223,7 +223,7 @@ extern "C" void IRAM_ATTR __wrap_spi_flash_op_block_func(void *argument) {
 #endif
 
 #if !defined(CF_DRONE_DISABLE_SCHEDULER_TRACE_HOOK)
-extern "C" void __wrap_vTaskSwitchContext(void) {
+extern "C" void IRAM_ATTR __wrap_vTaskSwitchContext(void) {
     if (!__atomic_load_n(&taskTraceEnabled, __ATOMIC_ACQUIRE)) {
         __real_vTaskSwitchContext();
         return;

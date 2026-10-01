@@ -2,6 +2,13 @@
 
 #include <stdint.h>
 
+#if defined(ESP32) && defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+#include <esp_attr.h>
+#define TASK_SWITCH_TRACE_IRAM IRAM_ATTR __attribute__((always_inline))
+#else
+#define TASK_SWITCH_TRACE_IRAM
+#endif
+
 // Compact, host-testable recorder for FreeRTOS task-switch hooks.
 // Hooks pass raw 32-bit ESP32 task handles; this class calls no FreeRTOS APIs.
 #if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
@@ -55,7 +62,7 @@ public:
         loopSequence_ = loopSequence;
     }
 
-    void switchedOut(uint32_t timestampUs, uint32_t taskHandle, uint8_t coreId) {
+    void TASK_SWITCH_TRACE_IRAM switchedOut(uint32_t timestampUs, uint32_t taskHandle, uint8_t coreId) {
         if (taskHandle == flightTaskHandle_) {
             if (active_) finish(timestampUs);
             active_ = true;
@@ -69,7 +76,7 @@ public:
         }
     }
 
-    void switchedIn(uint32_t timestampUs, uint32_t taskHandle, uint8_t coreId) {
+    void TASK_SWITCH_TRACE_IRAM switchedIn(uint32_t timestampUs, uint32_t taskHandle, uint8_t coreId) {
         if (!active_ || coreId != coreId_) return;
         if (taskHandle == flightTaskHandle_) {
             append(timestampUs, taskHandle, coreId, TASK_SWITCH_LOOP_IN);
@@ -94,7 +101,7 @@ public:
     bool captureActive() const { return active_; }
 
 private:
-    void append(uint32_t timestampUs, uint32_t taskHandle, uint8_t coreId,
+    void TASK_SWITCH_TRACE_IRAM append(uint32_t timestampUs, uint32_t taskHandle, uint8_t coreId,
                 TaskSwitchTraceKind kind) {
         if (pendingCount_ == TASK_SWITCH_PENDING_CAPACITY) {
             if (pendingOverflow_ < UINT16_MAX) ++pendingOverflow_;
@@ -109,7 +116,7 @@ private:
         event.kind = static_cast<uint8_t>(kind);
     }
 
-    void publish(const TaskSwitchTraceEvent &event) {
+    void TASK_SWITCH_TRACE_IRAM publish(const TaskSwitchTraceEvent &event) {
         TaskSwitchTraceEvent &destination = events_[nextSequence_ % TASK_SWITCH_TRACE_CAPACITY];
         destination = event;
         destination.sequence = nextSequence_++;
@@ -117,7 +124,7 @@ private:
         else if (overwritten_ < UINT32_MAX) ++overwritten_;
     }
 
-    void finish(uint32_t timestampUs) {
+    void TASK_SWITCH_TRACE_IRAM finish(uint32_t timestampUs) {
         if (!active_) return;
         const uint32_t durationUs = timestampUs - startUs_; // wrap-safe for intervals < 2^32 us
         if (durationUs >= TASK_SWITCH_TRACE_MIN_US) {
@@ -153,3 +160,5 @@ private:
     TaskSwitchTraceEvent pending_[TASK_SWITCH_PENDING_CAPACITY] = {};
     TaskSwitchTraceEvent events_[TASK_SWITCH_TRACE_CAPACITY] = {};
 };
+
+#undef TASK_SWITCH_TRACE_IRAM
