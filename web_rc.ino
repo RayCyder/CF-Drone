@@ -969,6 +969,21 @@ void setupWebRC() {
     lastValidThrottle = THROTTLE_MIN;
     lastValidRoll = lastValidPitch = lastValidYaw = 0.0f;
 
+#if WIFI_ENABLED
+    // Apply the portal policy before route dispatch, including read/export
+    // endpoints and any future routes added to this server.
+    webRCServer.addMiddleware([](WebServer &server, Middleware::Callback next) {
+        const HTTPMethod method = server.method();
+        if (isWiFiConfigPortalActive() &&
+            !WifiRecoveryPolicy::portalHttpAllowed(server.uri().c_str(),
+                method == HTTP_GET, method == HTTP_POST)) {
+            server.send(403, "application/json", "{\"ok\":0,\"error\":\"endpoint_disabled_in_wifi_config_portal\"}");
+            return true;
+        }
+        return next();
+    });
+#endif
+
     webRCServer.on("/", HTTP_GET, []() {
 #if WIFI_ENABLED
         if (isWiFiConfigPortalActive()) {

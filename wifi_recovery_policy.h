@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <string.h>
 
 namespace WifiRecoveryPolicy {
 
@@ -39,6 +40,18 @@ inline bool maintenanceAllowed(bool armed, bool motorsActive) {
 
 inline bool flightApiAllowed(bool configPortalActive) {
     return !configPortalActive;
+}
+
+inline bool portalHttpAllowed(const char *path, bool getRequest, bool postRequest) {
+    if (!path) return false;
+    if (getRequest) {
+        return strcmp(path, "/") == 0 || strcmp(path, "/wifi") == 0 ||
+            strcmp(path, "/wifi/profiles") == 0 || strcmp(path, "/wifi/scan") == 0;
+    }
+    if (postRequest) {
+        return strcmp(path, "/wifi/save") == 0 || strcmp(path, "/wifi/remove") == 0;
+    }
+    return false;
 }
 
 inline bool portalStartAllowed(bool armed, bool motorsActive) {
