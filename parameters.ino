@@ -12,6 +12,7 @@
 #include "system_log.h"
 #include "parameter_storage_key.h"
 #include "pwm_config.h"
+#include "level_rotation_transaction.h"
 
 extern float channelZero[16];
 extern float channelMax[16];
@@ -46,6 +47,7 @@ extern Vector levelGyroBias;             // Mahony 虚拟陀螺偏置，定义�
 
 Preferences storage;
 static bool parameterStorageReady = false;
+static bool levelRotationRecoveryRequired = false;
 static uint16_t dirtyParameterCount = 0;
 static portMUX_TYPE parameterMux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -303,6 +305,7 @@ static bool validParameterValue(const char *name, bool integer, float value, boo
 }
 
 static bool allParametersValid() {
+	if (levelRotationRecoveryRequired) return false;
 	for (auto &parameter : parameters)
 		if (!validParameterValue(parameter.name, parameter.integer, parameter.getValue())) return false;
 	return motorPwmConfigurationValid(pwmFrequency, pwmStop, pwmMin, pwmMax);
@@ -359,16 +362,62 @@ static void migrateEstimatorAccelerationDefault() {
 	}
 }
 
+static void recoverLevelRotationTransaction() {
+	if (!parameterStorageReady || !storage.isKey(level_rotation::KEY)) return;
+	if (!level_rotation::recover(storage)) {
+		levelRotationRecoveryRequired = true;
+		print("[参数诊断] 安装角事务恢复失败，禁止解锁。\n");
+		recordSystemLogEvent("PARAM_BAD", "IMU_ROT transaction recovery failed");
+		return;
+	}
+	print("[参数] 已回滚中断的 IMU 安装角事务。\n");
+	recordSystemLogEvent("PARAM_REC", "IMU_ROT pair rolled back");
+}
+
+// Caller owns beginPersistentWriteBatch(); this is used only by the disarmed
+// level-calibration apply route. The marker contains the old pair, so a reboot
+// before both new keys and marker removal rolls back to one coherent pair.
+bool persistLevelRotationPairNow(float oldRoll, float oldPitch, float newRoll, float newPitch) {
+	if (!parameterStorageReady || levelRotationRecoveryRequired ||
+		!persistentWritesAllowed(armed, motorsActive()) ||
+		!validParameterValue("IMU_ROT_ROLL", false, newRoll) ||
+		!validParameterValue("IMU_ROT_PITCH", false, newPitch) ||
+		imuRotation.x != newRoll || imuRotation.y != newPitch ||
+		storage.getFloat("IMU_ROT_ROLL", NAN) != oldRoll ||
+		storage.getFloat("IMU_ROT_PITCH", NAN) != oldPitch) return false;
+	const level_rotation::CommitResult result = level_rotation::commit(storage, oldRoll, oldPitch, newRoll, newPitch);
+	if (!result.success) {
+		levelRotationRecoveryRequired = result.recoveryRequired;
+		setDiagnosticFault(DIAG_PARAMETER, !allParametersValid());
+		return false;
+	}
+	// setParameter() has already updated the runtime pair. Those values now
+	// match flash, so suppress redundant background NVS writes.
+	portENTER_CRITICAL(&parameterMux);
+	for (auto &parameter : parameters) {
+		if (strcmp(parameter.name, "IMU_ROT_ROLL") && strcmp(parameter.name, "IMU_ROT_PITCH")) continue;
+		parameter.cache = parameter.getValue();
+		if (parameter.dirty) {
+			parameter.dirty = false;
+			if (dirtyParameterCount) --dirtyParameterCount;
+		}
+	}
+	portEXIT_CRITICAL(&parameterMux);
+	return true;
+}
+
 void setupParameters() {
 	print("Setup parameters\n");
 	dirtyParameterCount = 0;
 	parameterStorageReady = storage.begin("flix", false);
+	levelRotationRecoveryRequired = false;
 	if (!parameterStorageReady) {
 		// Never erase the full NVS partition here: it also contains Wi-Fi credentials
 		// and persistent system logs. Keep the existing data and run with defaults.
 		print("[NVS] Preferences.begin 失败；为保护 Wi-Fi 凭据和日志，本次启动不擦除 NVS。参数无法持久化。\n");
 	}
 	recordSystemLogEvent("NVS", parameterStorageReady ? "preferences=ready" : "preferences=failed");
+	recoverLevelRotationTransaction();
 	// Earlier firmware used the inverse WIFI_MODE numbering (1=AP, 2=STA).
 	// Convert existing values once while retaining the user's effective mode.
 #if BOARD_WIFI_ENABLED
@@ -574,6 +623,7 @@ void resetParameters() {
 	// Reset only registered flight parameters. Wi-Fi credentials, migration
 	// metadata, and persistent system logs share this namespace and must survive.
 	for (auto &parameter : parameters) storage.remove(parameterStorageKey(parameter.name));
+	storage.remove(level_rotation::KEY);
 	finishPersistentWriteBatch(false); // ESP.restart() immediately follows; never allow a concurrent NVS batch.
 	ESP.restart();
 }

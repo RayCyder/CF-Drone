@@ -118,6 +118,7 @@ extern bool copyDescentCalibrationSample(uint16_t index, DescentCalibrationSampl
 extern bool setParameter(const char *name, float value);
 extern float getParameter(const char *name);
 extern bool saveParameterNow(const char *name);
+extern bool persistLevelRotationPairNow(float oldRoll, float oldPitch, float newRoll, float newPitch);
 extern Vector imuRotation;
 extern bool imuOK;
 extern Quaternion attitude;
@@ -1619,6 +1620,7 @@ void setupWebRC() {
             getLevelCalibrationCancelRequested() ||
             armed || motorsActive() || !imuOK || motorTestActive || vibrationRouteBusy() ||
             isAccelCalibrationActive() || !parameterPersistenceReady() ||
+            isParameterDirty("IMU_ROT_ROLL") || isParameterDirty("IMU_ROT_PITCH") ||
             imuRotation.x != levelCalibrationBaseRotation.x ||
             imuRotation.y != levelCalibrationBaseRotation.y ||
             imuRotation.z != levelCalibrationBaseRotation.z) {
@@ -1632,17 +1634,18 @@ void setupWebRC() {
         setLevelCalibrationState(LEVEL_APPLYING, "applying");
         const bool saved = setParameter("IMU_ROT_ROLL", levelCalibrationProposedRotation.x) &&
             setParameter("IMU_ROT_PITCH", levelCalibrationProposedRotation.y) &&
-            saveParameterNow("IMU_ROT_ROLL") && saveParameterNow("IMU_ROT_PITCH");
+            persistLevelRotationPairNow(levelCalibrationBaseRotation.x, levelCalibrationBaseRotation.y,
+                levelCalibrationProposedRotation.x, levelCalibrationProposedRotation.y);
         if (!saved) {
             setParameter("IMU_ROT_ROLL", levelCalibrationBaseRotation.x);
             setParameter("IMU_ROT_PITCH", levelCalibrationBaseRotation.y);
-            finishPersistentWriteBatch(false);
+            finishPersistentWriteBatch(true);
             setLevelCalibrationState(LEVEL_REJECTED, "parameter_save_failed");
             webRCServer.send(500, "application/json", "{\"ok\":0,\"error\":\"parameter_save_failed\"}");
             return;
         }
         setLevelCalibrationState(LEVEL_APPLIED, "restart_required_after_parameter_write");
-        finishPersistentWriteBatch(false);
+        finishPersistentWriteBatch(true);
         webRCServer.send(202, "application/json", "{\"ok\":1,\"pending\":true}");
     });
     webRCServer.on("/level-calibration/discard", HTTP_POST, []() {

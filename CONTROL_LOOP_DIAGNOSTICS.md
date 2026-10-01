@@ -2,6 +2,10 @@
 
 Status: the boot-time NVS batch now completes in `setup()` before the first control-loop iteration, avoiding the previously measured ~50 ms startup loop interval. Later runtime flash writes remain guarded while disarmed. The separate historical long IMU waits remain unexplained; diagnostic tracing measures slow SPI-flash cache callbacks and closes pending spans at the next actual loop entry.
 
+## 2026-10-02 local route and Web response split
+
+After the propeller-off fixed-rig route was uploaded as one three-step plan, a repeat run measured one `/web_rc` client response at `328.2 ms`. The on-board `/web_rc` handler maximum remained about `6 ms` and the HTTP slow-handler count did not rise for that packet. Its armed flight-log window had no missed 100 Hz samples, maximum sampled loop interval `1.065 ms`, and a retained worst loop of `1.163 ms`. The packet delay therefore did not coincide with a flight-loop stall or prolonged `/web_rc` handler execution; the remaining path includes request acceptance, Wi-Fi/TCP and the client. A later identical run completed all three local steps, landing state and explicit disarm with no armed-loop gap; its maximum sampled interval was `1.068 ms`. Full evidence and the acceptance boundary are in [ATTITUDE_ROUTE_VALIDATION.md](ATTITUDE_ROUTE_VALIDATION.md).
+
 ## 2026-10-02 propeller-off 30% diagnostic captures
 
 The first four-motor 10→20→30% run completed with 155 flight-log rows at 30%, maximum armed sampled `dt_s=1.097 ms`, minimum voltage `4.072 V`, and no active fault. All 46 Web stick requests succeeded; the longest client response was `95.3 ms` while the route-specific server maximum was `7.542 ms`. The frozen recorder reported four cumulative missed 100 Hz samples, but no gap appears in the exported four-second window, so their phase cannot be assigned. Its 32 loop-trace rows are the diagnostic image's normal rolling window, maximum `1.044 ms`; the prior bench script incorrectly rejected any nonempty trace.
