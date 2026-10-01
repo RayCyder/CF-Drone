@@ -10,6 +10,7 @@
 #include "board_config.h"
 #include "diagnostics.h"
 #include "system_log.h"
+#include "parameter_storage_key.h"
 
 extern float channelZero[16];
 extern float channelMax[16];
@@ -383,13 +384,14 @@ void setupParameters() {
 	migrateEstimatorAccelerationDefault();
 	// Read parameters from storage
 	for (auto &parameter : parameters) {
-		if (!storage.isKey(parameter.name)) {
-			storage.putFloat(parameter.name, parameter.getValue()); // store default value
+		const char *storageKey = parameterStorageKey(parameter.name);
+		if (!storage.isKey(storageKey)) {
+			storage.putFloat(storageKey, parameter.getValue()); // store default value
 		}
-		float stored = storage.getFloat(parameter.name, parameter.getValue());
+		float stored = storage.getFloat(storageKey, parameter.getValue());
 		if (!validParameterValue(parameter.name, parameter.integer, stored)) {
 			stored = parameter.getValue();
-			storage.putFloat(parameter.name, stored);
+			storage.putFloat(storageKey, stored);
 			setDiagnosticFault(DIAG_PARAMETER, true);
 			print("[参数诊断] %s 存储值无效或越界，已回退默认值。\n", parameter.name);
 		}
@@ -493,9 +495,10 @@ bool persistDirtyParametersInBatch() {
 		if (!dirty || !validParameterValue(parameter.name, parameter.integer, value) ||
 			(value == cached || (isnan(value) && isnan(cached)))) continue;
 
-		const size_t written = storage.putFloat(parameter.name, value);
+		const char *storageKey = parameterStorageKey(parameter.name);
+		const size_t written = storage.putFloat(storageKey, value);
 		if (written != sizeof(float)) continue; // Keep dirty for the next locked batch.
-		const float readBack = storage.getFloat(parameter.name, NAN);
+		const float readBack = storage.getFloat(storageKey, NAN);
 		if (!isfinite(readBack) || readBack != value) continue; // Keep dirty unless NVS confirms the exact value.
 		wroteAny = true;
 		portENTER_CRITICAL(&parameterMux);
@@ -540,7 +543,7 @@ void resetParameters() {
 	if (!persistentWritesAllowed(armed, motorsActive()) || !beginPersistentWriteBatch()) return;
 	// Reset only registered flight parameters. Wi-Fi credentials, migration
 	// metadata, and persistent system logs share this namespace and must survive.
-	for (auto &parameter : parameters) storage.remove(parameter.name);
+	for (auto &parameter : parameters) storage.remove(parameterStorageKey(parameter.name));
 	finishPersistentWriteBatch(false); // ESP.restart() immediately follows; never allow a concurrent NVS batch.
 	ESP.restart();
 }
