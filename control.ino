@@ -339,7 +339,6 @@ bool autoTargetTimedOut() {
 const char* armBlockReason() {
 	if (armed) return "";
 	if (motorTestArmInhibit) return "电机测试后请先释放解锁输入";
-	updateDiagnostics();
 	if (mode == AUTO && !autoTargetReady()) return "AUTO 模式尚无有效目标，请切回 STAB 或等待目标就绪";
 	if (motorTestActive) return "电机测试正在运行";
 	if (isAccelCalibrationActive()) return "加速度计校准正在运行";
@@ -353,6 +352,7 @@ const char* armBlockReason() {
 
 bool requestArm() {
 	if (armed) return true;
+	updateDiagnostics();
 	if (armBlockReason()) return false;
 	return tryArmWithSystemLog();
 }
