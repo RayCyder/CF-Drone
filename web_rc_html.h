@@ -418,6 +418,9 @@ const EXPO    = 40;   // 指数曲线 40%
 let consecutiveFails = 0; // 连续失败计数，>=3 才判定断连
 let currentFlightMode = 2; // 当前飞行模式编号（与后端同步：2=自稳）
 let currentArmed = false;
+let webRCLeaseToken = '';
+let webRCLeasePromise = null;
+let webRCLeaseBlocked = false;
 
 let buttonStates     = new Array(16).fill(false);
 let lastButtonStates = new Array(16).fill(false);
@@ -562,7 +565,7 @@ async function refreshDescentCalibrationStatus(){
 async function startDescentCalibrationCapture(){
   if(!connectionOk||!currentArmed||currentFlightMode!==2){showToast('请连接飞控并在自稳模式、已解锁状态下开始记录');return;}
   try{
-    const response=await fetch('/descent-calibration/start',{method:'POST'});const result=await response.json();
+    const response=await controlFetch('/descent-calibration/start',{method:'POST'});const result=await response.json();
     if(!response.ok||!result.ok)throw new Error(result.error||'无法开始记录');
     setDescentCalibrationRecording(true);closeDescentCalibrationPage();showToast('开始记录手动下降；顶部按钮可停止');
   }catch(error){document.getElementById('descent-calibration-status').textContent=error.message;}
@@ -609,7 +612,7 @@ async function applyDescentCalibrationRecommendation(){
   if(!descentCalibrationRecommendation||currentArmed||!connectionOk){showToast('保存参数前请连接飞控并确认已上锁');return;}
   const value=Number(descentCalibrationRecommendation.thrust);
   try{
-    const response=await fetch('/descent-calibration/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({value:String(value)})});
+    const response=await controlFetch('/descent-calibration/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({value:String(value)})});
     const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'参数保存未排队');
     document.getElementById('descent-calibration-recommendation').textContent='已提交保存；等待飞控写入并确认…';
     for(let i=0;i<12;i++){
@@ -672,7 +675,7 @@ async function startVibrationCalibration(){
   if(!connectionOk||currentArmed){showToast('请连接飞控并保持上锁');return;}
   if(!window.confirm('请确认：全部桨叶已拆除、机体已固定，周围无人且电机测试区域安全。现在启动 FR、FL、RR、RL 电机测试？'))return;
   try{
-    const response=await fetch('/vibration-calibration/start',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({confirm:'1'})});
+    const response=await controlFetch('/vibration-calibration/start',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({confirm:'1'})});
     const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'无法开始采集');
     setVibrationCalibrationPolling(true);refreshVibrationCalibrationStatus();
   }catch(error){document.getElementById('vibration-calibration-status').textContent=error.message||'启动失败';}
@@ -688,7 +691,7 @@ async function uploadRoute(){
   const text=document.getElementById('route-editor').value;
   routeStarting=true;updateRouteControls();routeMessage('正在上传并校验；不会解锁或启动。');
   try{
-    const response=await fetch('/route/upload',{method:'POST',headers:{'Content-Type':'text/plain'},body:text});
+    const response=await controlFetch('/route/upload',{method:'POST',headers:{'Content-Type':'text/plain'},body:text});
     const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'序列上传失败');
     routeUploadedText=text;routeUploadedRevision=result.plan_revision;
     routeMessage('已上传校验。启动前请返回遥控器，由操作者解锁并选择自稳模式。');
@@ -709,7 +712,7 @@ async function requestRouteAction(action){
   try{
     const options={method:'POST'};
     if(action==='start'){options.headers={'Content-Type':'application/x-www-form-urlencoded'};options.body='revision='+encodeURIComponent(routeUploadedRevision);}
-    const response=await fetch('/route/'+action,options),result=await response.json();
+    const response=await (action==='stop'?fetch('/route/'+action,options):controlFetch('/route/'+action,options)),result=await response.json();
     if(!response.ok||!result.ok)throw new Error(result.error||'飞控拒绝请求');
     startRouteMonitor();await refreshRouteStatus();
   }catch(error){routeMessage('请求未确认：'+error.message+'；请以飞控状态为准。');}
@@ -926,11 +929,83 @@ function updateJoystickPosition(side, clientX, clientY) {
 }
 
 /*======================== 网络处理 ========================*/
+function controlUrl(url) {
+  if (!webRCLeaseToken) return url;
+  return url + (url.includes('?') ? '&' : '?') + 'lease=' + encodeURIComponent(webRCLeaseToken);
+}
+
+function handleLeaseConflict(message) {
+  const shouldNotify = !webRCLeaseBlocked;
+  webRCLeaseToken = '';
+  webRCLeaseBlocked = true;
+  updateConnectionStatus(false);
+  if (shouldNotify) showToast(message || '另一个遥控页面正在控制；关闭其他页面或等待 10 秒后重试');
+}
+
+async function acquireControlLease() {
+  if (webRCLeaseToken) return true;
+  if (webRCLeaseBlocked) return false;
+  if (webRCLeasePromise) return webRCLeasePromise;
+  webRCLeasePromise = fetch('/web_rc/lease', {method:'POST', cache:'no-store'})
+    .then(async response => {
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.lease) {
+        const retry = Number(data.retry_ms || 0);
+        handleLeaseConflict(retry > 0 ? `另一个遥控页面正在控制；约 ${Math.ceil(retry/1000)} 秒后刷新页面可接管` : '另一个遥控页面正在控制；刷新页面可重新申请');
+        return false;
+      }
+      webRCLeaseToken = data.lease;
+      webRCLeaseBlocked = false;
+      return true;
+    })
+    .catch(() => {
+      if (++consecutiveFails >= 3) updateConnectionStatus(false);
+      return false;
+    })
+    .finally(() => { webRCLeasePromise = null; });
+  return webRCLeasePromise;
+}
+
+async function controlFetch(url, options={}) {
+  const ok = await acquireControlLease();
+  if (!ok) throw new Error('web_rc_lease_required');
+  const response = await fetch(controlUrl(url), options);
+  if (response.status === 409) {
+    let data = {};
+    try { data = await response.clone().json(); } catch (_) {}
+    if (data.error === 'web_rc_lease_required' || data.error === 'web_rc_lease_in_use') {
+      handleLeaseConflict('遥控控制权已被其他页面占用');
+    }
+  }
+  return response;
+}
+
+function isEmergencyButtonData(data) {
+  return data && data.t === 2 && (data.b === 1 || data.b === 2);
+}
+
 function sendToESP(url, data) {
   const t0 = performance.now();
-  fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data) })
-    .then(r => { if (!r.ok) throw new Error(); updateLatency(performance.now() - t0); return r.json(); })
+  const emergencyOverride = isEmergencyButtonData(data);
+  (emergencyOverride ? Promise.resolve(true) : acquireControlLease()).then(ok => {
+    if (!ok) return null;
+    if (!emergencyOverride) data.lease = webRCLeaseToken;
+    return fetch(emergencyOverride ? url : controlUrl(url), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data) });
+  })
+    .then(r => {
+      if (!r) return null;
+      if (r.status === 409) {
+        return r.json().catch(() => ({})).then(data => {
+          if (data.error === 'web_rc_lease_required' || data.error === 'web_rc_lease_in_use') handleLeaseConflict('遥控控制权已被其他页面占用');
+          throw new Error('lease');
+        });
+      }
+      if (!r.ok) throw new Error();
+      updateLatency(performance.now() - t0);
+      return r.json();
+    })
     .then(resp => {
+      if (!resp) return;
       consecutiveFails = 0;
       updateConnectionStatus(true);
       const names = ['直控','特技','自稳','不支持','自动'];
@@ -1221,10 +1296,10 @@ function toggleConsole() {
   if (open) {
     document.getElementById('console-output').innerHTML = '';
     consoleLastTotal = 0;
-    fetch('/console/enable', {method:'POST'}).catch(()=>{});
+    controlFetch('/console/enable', {method:'POST'}).catch(()=>{});
     fetchConsoleLogs();
   } else {
-    fetch('/console/disable', {method:'POST'}).catch(()=>{});
+    controlFetch('/console/disable', {method:'POST'}).catch(()=>{});
     clearTimeout(consolePollingTimer);
     consolePollingTimer = null;
   }
@@ -1320,7 +1395,7 @@ function sendConsoleCmd() {
   const cmd = input.value.trim();
   if (!cmd) return;
   input.value = '';
-  fetch('/console/cmd', {method:'POST', headers:{'Content-Type':'text/plain'}, body:cmd})
+  controlFetch('/console/cmd', {method:'POST', headers:{'Content-Type':'text/plain'}, body:cmd})
     .then(r => r.json())
     .then(resp => {
       if (!resp.ok) {

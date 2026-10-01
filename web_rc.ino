@@ -4,6 +4,7 @@
 
 #include <WebServer.h>
 #include <WiFi.h>
+#include <esp_system.h>
 #include <ctype.h>
 #include <stdlib.h>
 #include "web_rc_html.h"
@@ -18,6 +19,7 @@
 #include "control.h"
 #include "flight_log.h"
 #include "wifi_recovery_policy.h"
+#include "web_rc_lease_policy.h"
 
 // 飞控统一控制变量（供协议适配层写入，与 SBUS/MAVLink 共用）
 extern double t;
@@ -569,6 +571,7 @@ static int webRCInputCount = 0;
 static portMUX_TYPE webRCInputMux = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE webRCStateMux = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE webRCWarnMux = portMUX_INITIALIZER_UNLOCKED;
+static WebRCLeasePolicy webRCLease;
 extern void setWebConsoleCommandOutput(bool enabled);
 
 uint16_t getWebRCButtons() {
@@ -612,6 +615,84 @@ static bool dequeueWebRCInput(WebRCInputEvent &event) {
     }
     portEXIT_CRITICAL(&webRCInputMux);
     return dequeued;
+}
+
+static void clearWebRCQueuedInputAndButtons() {
+    portENTER_CRITICAL(&webRCInputMux);
+    webRCInputHead = 0;
+    webRCInputTail = 0;
+    webRCInputCount = 0;
+    portEXIT_CRITICAL(&webRCInputMux);
+
+    portENTER_CRITICAL(&webRCStateMux);
+    webRCButtons = 0;
+    webRCButtonPressEdges = 0;
+    webRCRoll = 0.0f;
+    webRCPitch = 0.0f;
+    webRCYaw = 0.0f;
+    webRCThrottle = 0.0f;
+    webRCUpdated = false;
+    webRCStickUpdated = false;
+    webRCLastUpdate = 0;
+    webRCLastStickUpdate = 0;
+    portEXIT_CRITICAL(&webRCStateMux);
+    webRCEnabled = false;
+    useWebRC = false;
+}
+
+static void makeWebRCLeaseToken(char *token, size_t capacity) {
+    if (!token || capacity < WEB_RC_LEASE_TOKEN_CHARS + 1) return;
+    static uint32_t sequence = 0;
+    const uint32_t a = (uint32_t)esp_random();
+    const uint32_t b = (uint32_t)millis() ^ (++sequence * 0x9E3779B9UL);
+    snprintf(token, capacity, "%08lX%08lX", (unsigned long)a, (unsigned long)b);
+}
+
+static bool readWebRCLeaseToken(const String *body, char *token, size_t capacity) {
+    if (!token || capacity == 0) return false;
+    token[0] = '\0';
+    if (webRCServer.hasArg("lease")) {
+        const String value = webRCServer.arg("lease");
+        if (value.length() == WEB_RC_LEASE_TOKEN_CHARS) {
+            strncpy(token, value.c_str(), capacity - 1);
+            token[capacity - 1] = '\0';
+            return true;
+        }
+    }
+    if (!body) return false;
+    const char *lease = strstr(body->c_str(), "\"lease\"");
+    if (!lease) return false;
+    const char *colon = strchr(lease, ':');
+    if (!colon) return false;
+    const char *firstQuote = strchr(colon, '"');
+    if (!firstQuote) return false;
+    const char *start = firstQuote + 1;
+    const char *end = strchr(start, '"');
+    if (!end || end - start != WEB_RC_LEASE_TOKEN_CHARS) return false;
+    const size_t copy = (size_t)(end - start);
+    if (copy >= capacity) return false;
+    memcpy(token, start, copy);
+    token[copy] = '\0';
+    return true;
+}
+
+static bool isWebRCEmergencyButtonOverride(const String &body) {
+    const char *json = body.c_str();
+    const char *typePos = strstr(json, "\"t\":");
+    const char *buttonPos = strstr(json, "\"b\":");
+    if (!typePos || !buttonPos) return false;
+    return webRCLeaseAllowsEmergencyButtonOverride(atoi(typePos + 4), atoi(buttonPos + 4));
+}
+
+static bool requireWebRCLease(const String *body = nullptr) {
+    char token[WEB_RC_LEASE_TOKEN_CHARS + 1];
+    const uint32_t now = millis();
+    if (!readWebRCLeaseToken(body, token, sizeof(token)) ||
+        !webRCLease.validateAndTouch(token, now, WEB_RC_TIMEOUT_MS)) {
+        webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"web_rc_lease_required\"}");
+        return false;
+    }
+    return true;
 }
 
 bool enqueueConsoleCmd(const char* cmd) {
@@ -862,6 +943,7 @@ void handleWebRCRequest() {
         return;
     }
     String body = webRCServer.arg("plain");
+    if (!isWebRCEmergencyButtonOverride(body) && !requireWebRCLease(&body)) return;
     if (handleJSONProtocol(body)) {
         char resp[320];
         // warn 在按钮事件（rt=2）和心跳包（rt=4）响应中携带并清除：
@@ -1091,11 +1173,34 @@ void setupWebRC() {
         webRCServer.send(200, "application/json", "{\"ok\":1,\"message\":\"已删除网络配置。\"}");
     });
 #endif
+    webRCServer.on("/web_rc/lease", HTTP_POST, []() {
+        if (rejectFlightApiInConfigPortal()) return;
+        char token[WEB_RC_LEASE_TOKEN_CHARS + 1];
+        makeWebRCLeaseToken(token, sizeof(token));
+        bool ownerChanged = false;
+        const uint32_t now = millis();
+        if (!webRCLease.acquire(now, WEB_RC_TIMEOUT_MS, token, &ownerChanged)) {
+            char response[128];
+            const uint32_t age = (uint32_t)(now - webRCLease.lastSeenMs);
+            snprintf(response, sizeof(response),
+                "{\"ok\":0,\"error\":\"web_rc_lease_in_use\",\"retry_ms\":%lu}",
+                (unsigned long)(age < WEB_RC_TIMEOUT_MS ? WEB_RC_TIMEOUT_MS - age : 0));
+            webRCServer.send(409, "application/json", response);
+            return;
+        }
+        if (ownerChanged) clearWebRCQueuedInputAndButtons();
+        char response[128];
+        snprintf(response, sizeof(response),
+            "{\"ok\":1,\"lease\":\"%s\",\"timeout_ms\":%lu}",
+            token, (unsigned long)WEB_RC_TIMEOUT_MS);
+        webRCServer.send(200, "application/json", response);
+    });
     webRCServer.on("/web_rc",           HTTP_POST, handleWebRCRequest);
     webRCServer.on("/web_rc/heartbeat", HTTP_POST, handleWebRCRequest);
 
     webRCServer.on("/route/upload", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
+        if (!requireWebRCLease()) return;
         if (!webRCServer.hasArg("plain")) {
             webRCServer.send(400, "application/json", "{\"ok\":0,\"error\":\"missing sequence\"}");
             return;
@@ -1151,6 +1256,7 @@ void setupWebRC() {
     });
     webRCServer.on("/route/start", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
+        if (!requireWebRCLease()) return;
         uint32_t revision = 0;
         if (!parseRevisionArg(revision)) {
             webRCServer.send(400, "application/json", "{\"ok\":0,\"error\":\"missing_revision\"}");
@@ -1186,6 +1292,7 @@ void setupWebRC() {
     });
     webRCServer.on("/route/takeover", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
+        if (!requireWebRCLease()) return;
         portENTER_CRITICAL(&openLoopMux);
         const bool active = openLoopState == OPEN_LOOP_STATE_RUNNING || openLoopState == OPEN_LOOP_STATE_START_PENDING ||
             openLoopState == OPEN_LOOP_STATE_LANDING;
@@ -1223,6 +1330,7 @@ void setupWebRC() {
 
     webRCServer.on("/vibration-calibration/start", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
+        if (!requireWebRCLease()) return;
         const bool confirmed = webRCServer.arg("confirm") == "1";
         portENTER_CRITICAL(&vibrationCalibrationMux);
         const bool active = vibrationCalibrationState == VIBRATION_QUEUED || vibrationCalibrationState == VIBRATION_RUNNING;
@@ -1290,6 +1398,7 @@ void setupWebRC() {
 
     webRCServer.on("/descent-calibration/start", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
+        if (!requireWebRCLease()) return;
         portENTER_CRITICAL(&openLoopMux);
         const bool routeBusy = openLoopState == OPEN_LOOP_STATE_RUNNING ||
             openLoopState == OPEN_LOOP_STATE_START_PENDING || openLoopState == OPEN_LOOP_STATE_LANDING;
@@ -1320,6 +1429,7 @@ void setupWebRC() {
     });
     webRCServer.on("/descent-calibration/clear", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
+        if (!requireWebRCLease()) return;
         if (armed || motorsActive()) {
             webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires_disarmed_motors_stopped\"}");
             return;
@@ -1343,6 +1453,7 @@ void setupWebRC() {
     });
     webRCServer.on("/descent-calibration/save", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
+        if (!requireWebRCLease()) return;
         float value;
         if (armed || motorsActive() || !parameterPersistenceReady() ||
             !parseCalibrationValueArg(value) || !isfinite(value) || value < 0.05f || value > 0.5f) {
@@ -1462,6 +1573,7 @@ void setupWebRC() {
 
     webRCServer.on("/console/cmd", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
+        if (!requireWebRCLease()) return;
         String cmd = webRCServer.arg("plain");
         cmd.trim();
         if (cmd.length() == 0) {
@@ -1484,6 +1596,7 @@ void setupWebRC() {
 
     webRCServer.on("/console/enable", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
+        if (!requireWebRCLease()) return;
         webConsoleEnabled = true;
         webLog(motd);
         webRCServer.send(200, "application/json", "{\"ok\":1}");
@@ -1491,6 +1604,7 @@ void setupWebRC() {
 
     webRCServer.on("/console/disable", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
+        if (!requireWebRCLease()) return;
         webConsoleEnabled = false;
         webRCServer.send(200, "application/json", "{\"ok\":1}");
     });
