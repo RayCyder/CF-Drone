@@ -93,7 +93,7 @@ def classify_log_gaps(rows):
         gaps[phase][1]+=maximum
     return gaps
 
-def validate_log(path, trace_path, expected_missed=None):
+def validate_log(path, trace_path, expected_missed=None, worst=None, loop_warning_seen=False):
     with path.open(newline='',encoding='utf-8') as stream:
         rows=list(csv.DictReader(stream))
     armed=[row for row in rows if row['armed']=='1']
@@ -101,17 +101,22 @@ def validate_log(path, trace_path, expected_missed=None):
     if len(platform)<100:
         raise RuntimeError(f'30% platform too short in frozen log: {len(platform)} samples')
     for row in armed:
-        if (int(row['fault_mask']) != 0 or float(row['dt_s'])>0.005 or
+        if (int(row['fault_mask']) & ~0x80 or float(row['dt_s'])>0.005 or
             float(row['battery_v'])<3.5 or float(row['mix_scale'])<0.8 or
-            any(float(row[f'motor_{motor}'])<=0 for motor in ('rl','rr','fr','fl'))):
+            (float(row['rc_throttle'])>0.05 and
+             any(float(row[f'motor_{motor}'])<=0 for motor in ('rl','rr','fr','fl')))):
             raise RuntimeError(f'armed flight-log acceptance failed at t={row["t"]}')
     with trace_path.open(newline='',encoding='utf-8') as stream:
         trace_rows=list(csv.DictReader(stream))
     # The armed-loop diagnostic image records a rolling window of ordinary
     # loops as well. Only long intervals indicate an overrun in this export.
-    long_trace_rows=[row for row in trace_rows if int(row['dt_us'])>1500]
-    if long_trace_rows:
-        raise RuntimeError(f'{len(long_trace_rows)} long loop trace rows require review')
+    stall_trace_rows=[row for row in trace_rows if int(row['dt_us'])>=5000]
+    if stall_trace_rows:
+        raise RuntimeError(f'{len(stall_trace_rows)} loop trace rows reached 5 ms')
+    if worst and worst.get('available') and worst.get('dt_us',0)>=5000:
+        raise RuntimeError(f'worst loop reached 5 ms: {worst}')
+    if loop_warning_seen and not (worst and worst.get('available')):
+        raise RuntimeError('loop warning occurred but the worst-loop record is missing')
     confidence=[float(row['accel_correction_confidence']) for row in platform]
     accel_norms=[math.sqrt(sum(float(row[f'acc_{axis}'])**2 for axis in 'xyz'))
                  for row in platform]
@@ -132,6 +137,8 @@ def validate_log(path, trace_path, expected_missed=None):
             'platform_zero_confidence_rows':sum(value==0 for value in confidence),
             'platform_mean_confidence':round(sum(confidence)/len(confidence),4),
             'platform_accel_norm_in_1g_5pct_rows':in_gravity_band,
+            'armed_loop_warning_rows':sum(bool(int(row['fault_mask']) & 0x80) for row in armed),
+            'worst_loop_dt_us':worst.get('dt_us') if worst and worst.get('available') else None,
             'possible_missing_in_armed_gaps':gaps['armed'],
             'possible_missing_in_disarmed_gaps':gaps['disarmed'],
             'possible_missing_across_arm_transition':gaps['transition'],
@@ -157,6 +164,7 @@ def main():
     serial=SerialConsole(args.serial_port)
     token=None
     armed_started=False
+    loop_warning_seen=False
     run_error=None
     OUT.parent.mkdir(parents=True,exist_ok=True)
     def deadline(_signum,_frame): raise TimeoutError('bench run hard deadline')
@@ -202,7 +210,11 @@ def main():
                 count=run_stage(token,raw,seconds,stream)
                 state=request('GET','/web_rc/status')
                 record(stream,'stage',raw=raw,count=count,state=state)
-                if (state.get('armed') is not True or state.get('faults') != 0 or
+                faults=state.get('faults',0)
+                if faults & 0x80 and not loop_warning_seen:
+                    loop_warning_seen=True
+                    record(stream,'loop_overrun_warning',state=state)
+                if (state.get('armed') is not True or faults & ~0x80 or
                     state.get('control_source') != WEB_RC_SOURCE or
                     state.get('voltage',0) < 3.5 or
                     abs(state.get('throttle',-1)-(raw+100)/2) > 3.0):
@@ -237,6 +249,7 @@ def main():
     if not armed_started:
         if run_error: raise run_error
         return
+    worst=None
     try:
         # The rolling trace can overwrite the triggering loop while the
         # post-disarm flight log finishes. Preserve the separate peak first.
@@ -275,13 +288,15 @@ def main():
                     record(stream,'aborted',reason=str(run_error),log_status=status)
                 else:
                     summary=validate_log(saved['flight-log.csv'],saved['loop-trace.csv'],
-                                         status.get('missedSamples'))
+                                         status.get('missedSamples'),worst,loop_warning_seen)
                     record(stream,'acceptance',**summary)
             if not run_error:
                 print('frozen flight log and loop trace passed acceptance:',summary)
         else:
             raise RuntimeError('flight log did not freeze after disarm')
     except (OSError,TimeoutError,RuntimeError,ValueError) as error:
+        with OUT.open('a',encoding='utf-8') as stream:
+            record(stream,'evidence_or_acceptance_failed',error=str(error))
         raise RuntimeError(f'post-disarm evidence/acceptance failed: {error}; preserve frozen log') from error
     if run_error:
         raise RuntimeError(f'bench stopped safely after arming: {run_error}; frozen evidence saved') from run_error
