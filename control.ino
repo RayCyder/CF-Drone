@@ -9,6 +9,8 @@
 #include "system_log.h"
 #include "control.h"
 
+extern bool isLevelCalibrationActive();
+
 // 参数适配118mm轴距的微型四轴飞行器
 // ============== 角速率环（内环）参数 ==============
 #define PITCHRATE_P 0.06 // 增大P值提高响应速度
@@ -385,6 +387,7 @@ const char* armBlockReason() {
 	if (mode == AUTO && !autoTargetReady()) return "AUTO 模式尚无有效目标，请切回 STAB 或等待目标就绪";
 	if (motorTestActive) return "电机测试正在运行";
 	if (isAccelCalibrationActive()) return "加速度计校准正在运行";
+	if (isLevelCalibrationActive()) return "水平校准待完成";
 	if (controlThrottle > ARM_THROTTLE_LIMIT) return "油门高于解锁上限 5%";
 	if (!imuOK) return "IMU 未就绪";
 	if (batteryBlocksArming()) return "电池电压低于解锁门槛 3.5 V";

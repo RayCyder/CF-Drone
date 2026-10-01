@@ -389,8 +389,18 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <div class="calibration-card"><strong>姿态算法评估边界</strong><p>该流程可筛查电机振动是否可能污染 IMU 输入。姿态算法的改进需另用静态、手动遥控飞行日志及可信姿态参考评估；仅凭单电机振动数据无法可靠地自动调节加速度计权重或滤波参数。</p></div>
     </div>
   </section>
+  <section id="level-calibration-page" class="vibration-calibration-page" aria-hidden="true">
+    <div class="descent-calibration-shell">
+      <div class="diagnostic-top"><h2>机身水平校准</h2><div class="diagnostic-actions"><button onclick="closeLevelCalibrationPage()">返回遥控器</button></div></div>
+      <div class="calibration-card"><strong>用机身基准面确认水平</strong><p>先上锁并停止全部电机，用水平仪将机身基准面放平、固定且保持静止。此功能采集约 1 秒 IMU 数据，检查重力模长与振动，再建议 IMU 安装横滚/俯仰角；不会修改六面加速度计偏置，也不能把空中悬停姿态当作水平基准。</p></div>
+      <div id="level-calibration-live" class="route-status">正在读取估计姿态…</div>
+      <div id="level-calibration-status" class="route-status" role="status">尚未采集。</div>
+      <div class="calibration-actions"><button id="level-calibration-start" class="primary" onclick="startLevelCalibration()">采集水平基准</button><button id="level-calibration-apply" onclick="applyLevelCalibration()" disabled>确认保存安装角</button><button id="level-calibration-discard" onclick="discardLevelCalibration()">放弃建议</button></div>
+      <div class="calibration-card"><small>保存后仍需保持机身水平，等待估计姿态收敛并复核 Roll/Pitch。航向角没有磁力计绝对参考，校准后不要求归零。</small></div>
+    </div>
+  </section>
   <!-- 版权页脚 -->
-  <div class="footer"><a href="/wifi">Wi-Fi 设置</a> · <a href="/telemetry">实时日志</a> · <a href="https://oshwhub.com/songge8/project_qqqyfdkm" target="_blank">琛光无人机开源项目</a></div>
+  <div class="footer"><a href="/wifi">Wi-Fi 设置</a> · <a href="/telemetry">实时日志</a> · <a href="#" onclick="openLevelCalibrationPage();return false">水平校准</a> · <a href="https://oshwhub.com/songge8/project_qqqyfdkm" target="_blank">琛光无人机开源项目</a></div>
 </div>
 
 <script>
@@ -631,6 +641,63 @@ function clearDescentCalibrationPoints(){
 function downloadDescentCalibrationCsv(){
   if(currentArmed){showToast('请先上锁后下载标定数据');return;}
   const link=document.createElement('a');link.href='/descent-calibration.csv';link.download='cf-drone-descent-calibration.csv';link.click();
+}
+let levelCalibrationTimer=null;
+function openLevelCalibrationPage(){
+  const page=document.getElementById('level-calibration-page');page.style.display='block';page.setAttribute('aria-hidden','false');
+  refreshLevelCalibrationStatus();
+  if(!levelCalibrationTimer)levelCalibrationTimer=setInterval(refreshLevelCalibrationStatus,1000);
+}
+function closeLevelCalibrationPage(){
+  const page=document.getElementById('level-calibration-page');page.style.display='none';page.setAttribute('aria-hidden','true');
+  if(levelCalibrationTimer){clearInterval(levelCalibrationTimer);levelCalibrationTimer=null;}
+}
+async function refreshLevelCalibrationStatus(){
+  const status=document.getElementById('level-calibration-status');
+  try{
+    const response=await fetch('/level-calibration/status',{cache:'no-store'});
+    if(!response.ok)throw new Error('飞控未返回水平校准状态');
+    const data=await response.json();
+    document.getElementById('level-calibration-live').textContent=`当前估计姿态：Roll ${Number(data.roll_deg).toFixed(2)}° · Pitch ${Number(data.pitch_deg).toFixed(2)}°（机身水平时应接近 0°）`;
+    const names={empty:'尚未采集',collecting:'正在采集静止 IMU',ready:'数据合格，等待确认',applying:'正在保存',applied:'安装角已应用',rejected:'本次采集未通过'};
+    let detail=names[data.state]||'状态未知';
+    if(data.state==='ready'||data.state==='applied'){
+      const r=(Number(data.new_rot_roll_rad)-Number(data.old_rot_roll_rad))*180/Math.PI;
+      const p=(Number(data.new_rot_pitch_rad)-Number(data.old_rot_pitch_rad))*180/Math.PI;
+      detail+=`；采集前重力倾角 Roll ${Number(data.before_roll_deg).toFixed(2)}° / Pitch ${Number(data.before_pitch_deg).toFixed(2)}°；建议安装角变化 X ${r.toFixed(2)}° / Y ${p.toFixed(2)}°；加速度模长 ${Number(data.acc_norm).toFixed(3)} m/s²、最大轴向标准差 ${Number(data.acc_sd).toFixed(3)} m/s²`;
+    }
+    if(data.state==='rejected')detail+=`（${data.reason}）；请确认机身静止、水平和 IMU 正常后重试`;
+    if(data.state==='applied')detail+=data.persist_pending?'；等待参数写入':'；参数写入已完成，请复核水平读数';
+    status.textContent=detail;
+    document.getElementById('level-calibration-start').disabled=data.armed||data.state==='collecting'||data.state==='applying'||data.state==='ready';
+    document.getElementById('level-calibration-apply').disabled=data.armed||data.state!=='ready';
+    document.getElementById('level-calibration-discard').disabled=data.state==='collecting'||data.state==='applying';
+  }catch(error){status.textContent=error.message||'水平校准状态读取失败';}
+}
+async function startLevelCalibration(){
+  if(currentArmed){showToast('请先上锁并停止电机');return;}
+  if(!window.confirm('请确认机身基准面已用水平仪放平并固定，全部电机停止。开始采集水平基准？'))return;
+  try{
+    const response=await controlFetch('/level-calibration/start',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({confirm:'1'})});
+    const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'采集启动失败');
+    refreshLevelCalibrationStatus();
+  }catch(error){document.getElementById('level-calibration-status').textContent=error.message||'采集启动失败';}
+}
+async function applyLevelCalibration(){
+  if(currentArmed){showToast('请先上锁');return;}
+  if(!window.confirm('机身仍保持水平且静止？确认保存刚才测得的 IMU 安装角。'))return;
+  try{
+    const response=await controlFetch('/level-calibration/apply',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({confirm:'1'})});
+    const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'安装角保存失败');
+    refreshLevelCalibrationStatus();
+  }catch(error){document.getElementById('level-calibration-status').textContent=error.message||'安装角保存失败';}
+}
+async function discardLevelCalibration(){
+  try{
+    const response=await controlFetch('/level-calibration/discard',{method:'POST'});
+    const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'无法放弃建议');
+    refreshLevelCalibrationStatus();
+  }catch(error){document.getElementById('level-calibration-status').textContent=error.message||'无法放弃建议';}
 }
 function openVibrationCalibrationPage(){
   const page=document.getElementById('vibration-calibration-page');page.style.display='block';page.setAttribute('aria-hidden','false');
