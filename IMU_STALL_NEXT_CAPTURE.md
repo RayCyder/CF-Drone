@@ -18,6 +18,8 @@
 
 因此下一次诊断的捕获触发应覆盖所有 `dt >= 1500 us`，而不是只捕获 IMU wait 长事件；每条捕获保留完整 16-stage 数组并关联同序列的 scheduler/IPC。分析时先检查 `rc_web` 阶段是否有任务切出或 IPC 重叠，再检查控制阶段；只有 scheduler/IPC 不能解释、且 IMU wait 分量显著时，才归入 IMU 路径继续拆分。`rc_web=456 us` 是整个阶段的标记，不等于 `/web_rc` handler 执行时间，必须与 route-specific HTTP 指标及任务切换证据分开解释。
 
+重新调平后的 30%、10 秒无桨航线 `061106` 再次捕获到另一种分布：[最坏循环](data/attitude/prop-off-route-20261002-061106-loop-worst.json)为 `1669 us`，其中 `imu_wait=1034 us`、`rc_web=80 us`、`control_law=193 us`。同次航线已完成三段并上锁，已解锁日志无漏采；低频姿态采样见 [控制记录](data/attitude/prop-off-route-20261002-061106.jsonl)。因此 045010 的 Web/控制律型与 061106 的 IMU 等待型都在当前装置上重复出现，后续捕获仍须关联同一慢循环的 scheduler/IPC/IMU 细分数据，不能只优化其中一种阶段。
+
 ## 仍缺少的证据
 
 - 同一条慢循环上的 IMU 等待字段：`waitStartedUs`、`waitEndedUs`、GPTimer ISR 计数增量和最后 ISR 时间、信号量 take/timeout/最大等待、`read()` 次数/成功次数/总时长/最大时长。
