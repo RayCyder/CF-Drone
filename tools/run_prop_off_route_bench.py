@@ -226,32 +226,54 @@ def main():
             route_error = error
         finally:
             signal.alarm(0)
-            serial.send('disarm')
-            time.sleep(0.3)
-            if token:
-                for _ in range(2):
-                    try:
-                        stick_zero(stream)
-                    except (OSError, TimeoutError, RuntimeError, ValueError):
-                        break
-            serial.send('stab')
-            time.sleep(0.1)
-            serial.send('mot')
-            motors = serial.wait_for(r'^front-right ', 3, echo=False)
-            record(stream, 'motor_final', line=motors)
-            serial.send('diag brief')
-            brief = serial.wait_for(r'PREFLIGHT ', 3, echo=False)
-            record(stream, 'serial_final', line=brief)
-            serial.close()
-            if motors != 'front-right 0 front-left 0 rear-right 0 rear-left 0' or 'armed=0' not in brief:
-                raise RuntimeError('final serial safe state not verified')
-            state, _, _ = request(host, port, 'GET', '/web_rc/status', timeout=2)
-            record(stream, 'web_final', state=state)
-            route, _, _ = request(host, port, 'GET', '/route/status', timeout=2)
-            record(stream, 'route_final', state=route)
-            if (state.get('armed') is not False or state.get('throttle') != 0 or
-                route.get('arm') != 0 or route.get('mode') != 2):
-                raise RuntimeError('final Web safe state not verified')
+            postflight_error = None
+            try:
+                serial.send('disarm')
+                time.sleep(0.3)
+                if token:
+                    for _ in range(2):
+                        try:
+                            stick_zero(stream)
+                        except (OSError, TimeoutError, RuntimeError, ValueError):
+                            break
+                serial.send('stab')
+                time.sleep(0.1)
+                serial.send('mot')
+                motors = serial.wait_for(r'^front-right ', 3, echo=False)
+                record(stream, 'motor_final', line=motors)
+                serial.send('diag brief')
+                brief = serial.wait_for(r'PREFLIGHT ', 3, echo=False)
+                record(stream, 'serial_final', line=brief)
+                if motors != 'front-right 0 front-left 0 rear-right 0 rear-left 0' or 'armed=0' not in brief:
+                    raise RuntimeError('final serial safe state not verified')
+            except (OSError, TimeoutError, RuntimeError, ValueError) as error:
+                postflight_error = error
+                record(stream, 'serial_final_error', error=str(error))
+            finally:
+                serial.close()
+            state = route = None
+            for attempt in range(3):
+                try:
+                    state, _, _ = request(host, port, 'GET', '/web_rc/status', timeout=2)
+                    record(stream, 'web_final', state=state)
+                    route, _, _ = request(host, port, 'GET', '/route/status', timeout=2)
+                    record(stream, 'route_final', state=route)
+                    break
+                except (OSError, TimeoutError, RuntimeError, ValueError) as error:
+                    record(stream, 'web_final_retry', attempt=attempt + 1, error=str(error))
+                    time.sleep(0.5)
+            if (not state or state.get('armed') is not False or state.get('throttle') != 0 or
+                not route or route.get('arm') != 0 or route.get('mode') != 2):
+                postflight_error = postflight_error or RuntimeError('final Web safe state not verified')
+            else:
+                try:
+                    download(host, port, '/diag/retained.csv',
+                             output.with_name(output.stem + '-retained.csv'))
+                    record(stream, 'retained_saved')
+                except (OSError, TimeoutError, RuntimeError, ValueError) as error:
+                    record(stream, 'retained_unavailable', error=str(error))
+            if postflight_error and not route_error:
+                route_error = postflight_error
 
         if arm_command_sent:
             deadline = time.monotonic() + 10

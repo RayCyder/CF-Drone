@@ -72,4 +72,12 @@
 
 记录有版本/schema、header CRC、每槽 CRC 和最后写入的 commit 标记；开机 `BOOT` 行报告具名 reset reason，紧接的 `SLOW_LOOP_RETENTION` 行报告数字 reset reason、记录完整性、条数、覆盖数、损坏槽数和字节数。上锁后可从 `/diag/retained.csv` 读取记录；该端点不清除数据，只按环形策略覆盖旧记录。重启后若 RTC no-init 内容因掉电/棕断丢失或校验失败，header/槽校验会暴露这一点；RTC 保留不构成对物理断电数据恢复的保证。loop trace 中的 body 阶段值来自上一循环，并在 `recordLoopTiming()` 时与当前 IMU wait/gap 组合；循环尾已把 scheduler loop sequence 推进到下一次 dt 对应的编号，因此按同一个 `loop_sequence` 关联 scheduler 事件。
 
-本机已通过 ESP32 `full` task-trace、`full-armed-loop` task-trace 和生产构建。full trace 镜像为 1,337,923 B、静态 RAM 124,500 B，RTC no-init 2,416 B；full-armed-loop 镜像为 1,338,359 B、静态 RAM 124,524 B。生产镜像不包含 scheduler/IPC/IMU waiter hooks，因此仍能保留完整阶段数组而这些细分字段不可用。编译和静态检查不能测出新增触发路径的实际执行耗时；此版本尚未刷写或在硬件上验证，不能声称 observer overhead 已验收。RTC 只留最近四条跨运行记录；每个 armed 周期提交次数有界，若阶段样本和 stall 峰值超过预算，需把记录预算/选择策略纳入后续审查。
+本机已通过 ESP32 `full` task-trace、`full-armed-loop` task-trace 和生产构建。full trace 镜像为 1,337,923 B、静态 RAM 124,500 B，RTC no-init 2,416 B；full-armed-loop 镜像为 1,338,359 B、静态 RAM 124,524 B。生产镜像不包含 scheduler/IPC/IMU waiter hooks，因此仍能保留完整阶段数组而这些细分字段不可用。RTC 只留最近四条跨运行记录；每个 armed 周期提交次数有界，若阶段样本和 stall 峰值超过预算，需把记录预算/选择策略纳入后续审查。
+
+### 2026-10-02 板端验证与意外重启
+
+从提交 `9050b75` 构建的 full trace app 镜像为 1,338,064 字节，SHA-256 `bb69651e3ebb6c2bff6b976dd99f54171ecb868527e2eb5bac03a645f1d37d30`。刷入前上锁、四路零输出、电压 4.077 V、故障零；仅写 app0 并独立 `verify-flash` 匹配。启动后安装角 `(-0.00388499, -0.0330354) rad`、`EST_ACC_WEIGHT=0.0005` 保留，上锁时 `/diag/retained.csv` 只有表头。无桨固定架 0.8 秒 30% 平台完成，已解锁日志零漏采、最大采样间隔 1.065 ms；没有达到 1.5 ms 保留阈值。
+
+随后 10 秒 30% 平台已观测三段 `running` 与 `landing`，运行中 10 个低频姿态样本均返回；约第 6 秒出现一次 1.5 ms 告警。脚本发送收尾 `disarm` 后，串口 `mot` 响应超时；随后网页启动时间从约 277 秒回到约 11 秒，航线状态清空，证明设备在收尾附近重启。重启后网页和独立串口均显示上锁、四路零输出、故障零，校准值仍在。重启后的 [RTC 导出](data/attitude/retained-post-reboot-20261002-0659.csv)保留一条 `dt=1,732 us`、IMU 等待 `1,161 us` 的记录，序号为 `loop_sequence=268553`；这不是重启前最后一个循环，也没有达到 5 ms。串口没有连续录到重启瞬间的 boot banner/reset reason，不能判断是 panic、看门狗、供电还是其他原因。该轮飞行日志因重启未冻结导出，不能宣称完整通过。
+
+已停止电机测试并将此前验证的稳定镜像（SHA-256 `18d1939b80b9a09387e93d69b7ec32171bc565ac182b66c46fa64b3fe431024e`）写回 app0；独立 Flash 校验匹配，启动后上锁、四路零输出、校准值未变。下一次诊断镜像运行必须从解锁前持续录制串口启动与复位信息，同时取得电源轨时序；在找出这次重启原因前，不用该镜像继续加电。标准台架脚本已改为即使收尾串口核对失败也继续尝试保存 Web 安全状态和 RTC 记录，但此修改尚未在板端复测。
