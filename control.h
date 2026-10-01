@@ -67,7 +67,7 @@ struct ControlState {
 
 // 函数声明
 void control();
-void disarm(DisarmReason reason);
+void disarm(DisarmReason reason = DISARM_REASON_UNKNOWN);
 DisarmReason getLastDisarmReason();
 void interpretControls();
 void interpretWebRC();

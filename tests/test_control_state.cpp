@@ -49,6 +49,7 @@ void recordSystemLogEvent(const char*,const char*) {++systemEventCount;}
 unsigned flightLogTriggerCount=0;
 void triggerFlightLog(uint32_t) {++flightLogTriggerCount;}
 bool tryArmWithSystemLog();
+bool systemLogArmingBlocked(){return false;}
 void failsafe(); void interpretControls(); void controlAttitude();void controlRates();void controlTorque();
 void desaturate(float&,float&,float&,float&);
 void descend();void clearControlledLanding();bool isControlledLandingActive();

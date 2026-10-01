@@ -206,7 +206,9 @@ void applyLevel() {
 
 	// ---- 摇杆感知门控 ----
 	float stickDeflection = max(abs(controlRoll), abs(controlPitch));
-	float stickGate = constrain(1.0f - stickDeflection / levelGateThreshold, 0.0f, 1.0f);
+	float stickGate = levelGateThreshold > 0.0f
+		? constrain(1.0f - stickDeflection / levelGateThreshold, 0.0f, 1.0f)
+		: (stickDeflection == 0.0f ? 1.0f : 0.0f);
 	dynamicWeight *= stickGate;
 	// ------------------------------------
 

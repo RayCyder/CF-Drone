@@ -172,6 +172,23 @@ int main() {
 	applyLevel();
 	assert(levelGyroBias.zero()); // landed reset still runs before the disabled-work shortcut
 
+	// Zero is a valid configured stick-gate threshold. At centered sticks it
+	// must retain correction without dividing 0 by 0; deflection disables it.
+	resetEstimator(tilted);
+	landed = false;
+	levelWeight = 0.0f;
+	levelBiasGain = 0.001f;
+	levelGateThreshold = 0.0f;
+	controlRoll = controlPitch = 0.0f;
+	applyLevel();
+	assert(attitude.finite() && levelGyroBias.finite());
+	assert(levelGyroBias.norm() > 0.0f);
+	const Vector centeredBias = levelGyroBias;
+	controlRoll = 0.1f;
+	applyLevel();
+	assert(levelGyroBias.x == centeredBias.x && levelGyroBias.y == centeredBias.y);
+	levelGateThreshold = 0.2f;
+
 	// After a 50 ms loop stall, rate filtering must use the newest measured rate
 	// without bilinear-coefficient overshoot before integrating across that gap.
 	resetEstimator(Quaternion());

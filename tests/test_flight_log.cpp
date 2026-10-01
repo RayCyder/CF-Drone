@@ -21,6 +21,7 @@ bool motorsActive(){return activeMotors;}
 void recordDescentCalibrationSample(){}
 uint32_t getActiveDiagnosticFaults(){return 0;}
 ControlSource getCurrentControlSource(){return CONTROL_SOURCE_NONE;}
+DisarmReason getLastDisarmReason(){return DISARM_REASON_WEB_LOCK;}
 typedef int portMUX_TYPE;
 #define portMUX_INITIALIZER_UNLOCKED 0
 #define portENTER_CRITICAL(x) ((void)(x))
@@ -115,7 +116,8 @@ static void integrationTests(){
     assert(resumeFlightLog());assert(!readFrozenLogBytes(status.generation,0,actual.data(),90));
     testUs+=10000;armed=true;logData();testUs+=10000;armed=false;logData();
     assert(getFlightLogStatus().state==POST_TRIGGER);
-    assert(getFlightLogStatus().reasonMask==FLIGHT_LOG_DISARM_REASON);
+    assert(getFlightLogStatus().reasonMask==(FLIGHT_LOG_DISARM_REASON |
+        ((uint32_t)DISARM_REASON_WEB_LOCK << FLIGHT_LOG_DISARM_CAUSE_SHIFT)));
     assert(!freezeFlightLog() && !resumeFlightLog());
     testUs+=1500000;logData();assert(getFlightLogStatus().state==FROZEN);
     assert(copyLatestLogRow(row,41,&seq));assert(row[0]==(float)(testUs/1000)/1000);
