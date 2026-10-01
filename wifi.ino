@@ -268,6 +268,8 @@ static uint32_t wifiAPHealthCheckAtMs = 0;
 static uint32_t wifiAPStartAttemptMs = 0;
 static uint32_t wifiAPActiveSinceMs = 0;
 static bool wifiWasConnected = false;
+static uint32_t wifiDisconnectCount = 0;
+static uint32_t wifiLastDisconnectMs = 0;
 static bool wifiRestartScheduled = false;
 static uint32_t wifiConnectStartedMs = 0;
 static uint32_t wifiRestartAtMs = 0;
@@ -618,6 +620,10 @@ void serviceWiFi() {
 
 	if (wifiWasConnected) {
 		wifiWasConnected = false;
+		const uint32_t disconnectCount = __atomic_load_n(&wifiDisconnectCount, __ATOMIC_RELAXED);
+		if (disconnectCount < UINT32_MAX)
+			__atomic_store_n(&wifiDisconnectCount, disconnectCount + 1, __ATOMIC_RELAXED);
+		__atomic_store_n(&wifiLastDisconnectMs, now, __ATOMIC_RELAXED);
 		wifiConnectStartedMs = millis();
 		wifiProfileAttempt = 0;
 		if (activeWifiProfileCount) {
@@ -666,6 +672,14 @@ void serviceWiFi() {
 		wifiSTAReconnectAtMs = millis();
 		startWiFiConfigPortal(true);
 	}
+}
+
+uint32_t getWiFiDisconnectCount() {
+	return __atomic_load_n(&wifiDisconnectCount, __ATOMIC_RELAXED);
+}
+
+uint32_t getWiFiLastDisconnectMs() {
+	return __atomic_load_n(&wifiLastDisconnectMs, __ATOMIC_RELAXED);
 }
 
 void scheduleWiFiRestart() {

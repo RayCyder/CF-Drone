@@ -24,6 +24,7 @@ extern double controlTime;
 extern float controlRoll, controlPitch, controlYaw, controlThrottle, controlMode;
 extern float batteryVoltage;
 extern const char* armBlockReason();
+extern float thrustTarget;
 extern bool ledFastBlinkActive();
 extern const char* motd;
 
@@ -117,6 +118,10 @@ extern bool parameterPersistenceReady();
 extern float webRCThrottleScale, webRCStickScale, webRCYawScale;
 extern float stickDeadzone, throttleDeadzone;
 extern WebServer &webRCServer;
+#if WIFI_ENABLED
+extern uint32_t getWiFiDisconnectCount();
+extern uint32_t getWiFiLastDisconnectMs();
+#endif
 
 #define WEB_LOG_CSV_COLUMNS_CAPACITY 41
 #define WEB_LOG_CSV_ROW_CAPACITY 1024
@@ -452,6 +457,8 @@ class ResponsiveWebServer : public WebServer {
 public:
     explicit ResponsiveWebServer(int port) : WebServer(port) {}
 
+    uint32_t idleDropCount() const { return idleDrops; }
+
     void handleClient() override {
         // WebServer serves one client at a time and otherwise waits 5 s for an
         // accepted socket to send its first byte. Browser preconnects can hold
@@ -461,9 +468,13 @@ public:
             _currentClient.stop();
             _currentClient = NetworkClient();
             _currentStatus = HC_NONE;
+            if (idleDrops < UINT32_MAX) ++idleDrops;
         }
         WebServer::handleClient();
     }
+
+private:
+    uint32_t idleDrops = 0;
 };
 
 static ResponsiveWebServer responsiveWebRCServer(80);
@@ -1444,20 +1455,35 @@ void setupWebRC() {
             (now - lastStickUpdate < WEB_RC_TIMEOUT_MS);
         float vbat = batteryVoltage;
         if (isnan(vbat) || vbat < 0.0f) vbat = 0.0f;
+        bool wifiConnected = false;
+        uint32_t wifiDisconnects = 0, wifiLastDisconnectMs = 0;
+#if WIFI_ENABLED
+        wifiConnected = WiFi.isConnected();
+        wifiDisconnects = getWiFiDisconnectCount();
+        wifiLastDisconnectMs = getWiFiLastDisconnectMs();
+#endif
         char json[640];
         const char *armReason = armBlockReason();
         snprintf(json, sizeof(json),
             "{\"armed\":%s,\"led_fast_blink\":%s,\"enabled\":%s,\"active\":%s,"
-            "\"voltage\":%.2f,"
-            "\"throttle\":%.1f,\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,\"faults\":%lu,"
+            "\"voltage\":%.2f,\"throttle\":%.1f,\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,"
+            "\"faults\":%lu,\"uptime_ms\":%lu,\"wifi_connected\":%s,"
+            "\"wifi_disconnects\":%lu,\"wifi_last_disconnect_ms\":%lu,"
+            "\"stick_age_ms\":%ld,\"packet_age_ms\":%ld,\"http_idle_drops\":%lu,"
+            "\"control_source\":%u,\"thrust_target\":%.3f,"
             "\"arm_ready\":%s,\"arm_reason\":\"%s\"}",
             armed ? "true" : "false",
             ledFastBlinkActive() ? "true" : "false",
             enabled ? "true" : "false",
             (useWebRC && enabled) ? "true" : "false",
-            vbat,
-            throttle, roll, pitch, yaw,
-            (unsigned long)getActiveDiagnosticFaults(),
+            vbat, throttle, roll, pitch, yaw,
+            (unsigned long)getActiveDiagnosticFaults(), now,
+            wifiConnected ? "true" : "false",
+            (unsigned long)wifiDisconnects, (unsigned long)wifiLastDisconnectMs,
+            stickUpdated ? (long)(now - lastStickUpdate) : -1L,
+            updated ? (long)(now - lastUpdate) : -1L,
+            (unsigned long)responsiveWebRCServer.idleDropCount(),
+            (unsigned)getCurrentControlSource(), thrustTarget,
             armReason ? "false" : "true", armReason ? armReason : "当前解锁条件已满足");
         webRCServer.send(200, "application/json", json);
     });
