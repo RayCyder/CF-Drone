@@ -7,6 +7,7 @@
 #include "board_config.h"
 #include "diagnostics.h"
 #include "motor_test_timer.h"
+#include "pwm_config.h"
 #include <string.h>
 
 float motors[4]; // normalized motor thrusts in range [0..1]
@@ -64,6 +65,11 @@ void setupMotors() {
 		}
 		print("  motor%d pin=%d ledcAttach=%s\n", i, motorPins[i], ok ? "OK" : "FAIL");
 	}
+	if (!motorPwmConfigurationValid(pwmFrequency, pwmStop, pwmMin, pwmMax)) {
+		motorOutputsOK = false;
+		print("  PWM invalid after LEDC frequency update: freq=%d stop=%d min=%d max=%d\n",
+			pwmFrequency, pwmStop, pwmMin, pwmMax);
+	}
 	memcpy(configuredMotorPins, motorPins, sizeof(configuredMotorPins));
 	motorPinConfigInitialized = true;
 	setDiagnosticFault(DIAG_MOTOR_INIT, !motorOutputsOK);
@@ -73,15 +79,7 @@ void setupMotors() {
 }
 
 int getDutyCycle(float value) {
-	value = constrain(value, 0, 1);
-	if (pwmMax >= 0) { // pwm 时间模式（接 ESC 用）
-		float pwm = mapf(value, 0, 1, pwmMin, pwmMax);
-		if (value == 0) pwm = pwmStop;
-		float duty = mapf(pwm, 0, 1000000 / pwmFrequency, 0, (1 << pwmResolution) - 1);
-		return round(duty);
-	} else { // 纯占空比模式（接 MOSFET 直驱用）
-		return round(value * ((1 << pwmResolution) - 1));
-	}
+	return motorPwmDutyFromValue(value, pwmFrequency, pwmResolution, pwmStop, pwmMin, pwmMax);
 }
 
 void sendMotors() {

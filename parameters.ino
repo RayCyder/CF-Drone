@@ -11,6 +11,7 @@
 #include "diagnostics.h"
 #include "system_log.h"
 #include "parameter_storage_key.h"
+#include "pwm_config.h"
 
 extern float channelZero[16];
 extern float channelMax[16];
@@ -222,7 +223,16 @@ static bool within(float value, float low, float high) {
 	return isfinite(value) && value >= low && value <= high;
 }
 
-static bool validParameterValue(const char *name, bool integer, float value) {
+static bool validPwmScalarValue(const char *name, float value) {
+	if (!strcmp(name, "MOT_PWM_FREQ")) return within(value, 100, 80000) && floorf(value) == value;
+	if (!strcmp(name, "MOT_PWM_STOP")) return within(value, 0, 10000) && floorf(value) == value;
+	if (!strcmp(name, "MOT_PWM_MIN")) return within(value, 0, 10000) && floorf(value) == value;
+	if (!strcmp(name, "MOT_PWM_MAX"))
+		return (value == -1 || within(value, 1, 10000)) && floorf(value) == value;
+	return false;
+}
+
+static bool validParameterValue(const char *name, bool integer, float value, bool loading = false) {
 	if (!isfinite(value)) {
 		// Channel indices start as NaN until RC calibration. This is an intentional
 		// "unassigned" sentinel, so it must not be reported as corrupted config.
@@ -249,14 +259,19 @@ static bool validParameterValue(const char *name, bool integer, float value) {
 		return value == 0 || fabsf(value - channelZero[channel]) > 10;
 	}
 	if (startsWith(name, "MOT_PIN_")) return within(value, 0, 48) && floorf(value) == value;
-	if (!strcmp(name, "MOT_PWM_FREQ")) return within(value, 100, 80000) && floorf(value) == value;
+	if (!strcmp(name, "MOT_PWM_FREQ"))
+		return validPwmScalarValue(name, value) && (loading ||
+			motorPwmCandidateConfigurationValid(name, (int)value, pwmFrequency, pwmStop, pwmMin, pwmMax));
 	if (!strcmp(name, "MOT_PWM_RES")) return within(value, 1, 20) && floorf(value) == value;
 	if (!strcmp(name, "MOT_PWM_STOP"))
-		return within(value, 0, 10000) && (pwmMax < 0 || value <= pwmMax);
+		return validPwmScalarValue(name, value) && (loading ||
+			motorPwmCandidateConfigurationValid(name, (int)value, pwmFrequency, pwmStop, pwmMin, pwmMax));
 	if (!strcmp(name, "MOT_PWM_MIN"))
-		return within(value, 0, 10000) && (pwmMax < 0 || value < pwmMax);
+		return validPwmScalarValue(name, value) && (loading ||
+			motorPwmCandidateConfigurationValid(name, (int)value, pwmFrequency, pwmStop, pwmMin, pwmMax));
 	if (!strcmp(name, "MOT_PWM_MAX"))
-		return value == -1 || (within(value, 1, 10000) && value > pwmMin && value >= pwmStop);
+		return validPwmScalarValue(name, value) && (loading ||
+			motorPwmCandidateConfigurationValid(name, (int)value, pwmFrequency, pwmStop, pwmMin, pwmMax));
 	if (!strcmp(name, "MOT_THR_MIN")) return within(value, 0, 1) && value <= motThrMax;
 	if (!strcmp(name, "MOT_THR_MAX")) return within(value, 0, 1) && value >= motThrMin;
 	if (strstr(name, "_RATE_MAX")) return within(value, 0.1f, 20);
@@ -290,7 +305,7 @@ static bool validParameterValue(const char *name, bool integer, float value) {
 static bool allParametersValid() {
 	for (auto &parameter : parameters)
 		if (!validParameterValue(parameter.name, parameter.integer, parameter.getValue())) return false;
-	return true;
+	return motorPwmConfigurationValid(pwmFrequency, pwmStop, pwmMin, pwmMax);
 }
 
 static void reportInvalidParameters(const char *phase) {
@@ -303,6 +318,13 @@ static void reportInvalidParameters(const char *phase) {
 		snprintf(message, sizeof(message), "%s %s=%.6g", phase, parameter.name, value);
 		recordSystemLogEvent("PARAM_BAD", message);
 	}
+}
+
+static void reportInvalidPwmConfiguration(const char *phase) {
+	if (motorPwmConfigurationValid(pwmFrequency, pwmStop, pwmMin, pwmMax)) return;
+	print("PARAM_INVALID phase=%s name=MOT_PWM_* freq=%d stop=%d min=%d max=%d recovery=\"set valid ESC PWM values or MOT_PWM_MAX=-1; motor output stays zero until fixed\"\n",
+		phase, pwmFrequency, pwmStop, pwmMin, pwmMax);
+	recordSystemLogEvent("PARAM_BAD", "MOT_PWM combo; outputs disabled");
 }
 
 void printInvalidParameterValues() {
@@ -389,7 +411,7 @@ void setupParameters() {
 			storage.putFloat(storageKey, parameter.getValue()); // store default value
 		}
 		float stored = storage.getFloat(storageKey, parameter.getValue());
-		if (!validParameterValue(parameter.name, parameter.integer, stored)) {
+		if (!validParameterValue(parameter.name, parameter.integer, stored, true)) {
 			stored = parameter.getValue();
 			storage.putFloat(storageKey, stored);
 			setDiagnosticFault(DIAG_PARAMETER, true);
@@ -401,6 +423,7 @@ void setupParameters() {
 	}
 	// 存储异常值已回退默认值后，当前参数集若全部有效则清除活动故障；历史次数仍保留。
 	const bool parametersValid = allParametersValid();
+	if (!parametersValid) reportInvalidPwmConfiguration("load");
 	if (!parametersValid) reportInvalidParameters("load");
 	setDiagnosticFault(DIAG_PARAMETER, !parametersValid);
 }
