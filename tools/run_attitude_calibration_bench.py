@@ -238,6 +238,18 @@ def main():
         if run_error: raise run_error
         return
     try:
+        # The rolling trace can overwrite the triggering loop while the
+        # post-disarm flight log finishes. Preserve the separate peak first.
+        try:
+            worst=request('GET','/diag/trace/worst',timeout=2)
+            with OUT.open('a',encoding='utf-8') as stream:
+                record(stream,'loop_worst',trace=worst)
+            if worst.get('available'):
+                (OUT.parent/(OUT.stem+'-loop-worst.json')).write_text(
+                    json.dumps(worst,separators=(',',':'))+'\n',encoding='utf-8')
+        except (OSError,TimeoutError,RuntimeError,ValueError) as error:
+            with OUT.open('a',encoding='utf-8') as stream:
+                record(stream,'loop_worst_unavailable',error=str(error))
         # Disarm starts a one-second post-trigger capture. Allow it to finish
         # before exporting; an immediate status request may still say POST_TRIGGER.
         deadline=time.monotonic()+3
