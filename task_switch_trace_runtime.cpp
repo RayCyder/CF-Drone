@@ -26,7 +26,26 @@ static uint32_t pendingFlashCallerTask = 0;
 static uint32_t pendingFlashCallerPc = 0;
 static uint8_t pendingFlashCallerCore = UINT8_MAX;
 static uint8_t pendingFlashTargetCore = UINT8_MAX;
+static uint32_t pendingFlashRequestCount = 0;
+static bool pendingFlashRequestAmbiguous = false;
 static portMUX_TYPE pendingFlashRequestMux = portMUX_INITIALIZER_UNLOCKED;
+
+static void takePendingFlashRequest(TaskIpcTraceEvent &event) {
+    portENTER_CRITICAL(&pendingFlashRequestMux);
+    if (pendingFlashRequestCount == 1 && !pendingFlashRequestAmbiguous) {
+        event.requestUs = pendingFlashRequestUs;
+        event.callerTask = pendingFlashCallerTask;
+        event.callerPc = pendingFlashCallerPc;
+        event.callerCore = pendingFlashCallerCore;
+        event.targetCore = pendingFlashTargetCore;
+    } else {
+        event.callerCore = UINT8_MAX;
+        event.targetCore = static_cast<uint8_t>(xPortGetCoreID());
+    }
+    if (pendingFlashRequestCount) --pendingFlashRequestCount;
+    if (pendingFlashRequestCount == 0) pendingFlashRequestAmbiguous = false;
+    portEXIT_CRITICAL(&pendingFlashRequestMux);
+}
 #endif
 
 static uint32_t currentTaskHandleValue() {
@@ -142,21 +161,33 @@ extern "C" esp_err_t __wrap_esp_ipc_call_nonblocking(uint32_t cpuId,
     const uint32_t callerTask = currentTaskHandleValue();
     const uint32_t callerPc = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
     portENTER_CRITICAL(&pendingFlashRequestMux);
-    pendingFlashRequestUs = requestUs;
-    pendingFlashCallerTask = callerTask;
-    pendingFlashCallerPc = callerPc;
-    pendingFlashCallerCore = callerCore;
-    pendingFlashTargetCore = static_cast<uint8_t>(cpuId);
-    portEXIT_CRITICAL(&pendingFlashRequestMux);
+    if (pendingFlashRequestCount == 0) {
+        pendingFlashRequestUs = requestUs;
+        pendingFlashCallerTask = callerTask;
+        pendingFlashCallerPc = callerPc;
+        pendingFlashCallerCore = callerCore;
+        pendingFlashTargetCore = static_cast<uint8_t>(cpuId);
+    } else {
+        pendingFlashRequestAmbiguous = true;
+    }
+    if (pendingFlashRequestCount < UINT32_MAX) ++pendingFlashRequestCount;
     const esp_ipc_func_t dispatchedFunction = flashBlockCallback
         ? __wrap_spi_flash_op_block_func
         : function;
     const esp_err_t result = __real_esp_ipc_call_nonblocking(cpuId, dispatchedFunction, argument);
+    if (result != ESP_OK && pendingFlashRequestCount) {
+        --pendingFlashRequestCount;
+        if (pendingFlashRequestCount == 0) pendingFlashRequestAmbiguous = false;
+        else pendingFlashRequestAmbiguous = true;
+    }
+    portEXIT_CRITICAL(&pendingFlashRequestMux);
     __atomic_sub_fetch(&taskTraceWriters, 1, __ATOMIC_RELEASE);
     return result;
 }
 
 extern "C" void IRAM_ATTR __wrap_spi_flash_op_block_func(void *argument) {
+    TaskIpcTraceEvent event{};
+    takePendingFlashRequest(event);
     if (!__atomic_load_n(&taskTraceEnabled, __ATOMIC_ACQUIRE)) {
         __real_spi_flash_op_block_func(argument);
         return;
@@ -167,15 +198,6 @@ extern "C" void IRAM_ATTR __wrap_spi_flash_op_block_func(void *argument) {
         __real_spi_flash_op_block_func(argument);
         return;
     }
-
-    TaskIpcTraceEvent event{};
-    portENTER_CRITICAL(&pendingFlashRequestMux);
-    event.requestUs = pendingFlashRequestUs;
-    event.callerTask = pendingFlashCallerTask;
-    event.callerPc = pendingFlashCallerPc;
-    event.callerCore = pendingFlashCallerCore;
-    event.targetCore = pendingFlashTargetCore;
-    portEXIT_CRITICAL(&pendingFlashRequestMux);
 
     event.callbackStartedUs = static_cast<uint32_t>(esp_timer_get_time());
     __real_spi_flash_op_block_func(argument);
