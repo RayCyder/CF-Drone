@@ -1,0 +1,58 @@
+{"at": "2026-10-01T17:27:32.032+00:00", "kind": "motor_preflight", "line": "front-right 0 front-left 0 rear-right 0 rear-left 0"}
+{"at": "2026-10-01T17:27:32.075+00:00", "kind": "preflight", "state": {"armed": false, "led_fast_blink": false, "enabled": false, "active": false, "voltage": 4.08, "throttle": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0, "faults": 0, "uptime_ms": 372191, "wifi_connected": true, "wifi_disconnects": 0, "wifi_last_disconnect_ms": 0, "stick_age_ms": -1, "packet_age_ms": 314476, "http_idle_drops": 0, "http_max_handle_us": 13902, "http_slow_handles": 0, "http_rc_max_request_us": 5957, "http_rc_slow_requests": 0, "control_source": 1, "thrust_target": 0.0, "arm_ready": true, "arm_reason": "当前解锁条件已满足"}}
+{"at": "2026-10-01T17:27:42.114+00:00", "kind": "web_link_preflight", "samples": 10, "min_ms": 29.0, "max_ms": 61.4}
+{"at": "2026-10-01T17:27:42.147+00:00", "kind": "lease", "timeout_ms": 10000}
+{"at": "2026-10-01T17:27:42.389+00:00", "kind": "neutral", "state": {"armed": false, "led_fast_blink": false, "enabled": true, "active": true, "voltage": 4.08, "throttle": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0, "faults": 0, "uptime_ms": 382497, "wifi_connected": true, "wifi_disconnects": 0, "wifi_last_disconnect_ms": 0, "stick_age_ms": 197, "packet_age_ms": 197, "http_idle_drops": 0, "http_max_handle_us": 13902, "http_slow_handles": 0, "http_rc_max_request_us": 5957, "http_rc_slow_requests": 0, "control_source": 2, "thrust_target": 0.0, "arm_ready": true, "arm_reason": "当前解锁条件已满足"}}
+{"at": "2026-10-01T17:27:42.627+00:00", "kind": "armed_check", "state": {"armed": true, "led_fast_blink": false, "enabled": true, "active": true, "voltage": 4.08, "throttle": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0, "faults": 0, "uptime_ms": 382741, "wifi_connected": true, "wifi_disconnects": 0, "wifi_last_disconnect_ms": 0, "stick_age_ms": 441, "packet_age_ms": 441, "http_idle_drops": 0, "http_max_handle_us": 13902, "http_slow_handles": 0, "http_rc_max_request_us": 5957, "http_rc_slow_requests": 0, "control_source": 2, "thrust_target": 0.0, "arm_ready": true, "arm_reason": "飞控已解锁"}}
+{"at": "2026-10-01T17:27:42.722+00:00", "kind": "stick", "raw": -80, "elapsed_ms": 95.3, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:42.759+00:00", "kind": "stick", "raw": -80, "elapsed_ms": 36.7, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:42.805+00:00", "kind": "stick", "raw": -80, "elapsed_ms": 45.7, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:42.840+00:00", "kind": "stick", "raw": -80, "elapsed_ms": 35.1, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:42.872+00:00", "kind": "stick", "raw": -80, "elapsed_ms": 31.6, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:42.928+00:00", "kind": "stick", "raw": -80, "elapsed_ms": 50.4, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:42.968+00:00", "kind": "stick", "raw": -80, "elapsed_ms": 40.1, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.042+00:00", "kind": "stick", "raw": -80, "elapsed_ms": 63.1, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.076+00:00", "kind": "stage", "raw": -80, "count": 8, "state": {"armed": true, "led_fast_blink": false, "enabled": true, "active": true, "voltage": 4.08, "throttle": 10.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0, "faults": 0, "uptime_ms": 383188, "wifi_connected": true, "wifi_disconnects": 0, "wifi_last_disconnect_ms": 0, "stick_age_ms": 50, "packet_age_ms": 50, "http_idle_drops": 0, "http_max_handle_us": 13902, "http_slow_handles": 0, "http_rc_max_request_us": 6332, "http_rc_slow_requests": 0, "control_source": 2, "thrust_target": 0.142, "arm_ready": true, "arm_reason": "飞控已解锁"}}
+{"at": "2026-10-01T17:27:43.156+00:00", "kind": "stick", "raw": -60, "elapsed_ms": 80.2, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.187+00:00", "kind": "stick", "raw": -60, "elapsed_ms": 30.9, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.249+00:00", "kind": "stick", "raw": -60, "elapsed_ms": 62.1, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.281+00:00", "kind": "stick", "raw": -60, "elapsed_ms": 31.5, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.313+00:00", "kind": "stick", "raw": -60, "elapsed_ms": 32.3, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.363+00:00", "kind": "stick", "raw": -60, "elapsed_ms": 36.3, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.413+00:00", "kind": "stick", "raw": -60, "elapsed_ms": 34.1, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.463+00:00", "kind": "stick", "raw": -60, "elapsed_ms": 34.8, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.506+00:00", "kind": "stage", "raw": -60, "count": 8, "state": {"armed": true, "led_fast_blink": false, "enabled": true, "active": true, "voltage": 4.08, "throttle": 20.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0, "faults": 0, "uptime_ms": 383621, "wifi_connected": true, "wifi_disconnects": 0, "wifi_last_disconnect_ms": 0, "stick_age_ms": 40, "packet_age_ms": 40, "http_idle_drops": 0, "http_max_handle_us": 16474, "http_slow_handles": 0, "http_rc_max_request_us": 6332, "http_rc_slow_requests": 0, "control_source": 2, "thrust_target": 0.226, "arm_ready": true, "arm_reason": "飞控已解锁"}}
+{"at": "2026-10-01T17:27:43.542+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 36.0, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.589+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 32.4, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.660+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 50.0, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.692+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 31.1, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.751+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 44.1, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.791+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 34.1, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.851+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 43.0, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.889+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 31.4, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.952+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 41.5, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:43.991+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 34.4, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.051+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 43.3, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.087+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 30.3, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.168+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 59.0, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.222+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 54.9, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.263+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 40.9, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.298+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 34.3, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.337+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 29.2, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.394+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 34.1, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.439+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 30.0, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.502+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 41.3, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.541+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 34.1, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.592+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 32.2, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.644+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 36.5, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.695+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 35.9, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.745+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 36.2, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.795+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 37.1, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.849+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 40.5, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.891+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 34.1, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.946+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 36.2, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:44.996+00:00", "kind": "stick", "raw": -40, "elapsed_ms": 38.5, "response": {"s": "ok", "m": 2, "arm": 1, "rt": 1}}
+{"at": "2026-10-01T17:27:45.041+00:00", "kind": "stage", "raw": -40, "count": 30, "state": {"armed": true, "led_fast_blink": false, "enabled": true, "active": true, "voltage": 4.07, "throttle": 30.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0, "faults": 0, "uptime_ms": 385153, "wifi_connected": true, "wifi_disconnects": 0, "wifi_last_disconnect_ms": 0, "stick_age_ms": 43, "packet_age_ms": 43, "http_idle_drops": 0, "http_max_handle_us": 16474, "http_slow_handles": 0, "http_rc_max_request_us": 7542, "http_rc_slow_requests": 0, "control_source": 2, "thrust_target": 0.311, "arm_ready": true, "arm_reason": "飞控已解锁"}}
+{"at": "2026-10-01T17:27:45.147+00:00", "kind": "neutral_sent"}
+{"at": "2026-10-01T17:27:45.522+00:00", "kind": "motor_final", "line": "front-right 0 front-left 0 rear-right 0 rear-left 0"}
+{"at": "2026-10-01T17:27:45.551+00:00", "kind": "final", "state": {"armed": false, "led_fast_blink": false, "enabled": true, "active": true, "voltage": 4.08, "throttle": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0, "faults": 0, "uptime_ms": 385668, "wifi_connected": true, "wifi_disconnects": 0, "wifi_last_disconnect_ms": 0, "stick_age_ms": 338, "packet_age_ms": 338, "http_idle_drops": 0, "http_max_handle_us": 16474, "http_slow_handles": 0, "http_rc_max_request_us": 7542, "http_rc_slow_requests": 0, "control_source": 2, "thrust_target": 0.0, "arm_ready": true, "arm_reason": "当前解锁条件已满足"}}

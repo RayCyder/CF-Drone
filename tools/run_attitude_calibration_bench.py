@@ -107,8 +107,11 @@ def validate_log(path, trace_path, expected_missed=None):
             raise RuntimeError(f'armed flight-log acceptance failed at t={row["t"]}')
     with trace_path.open(newline='',encoding='utf-8') as stream:
         trace_rows=list(csv.DictReader(stream))
-    if trace_rows:
-        raise RuntimeError(f'{len(trace_rows)} loop overrun trace rows require review')
+    # The armed-loop diagnostic image records a rolling window of ordinary
+    # loops as well. Only long intervals indicate an overrun in this export.
+    long_trace_rows=[row for row in trace_rows if int(row['dt_us'])>1500]
+    if long_trace_rows:
+        raise RuntimeError(f'{len(long_trace_rows)} long loop trace rows require review')
     confidence=[float(row['accel_correction_confidence']) for row in platform]
     accel_norms=[math.sqrt(sum(float(row[f'acc_{axis}'])**2 for axis in 'xyz'))
                  for row in platform]
@@ -132,7 +135,8 @@ def validate_log(path, trace_path, expected_missed=None):
             'possible_missing_in_armed_gaps':gaps['armed'],
             'possible_missing_in_disarmed_gaps':gaps['disarmed'],
             'possible_missing_across_arm_transition':gaps['transition'],
-            'trace_rows':len(trace_rows)}
+            'trace_rows':len(trace_rows),
+            'max_trace_dt_us':max((int(row['dt_us']) for row in trace_rows),default=0)}
 
 def main():
     global HOST, PORT, OUT
@@ -152,6 +156,8 @@ def main():
     OUT=args.output_dir/('four-motor-30pct-'+dt.datetime.now().strftime('%Y%m%d-%H%M%S')+'.jsonl')
     serial=SerialConsole(args.serial_port)
     token=None
+    armed_started=False
+    run_error=None
     OUT.parent.mkdir(parents=True,exist_ok=True)
     def deadline(_signum,_frame): raise TimeoutError('bench run hard deadline')
     signal.signal(signal.SIGALRM,deadline)
@@ -170,6 +176,10 @@ def main():
                 state.get('voltage',0) < 3.8 or state.get('arm_ready') is not True):
                 raise RuntimeError('Web preflight failed')
             check_web_link(stream)
+            log_status=request('GET','/logs/status')
+            record(stream,'log_preflight',state=log_status)
+            if log_status.get('state')!='ROLLING' or log_status.get('missedSamples')!=0:
+                raise RuntimeError('flight log must be rolling with zero missed samples before arming')
             lease=request('POST','/web_rc/lease',{})
             token=lease['lease']
             record(stream,'lease',timeout_ms=lease.get('timeout_ms'))
@@ -187,6 +197,7 @@ def main():
             record(stream,'armed_check',state=state)
             if state.get('armed') is not True or state.get('control_source') != WEB_RC_SOURCE:
                 raise RuntimeError('arming rejected')
+            armed_started=True
             for raw, seconds in ((-80,0.4),(-60,0.4),(-40,1.5)):
                 count=run_stage(token,raw,seconds,stream)
                 state=request('GET','/web_rc/status')
@@ -198,6 +209,8 @@ def main():
                     raise RuntimeError(f'stage gate failed: {raw} {state}')
             for _ in range(3): stick(token,-100)
             record(stream,'neutral_sent')
+    except (OSError,TimeoutError,RuntimeError,ValueError) as error:
+        run_error=error
     finally:
         signal.alarm(0)
         try:
@@ -221,8 +234,18 @@ def main():
         if state.get('armed') is not False or state.get('throttle') != 0:
             raise RuntimeError('final safe state not verified')
     print(OUT)
+    if not armed_started:
+        if run_error: raise run_error
+        return
     try:
-        status=request('GET','/logs/status',timeout=2)
+        # Disarm starts a one-second post-trigger capture. Allow it to finish
+        # before exporting; an immediate status request may still say POST_TRIGGER.
+        deadline=time.monotonic()+3
+        while True:
+            status=request('GET','/logs/status',timeout=2)
+            if status.get('state')=='FROZEN' or time.monotonic()>=deadline:
+                break
+            time.sleep(0.1)
         if status.get('state')=='FROZEN':
             saved={}
             for path,suffix in (('/logs.csv','flight-log.csv'),
@@ -235,14 +258,20 @@ def main():
                     saved[suffix]=OUT.parent/(OUT.stem+'-'+suffix)
                     saved[suffix].write_bytes(response.read())
                 finally:conn.close()
-            summary=validate_log(saved['flight-log.csv'],saved['loop-trace.csv'],
-                                 status.get('missedSamples'))
             with OUT.open('a',encoding='utf-8') as stream:
-                record(stream,'acceptance',**summary)
-            print('frozen flight log and loop trace passed acceptance:',summary)
+                if run_error:
+                    record(stream,'aborted',reason=str(run_error),log_status=status)
+                else:
+                    summary=validate_log(saved['flight-log.csv'],saved['loop-trace.csv'],
+                                         status.get('missedSamples'))
+                    record(stream,'acceptance',**summary)
+            if not run_error:
+                print('frozen flight log and loop trace passed acceptance:',summary)
         else:
             raise RuntimeError('flight log did not freeze after disarm')
     except (OSError,TimeoutError,RuntimeError,ValueError) as error:
         raise RuntimeError(f'post-disarm evidence/acceptance failed: {error}; preserve frozen log') from error
+    if run_error:
+        raise RuntimeError(f'bench stopped safely after arming: {run_error}; frozen evidence saved') from run_error
 
 if __name__=='__main__': main()

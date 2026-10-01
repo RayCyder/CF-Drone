@@ -1,6 +1,12 @@
 # Control-loop stall localization
 
 Status: the boot-time NVS batch now completes in `setup()` before the first control-loop iteration, avoiding the previously measured ~50 ms startup loop interval. Later runtime flash writes remain guarded while disarmed. The separate historical long IMU waits remain unexplained; diagnostic tracing measures slow SPI-flash cache callbacks and closes pending spans at the next actual loop entry.
+
+## 2026-10-02 propeller-off 30% diagnostic captures
+
+The first four-motor 10→20→30% run completed with 155 flight-log rows at 30%, maximum armed sampled `dt_s=1.097 ms`, minimum voltage `4.072 V`, and no active fault. All 46 Web stick requests succeeded; the longest client response was `95.3 ms` while the route-specific server maximum was `7.542 ms`. The frozen recorder reported four cumulative missed 100 Hz samples, but no gap appears in the exported four-second window, so their phase cannot be assigned. Its 32 loop-trace rows are the diagnostic image's normal rolling window, maximum `1.044 ms`; the prior bench script incorrectly rejected any nonempty trace.
+
+After saving this capture, the recorder was resumed with zero missed samples. A second run stopped at 20% when warning bit `0x80` appeared. Its worst armed loop was `1.730 ms` with `1.192 ms` attributed to IMU wait; the 1.5 ms warning threshold explains the stop. The 100 Hz flight log missed no samples and neither run captured a `≥5 ms` stall. The motor commands returned to zero and the board was disarmed after each run. The bench script now waits for the one-second disarm post-trigger capture, requires a zero-miss recorder at preflight, and treats only trace rows over 1.5 ms as overruns. These short unloaded runs do not explain the historical full-throttle stutter or justify changing estimator gains.
 Updated: 2026-10-02
 
 ## 2026-10-02 frozen-log recovery after a reported high-throttle session
