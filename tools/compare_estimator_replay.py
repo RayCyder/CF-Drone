@@ -31,8 +31,16 @@ POST_REPLACEMENT_CAPTURES = (
 SHARED_HEADERS = ("quaternion.h", "vector.h", "lpf.h", "util.h")
 
 
+def c_float_literal(value: float) -> str:
+    literal = f"{value:.9g}"
+    if "." not in literal and "e" not in literal.lower():
+        literal += ".0"
+    return literal + "f"
+
+
 def compile_driver(compiler: str, include_source: Path, output: Path,
-                   raw_tolerance: float | None = None) -> None:
+                   raw_tolerance: float | None = None,
+                   innovation_max_deg: float | None = None) -> None:
     command = [
         compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-Wno-vla",
         "-I", str(ROOT / "tests/stubs"), "-I", str(ROOT),
@@ -40,7 +48,9 @@ def compile_driver(compiler: str, include_source: Path, output: Path,
         str(ROOT / "tests/estimator_replay_driver.cpp"), "-o", str(output),
     ]
     if raw_tolerance is not None:
-        command.insert(-3, f"-DEST_RAW_ACCEL_NORM_TOLERANCE={raw_tolerance:.9g}f")
+        command.insert(-3, f"-DEST_RAW_ACCEL_NORM_TOLERANCE={c_float_literal(raw_tolerance)}")
+    if innovation_max_deg is not None:
+        command.insert(-3, f"-DESTIMATE_ACCEL_INNOVATION_MAX_DEG={c_float_literal(innovation_max_deg)}")
     subprocess.run(command, check=True)
 
 
@@ -117,6 +127,8 @@ def main() -> int:
                         help="comma-separated raw-norm tolerances to replay (default: 0.1)")
     parser.add_argument("--acc-weights", type=parse_acc_weights, default=[0.003],
                         help="comma-separated EST_ACC_WEIGHT values (default: 0.003)")
+    parser.add_argument("--innovation-max-deg", type=float,
+                        help="override the candidate estimator's acceleration-innovation upper threshold in degrees")
     parser.add_argument("--gyro-bias", type=parse_gyro_bias, default=(0.0, 0.0, 0.0),
                         help="constant gyro bias in rad/s, e.g. 0.001,0,0")
     parser.add_argument("--truth-csv", type=Path,
@@ -127,6 +139,9 @@ def main() -> int:
         raise SystemExit("A C++17 compiler is required")
     if args.skip_start_ms < 0:
         raise SystemExit("--skip-start-ms must be nonnegative")
+    if args.innovation_max_deg is not None and (
+            not math.isfinite(args.innovation_max_deg) or not 5.0 < args.innovation_max_deg <= 180.0):
+        raise SystemExit("--innovation-max-deg must be finite and in (5, 180]")
 
     baseline_result = subprocess.run(
         ["git", "-C", str(ROOT), "show", f"{args.baseline_ref}:estimate.ino"],
@@ -164,7 +179,8 @@ def main() -> int:
         candidates: dict[tuple[float, float], dict[Path, dict[int, tuple[float, float, float]]]] = {}
         for tolerance in args.raw_tolerances:
             candidate_binary = temp_path / f"candidate_{tolerance:.4f}"
-            compile_driver(compiler, ROOT / "estimate.ino", candidate_binary, tolerance)
+            compile_driver(compiler, ROOT / "estimate.ino", candidate_binary, tolerance,
+                           args.innovation_max_deg)
             for weight in args.acc_weights:
                 candidates[(tolerance, weight)] = {
                     capture: read_output(candidate_binary, capture, initial_attitude, weight, args.gyro_bias)

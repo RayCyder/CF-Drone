@@ -12,10 +12,15 @@ static const float ESTIMATE_NOMINAL_DT = 0.001f;
 // A long scheduler stall yields only one fresh accelerometer sample, not a
 // history representative of the whole gap. Bound gravity feedback to 5 ms.
 static const float ESTIMATE_MAX_ACCEL_CORRECTION_DT = 0.005f;
-// Fade gravity feedback between 5 and 25 degrees of estimator/accelerometer
-// disagreement; keep a small gain floor to limit gyro-bias drift.
+// Fade gravity feedback between 5 degrees and a compile-time upper threshold;
+// keep a small gain floor to limit gyro-bias drift.
 static const float ESTIMATE_ACCEL_INNOVATION_MIN_RAD = 0.08726646f; // 5 deg
-static const float ESTIMATE_ACCEL_INNOVATION_MAX_RAD = 0.43633231f; // 25 deg
+#ifndef ESTIMATE_ACCEL_INNOVATION_MAX_DEG
+#define ESTIMATE_ACCEL_INNOVATION_MAX_DEG 25.0f
+#endif
+static_assert(ESTIMATE_ACCEL_INNOVATION_MAX_DEG > 5.0f && ESTIMATE_ACCEL_INNOVATION_MAX_DEG <= 180.0f,
+	"ESTIMATE_ACCEL_INNOVATION_MAX_DEG must be in (5, 180]");
+static const float ESTIMATE_ACCEL_INNOVATION_MAX_RAD = radians(ESTIMATE_ACCEL_INNOVATION_MAX_DEG);
 static const float ESTIMATE_ACCEL_MIN_ADAPTIVE_WEIGHT = 0.0005f;
 #ifndef EST_RAW_ACCEL_NORM_TOLERANCE
 #define EST_RAW_ACCEL_NORM_TOLERANCE 0.10f
