@@ -132,7 +132,7 @@ bool initializeSlowLoopRetentionStore(SlowLoopRetentionStore &store) {
             SlowLoopCapture capture{};
             memcpy(&capture, slot.captureBytes, sizeof(capture));
             ++validCount;
-            if (!haveSequence || capture.sequence > newestSequence) {
+            if (!haveSequence || (int32_t)(capture.sequence - newestSequence) > 0) {
                 newestSequence = capture.sequence;
                 newestSlot = i;
                 haveSequence = true;
@@ -185,7 +185,7 @@ bool initializeSlowLoopRetentionStore(SlowLoopRetentionStore &store) {
             SlowLoopCapture capture{};
             memcpy(&capture, slot.captureBytes, sizeof(capture));
             ++store.count;
-            if (!haveSequence || capture.sequence > newestSequence) {
+            if (!haveSequence || (int32_t)(capture.sequence - newestSequence) > 0) {
                 newestSequence = capture.sequence;
                 newestSlot = i;
                 haveSequence = true;
@@ -206,6 +206,7 @@ bool initializeSlowLoopRetentionStore(SlowLoopRetentionStore &store) {
 void appendSlowLoopCapture(SlowLoopRetentionStore &store, const SlowLoopCapture &capture) {
     if (!validHeader(store)) (void)initializeSlowLoopRetentionStore(store);
     SlowLoopRetentionSlot &slot = store.slots[store.nextSlot];
+    const bool replacingValidSlot = validSlowLoopCapture(slot);
     slot.commit = 0;
     SlowLoopCapture committed = capture;
     committed.sequence = store.nextSequence++;
@@ -214,8 +215,11 @@ void appendSlowLoopCapture(SlowLoopRetentionStore &store, const SlowLoopCapture 
     __sync_synchronize();
     slot.commit = SLOW_LOOP_RETENTION_SLOT_COMMIT;
     __sync_synchronize();
-    if (store.count < SLOW_LOOP_RETENTION_CAPACITY) ++store.count;
-    else if (store.overwritten < UINT32_MAX) ++store.overwritten;
+    if (replacingValidSlot) {
+        if (store.overwritten < UINT32_MAX) ++store.overwritten;
+    } else if (store.count < SLOW_LOOP_RETENTION_CAPACITY) {
+        ++store.count;
+    }
     store.nextSlot = (uint8_t)((store.nextSlot + 1) % SLOW_LOOP_RETENTION_CAPACITY);
     commitHeader(store);
 }
@@ -223,9 +227,28 @@ void appendSlowLoopCapture(SlowLoopRetentionStore &store, const SlowLoopCapture 
 bool copySlowLoopCapture(const SlowLoopRetentionStore &store, uint8_t index,
                          SlowLoopCapture &destination) {
     if (!validHeader(store) || index >= store.count) return false;
-    const uint8_t oldestSlot = (uint8_t)((store.nextSlot + SLOW_LOOP_RETENTION_CAPACITY - store.count) %
-        SLOW_LOOP_RETENTION_CAPACITY);
-    const SlowLoopRetentionSlot &slot = store.slots[(oldestSlot + index) % SLOW_LOOP_RETENTION_CAPACITY];
+    // A reset can leave a gap anywhere in the ring. Enumerate committed slots
+    // by age instead of assuming count valid slots are physically contiguous.
+    uint8_t orderedSlots[SLOW_LOOP_RETENTION_CAPACITY] = {};
+    uint32_t orderedAges[SLOW_LOOP_RETENTION_CAPACITY] = {};
+    uint8_t found = 0;
+    for (uint8_t slotIndex = 0; slotIndex < SLOW_LOOP_RETENTION_CAPACITY; ++slotIndex) {
+        const SlowLoopRetentionSlot &slot = store.slots[slotIndex];
+        if (!validSlowLoopCapture(slot)) continue;
+        SlowLoopCapture capture{};
+        memcpy(&capture, slot.captureBytes, sizeof(capture));
+        const uint32_t age = store.nextSequence - capture.sequence;
+        uint8_t position = found++;
+        while (position && age > orderedAges[position - 1]) {
+            orderedAges[position] = orderedAges[position - 1];
+            orderedSlots[position] = orderedSlots[position - 1];
+            --position;
+        }
+        orderedAges[position] = age;
+        orderedSlots[position] = slotIndex;
+    }
+    if (found != store.count || index >= found) return false;
+    const SlowLoopRetentionSlot &slot = store.slots[orderedSlots[index]];
     if (!validSlowLoopCapture(slot)) return false;
     memcpy(&destination, slot.captureBytes, sizeof(destination));
     return true;
