@@ -21,6 +21,7 @@
 
 extern Preferences storage;
 extern bool armed;
+extern bool motorsActive();
 extern bool parameterPersistenceReady();
 extern uint32_t mavlinkRxDroppedCount();
 extern uint32_t mavlinkRxQueueDepth();
@@ -544,16 +545,17 @@ void setupWiFi() {
 }
 
 void serviceWiFi() {
+	const uint32_t now = millis();
 	// Captive-DNS servicing can block for tens of milliseconds on a slow UDP
 	// request. The AP and HTTP/Web RC remain available while armed; DNS portal
 	// work can safely wait until disarm instead of stalling the control loop.
 	if (configPortalActive && !armed) wifiDnsServer.processNextRequest();
-	if (wifiRestartScheduled && (int32_t)(millis() - wifiRestartAtMs) >= 0) {
+	if (WifiRecoveryPolicy::restartReady(wifiRestartScheduled,
+		(int32_t)(now - wifiRestartAtMs) >= 0, armed, motorsActive())) {
 		print("WIFI_STATE state=RESTARTING reason=credentials_saved\n");
 		recordSystemLogEvent("WIFI", "state=RESTARTING reason=credentials_saved");
 		ESP.restart();
 	}
-	const uint32_t now = millis();
 	if (configPortalStarting) {
 		const String activeSSID = WiFi.softAPSSID();
 		const IPAddress activeAPIP = WiFi.softAPIP();
