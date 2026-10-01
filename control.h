@@ -2,6 +2,7 @@
 #ifndef CONTROL_H
 #define CONTROL_H
 
+#include <stdint.h>
 #include "vector.h"
 #include "quaternion.h"
 
@@ -30,6 +31,18 @@ enum ControlSource {
     CONTROL_SOURCE_LANDING = 6
 };
 
+enum DisarmReason : uint8_t {
+    DISARM_REASON_UNKNOWN = 0,
+    DISARM_REASON_WEB_LOCK = 1,
+    DISARM_REASON_WEB_EMERGENCY = 2,
+    DISARM_REASON_RC_GESTURE = 3,
+    DISARM_REASON_CLI = 4,
+    DISARM_REASON_MAVLINK = 5,
+    DISARM_REASON_CRITICAL_FAULT = 6,
+    DISARM_REASON_INVERTED = 7,
+    DISARM_REASON_BATTERY_IDLE_LOW = 8
+};
+
 struct AutoAttitudeCommand {
     Quaternion attitude;
     Vector rates;
@@ -54,6 +67,8 @@ struct ControlState {
 
 // 函数声明
 void control();
+void disarm(DisarmReason reason);
+DisarmReason getLastDisarmReason();
 void interpretControls();
 void interpretWebRC();
 void combineInputs();

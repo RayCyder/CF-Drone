@@ -95,7 +95,6 @@ uint32_t mavlinkRxQueueDepth() {
 extern double controlTime;
 extern float motors[4];
 extern bool requestArm();
-extern void disarm();
 extern float controlRoll, controlPitch, controlThrottle, controlYaw, controlMode;
 
 void processMavlink() {
@@ -366,7 +365,7 @@ void handleMavlink(const void *_msg) {
 
 		if (m.command == MAV_CMD_COMPONENT_ARM_DISARM) {
 			if (m.param1 == 0) {
-				disarm();
+				disarm(DISARM_REASON_MAVLINK);
 				accepted = true;
 			} else if (m.param1 == 1) {
 				accepted = requestArm();

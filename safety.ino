@@ -30,7 +30,6 @@ bool isUsingWebRC();
 #endif
 
 extern bool armed;
-extern void disarm();
 extern int mode;
 extern float dt;
 extern float thrustTarget;
@@ -48,7 +47,7 @@ void failsafe() {
 	if (armed && (getActiveDiagnosticFaults() &
 		(DIAG_IMU_INIT | DIAG_IMU_TIMEOUT | DIAG_IMU_INVALID | DIAG_MOTOR_INIT))) {
 		// 关键传感器或输出异常时立即停止输出，不能继续依赖常规控制计算。
-		disarm();
+		disarm(DISARM_REASON_CRITICAL_FAULT);
 		extern float motors[4];
 		print("严重故障，立即停机；运行 diag 查看原因。\n");
 	}
@@ -181,7 +180,7 @@ void invertedFailsafe() {
 		isInverted = true;
 		if (invertedStartTime == 0) invertedStartTime = t;
 		if (t - invertedStartTime > INVERTED_TIMEOUT) {
-			disarm();
+			disarm(DISARM_REASON_INVERTED);
 			invertedStartTime = 0;
 			print("倒置保护：停机\n");
 		}
@@ -268,7 +267,7 @@ void batteryFailsafe() {
 		return;
 	}
 
-	disarm();
+	disarm(DISARM_REASON_BATTERY_IDLE_LOW);
 	print("电量低(%.2fV)，自动上锁\n", batteryVoltage);
 #if WEB_RC_ENABLED
 	char warnBuf[64];

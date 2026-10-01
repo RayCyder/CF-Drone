@@ -4,6 +4,7 @@
 #include "vector.h"
 #include "util.h"
 #include "diagnostics.h"
+#include "control.h"
 #include "system_log.h"
 #include "lpf.h"
 #include "flight_log.h"
@@ -83,7 +84,6 @@ bool motorsActive();
 static bool mavlinkConsoleCommand = false;
 void setMavlinkConsoleCommandOutput(bool enabled) { mavlinkConsoleCommand = enabled; }
 extern bool requestArm();
-extern void disarm();
 extern bool setFlightMode(int requestedMode);
 #if WEB_RC_ENABLED
 extern bool isUsingWebRC();
@@ -285,7 +285,7 @@ void doCommand(String str, bool echo = false) {
 	} else if (command == "arm") {
 		if (!requestArm()) print("系统未满足解锁条件，请检查油门、电池、IMU、故障和电机测试状态。\n");
 	} else if (command == "disarm") {
-		disarm();
+		disarm(DISARM_REASON_CLI);
 	} else if (command == "raw") {
 		if (!setFlightMode(RAW)) print("模式切换被拒绝\n");
 	} else if (command == "stab") {

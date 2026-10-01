@@ -6,6 +6,9 @@ constexpr int FLIGHT_LOG_LEGACY_COLUMNS = 35;
 constexpr int FLIGHT_LOG_COLUMNS = 41;
 constexpr uint32_t FLIGHT_LOG_LEGACY_ROW_BYTES = 140;
 constexpr uint32_t FLIGHT_LOG_DISARM_REASON = 0x80000000UL;
+// On a disarm trigger, bits 24..30 encode DisarmReason; bits 0..15 remain
+// diagnostic fault flags. Zero means an unclassified disarm.
+constexpr uint32_t FLIGHT_LOG_DISARM_CAUSE_SHIFT = 24;
 enum FlightLogState : uint8_t { ROLLING, POST_TRIGGER, FROZEN };
 struct FlightLogStatus {
     FlightLogState state;

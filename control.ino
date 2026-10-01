@@ -357,8 +357,15 @@ bool requestArm() {
 	return tryArmWithSystemLog();
 }
 
-void disarm() {
+static uint8_t lastDisarmReason = DISARM_REASON_UNKNOWN;
+
+DisarmReason getLastDisarmReason() {
+	return (DisarmReason)__atomic_load_n(&lastDisarmReason, __ATOMIC_RELAXED);
+}
+
+void disarm(DisarmReason reason) {
 	bool outputWasActive = armed;
+	if (armed) __atomic_store_n(&lastDisarmReason, (uint8_t)reason, __ATOMIC_RELAXED);
 	for (int i = 0; i < 4; ++i) outputWasActive = outputWasActive || motors[i] != 0.0f;
 	armed = false;
 	clearControlledLanding();
@@ -446,7 +453,7 @@ void interpretControls() {
 			}
 		}
 	}
-	if (controlThrottle < 0.05 && controlYaw < -0.95) disarm(); // disarm gesture
+	if (controlThrottle < 0.05 && controlYaw < -0.95) disarm(DISARM_REASON_RC_GESTURE); // disarm gesture
 #if WEB_RC_ENABLED
 	}
 #endif
@@ -644,12 +651,12 @@ void interpretWebRC() {
 
 	// 按钮1：上锁（上升沿）
 	if (risingEdge & 0x0002) {
-		disarm();
+		disarm(DISARM_REASON_WEB_LOCK);
 	}
 
 	// 按钮2：急停（上升沿）
 	if (risingEdge & 0x0004) {
-		disarm();
+		disarm(DISARM_REASON_WEB_EMERGENCY);
 	}
 
 	// 按钮3：迫降（上升沿）；复用 RC 失联/低电时的受控下降流程。

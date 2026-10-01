@@ -113,7 +113,8 @@ void logData() {
     const uint64_t now = esp_timer_get_time();
     static bool wasArmed = false;
     portENTER_CRITICAL(&logBufferMux);
-    if (wasArmed && !armed) flightLog.trigger(FLIGHT_LOG_DISARM_REASON, now);
+    if (wasArmed && !armed) flightLog.trigger(FLIGHT_LOG_DISARM_REASON |
+        ((uint32_t)getLastDisarmReason() << FLIGHT_LOG_DISARM_CAUSE_SHIFT), now);
     wasArmed = armed;
     flightLog.tick(now);
     const bool due = flightLog.sampleDue(now);
