@@ -4,17 +4,18 @@
 #include "../stationary_imu_detector.h"
 
 static bool pushBlock(StationaryImuDetector &detector, const Vector &gyro,
-		const Vector &accel) {
+		const Vector &accel,
+		float maxGyroMean = StationaryImuDetector::MAX_GYRO_MEAN_RAD_S) {
 	StationaryImuDetector::Result result = StationaryImuDetector::WINDOW_COLLECTING;
 	Vector windowMean;
 	for (uint16_t i = 0; i < StationaryImuDetector::WINDOW_SAMPLES; ++i)
-		result = detector.update(gyro, accel, windowMean);
+		result = detector.update(gyro, accel, windowMean, maxGyroMean);
 	return result == StationaryImuDetector::STATIONARY;
 }
 
 int main() {
 	StationaryImuDetector detector;
-	const Vector stationaryGyro(0.02f, -0.01f, 0.005f);
+	const Vector stationaryGyro(0.002f, -0.001f, 0.0005f);
 	const Vector gravity(0.0f, 0.0f, StationaryImuDetector::GRAVITY_M_S2);
 	Vector windowMean;
 	for (uint16_t i = 0; i + 1 < StationaryImuDetector::WINDOW_SAMPLES; ++i)
@@ -25,8 +26,11 @@ int main() {
 	assert((windowMean - stationaryGyro).norm() < 1e-6f);
 
 	// A steady rotation is not stationary even when its variance is near zero.
-	assert(!pushBlock(detector, Vector(0.1f, 0.0f, 0.0f), gravity));
+	assert(!pushBlock(detector, Vector(0.02f, 0.0f, 0.0f), gravity));
 	assert(pushBlock(detector, stationaryGyro, gravity));
+	// Raw sensor bias can exceed the tight post-calibration gate during startup.
+	assert(pushBlock(detector, Vector(0.041f, 0.0f, 0.0f), gravity,
+		StationaryImuDetector::BOOTSTRAP_GYRO_MEAN_RAD_S));
 
 	// Reject angular vibration and translational acceleration by per-axis variance.
 	StationaryImuDetector::Result result = StationaryImuDetector::WINDOW_COLLECTING;

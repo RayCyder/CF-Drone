@@ -8,13 +8,15 @@ class StationaryImuDetector {
 public:
 	enum Result : uint8_t { WINDOW_COLLECTING, NOT_STATIONARY, STATIONARY };
 	static constexpr uint16_t WINDOW_SAMPLES = 128;
-	static constexpr float MAX_GYRO_MEAN_RAD_S = 0.05f;
+	static constexpr float MAX_GYRO_MEAN_RAD_S = 0.01f;
+	static constexpr float BOOTSTRAP_GYRO_MEAN_RAD_S = 0.05f;
 	static constexpr float MAX_GYRO_VARIANCE = 0.0001f;
 	static constexpr float MAX_ACCEL_VARIANCE = 0.01f;
 	static constexpr float GRAVITY_M_S2 = 9.80665f;
 	static constexpr float GRAVITY_TOLERANCE = 0.1f;
 
-	Result update(const Vector &gyro, const Vector &accel, Vector &windowMeanGyro) {
+	Result update(const Vector &gyro, const Vector &accel, Vector &windowMeanGyro,
+		float maxGyroMeanRadS = MAX_GYRO_MEAN_RAD_S) {
 		if (!gyro.valid() || !accel.valid()) {
 			reset();
 			return NOT_STATIONARY;
@@ -28,7 +30,7 @@ public:
 		const Vector gyroVariance = gyroM2 * invCount;
 		const Vector accelVariance = accelM2 * invCount;
 		const Vector meanAccel = accelMean;
-		const bool isStationary = gyroMean.norm() <= MAX_GYRO_MEAN_RAD_S &&
+		const bool isStationary = gyroMean.norm() <= maxGyroMeanRadS &&
 			gyroVariance.x <= MAX_GYRO_VARIANCE &&
 			gyroVariance.y <= MAX_GYRO_VARIANCE &&
 			gyroVariance.z <= MAX_GYRO_VARIANCE &&

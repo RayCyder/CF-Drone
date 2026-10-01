@@ -141,6 +141,7 @@ void readIMU() {
 void calibrateGyroOnce() {
 	static Delay landedDelay(2);
 	static StationaryImuDetector stationaryDetector;
+	static bool gyroBiasInitialized = false;
 	extern bool armed;
 	if (armed || !landed) {
 		stationaryDetector.reset();
@@ -149,7 +150,16 @@ void calibrateGyroOnce() {
 		return;
 	}
 	Vector stationaryGyroMean;
-	const StationaryImuDetector::Result stationarity = stationaryDetector.update(gyro, acc, stationaryGyroMean);
+	// Before the first calibration, the raw sensor bias can approach 0.05 rad/s
+	// on this MPU-6500, so use a wider bootstrap gate. Afterwards detect motion
+	// relative to the learned bias with a tighter limit; otherwise a slow steady
+	// rotation can be learned as bias and then subtracted from the flight rate.
+	const Vector gyroBiasResidual = gyro - gyroBias;
+	const float maxGyroMean = gyroBiasInitialized
+		? StationaryImuDetector::MAX_GYRO_MEAN_RAD_S
+		: StationaryImuDetector::BOOTSTRAP_GYRO_MEAN_RAD_S;
+	const StationaryImuDetector::Result stationarity = stationaryDetector.update(
+		gyroBiasResidual, acc, stationaryGyroMean, maxGyroMean);
 	if (stationarity == StationaryImuDetector::WINDOW_COLLECTING) return;
 	if (stationarity != StationaryImuDetector::STATIONARY) {
 		landedDelay.update(false);
@@ -158,10 +168,11 @@ void calibrateGyroOnce() {
 	}
 	if (!landedDelay.update(true)) return; // require 2 seconds of stable windows
 
-	// `gyro` is still the raw sensor reading here; bias subtraction happens
-	// immediately after this function. Update only from a complete stable window.
-	gyroBias = gyroBiasFilter.update(stationaryGyroMean,
+	// The detector returns residual rate relative to the current estimate.
+	// Integrate only the residual from a complete stationary window.
+	gyroBias = gyroBiasFilter.update(gyroBias + stationaryGyroMean,
 		StationaryImuDetector::WINDOW_SAMPLES * 0.001f, 0.001f);
+	gyroBiasInitialized = true;
 }
 
 void calibrateAccel() {
