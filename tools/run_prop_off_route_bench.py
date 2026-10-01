@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
 from capture_motor_imu import SerialConsole, preflight
-from run_attitude_calibration_bench import classify_log_gaps
+from run_attitude_calibration_bench import classify_log_gaps, download_csv_export
 
 ROOT = Path(__file__).resolve().parents[1]
 MOTORS = ('motor_fr', 'motor_fl', 'motor_rr', 'motor_rl')
@@ -290,9 +290,9 @@ def main():
                 time.sleep(0.1)
             record(stream, 'log_final', state=status)
             if status and status.get('state') == 'FROZEN':
-                for path, suffix in (('/logs.csv', 'flight-log.csv'), ('/diag/trace.csv', 'loop-trace.csv'),
-                                     ('/diag/trace/worst', 'loop-worst.json')):
-                    download(host, port, path, output.with_name(output.stem + '-' + suffix))
+                for path, suffix in (('/logs.csv', 'flight-log.csv'), ('/diag/trace.csv', 'loop-trace.csv')):
+                    download_csv_export(host, port, path, output.with_name(output.stem + '-' + suffix))
+                download(host, port, '/diag/trace/worst', output.with_name(output.stem + '-loop-worst.json'))
                 rows = list(csv.DictReader(output.with_name(output.stem + '-flight-log.csv').open()))
                 worst = json.loads(output.with_name(output.stem + '-loop-worst.json').read_text())
                 sequence_rows = [row for row in rows if row['control_source'] == '3' and row['armed'] == '1']

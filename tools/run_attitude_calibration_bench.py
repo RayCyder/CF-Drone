@@ -8,6 +8,7 @@ import argparse
 import csv
 import datetime as dt
 import http.client
+import io
 import json
 import math
 import signal
@@ -46,6 +47,62 @@ def record(stream, kind, **fields):
           'kind':kind,**fields}
     stream.write(json.dumps(item,ensure_ascii=False)+'\n')
     stream.flush()
+
+def parse_csv_export(path, data, expected_rows):
+    try:
+        text=data.decode('utf-8')
+    except UnicodeDecodeError as error:
+        raise RuntimeError(f'{path}: CSV export is not UTF-8') from error
+    if not text.strip():
+        raise RuntimeError(f'{path}: CSV export is empty')
+    for line in text.splitlines():
+        stripped=line.strip()
+        if not stripped:
+            raise RuntimeError(f'{path}: CSV export contains an empty row')
+        if stripped.startswith('#'):
+            if 'trace changed during export' in stripped:
+                raise RuntimeError(f'{path}: trace changed during export')
+            raise RuntimeError(f'{path}: CSV export contains diagnostic row: {stripped[:80]}')
+    try:
+        reader=csv.DictReader(io.StringIO(text),strict=True)
+        rows=list(reader)
+    except csv.Error as error:
+        raise RuntimeError(f'{path}: malformed CSV export') from error
+    if not reader.fieldnames or any(not field for field in reader.fieldnames):
+        raise RuntimeError(f'{path}: CSV export header is missing or malformed')
+    if not rows and (path!='/diag/trace.csv' or expected_rows!=0):
+        raise RuntimeError(f'{path}: CSV export has no data rows')
+    for index,row in enumerate(rows,1):
+        if None in row or any(value is None for value in row.values()):
+            raise RuntimeError(f'{path}: malformed CSV row {index}')
+        if all(value=='' for value in row.values()):
+            raise RuntimeError(f'{path}: empty CSV row {index}')
+    if len(rows)!=expected_rows:
+        raise RuntimeError(f'{path}: expected {expected_rows} CSV rows, got {len(rows)}')
+    return rows
+
+def download_csv_export(host, port, path, destination):
+    header={'/logs.csv':'X-Flight-Log-Rows',
+            '/diag/trace.csv':'X-Loop-Trace-Rows'}.get(path)
+    if not header:
+        raise RuntimeError(f'{path}: no CSV row-count header configured')
+    conn=http.client.HTTPConnection(host,port,timeout=15)
+    try:
+        conn.request('GET',path,headers={'Connection':'close'})
+        response=conn.getresponse()
+        data=response.read()
+        if response.status!=200:raise RuntimeError(f'{path}: HTTP {response.status}')
+        value=response.getheader(header)
+        if value is None:
+            raise RuntimeError(f'{path}: missing {header} header')
+        try:
+            expected_rows=int(value)
+        except ValueError as error:
+            raise RuntimeError(f'{path}: invalid {header} header: {value!r}') from error
+        rows=parse_csv_export(path,data,expected_rows)
+        destination.write_bytes(data)
+        return rows
+    finally:conn.close()
 
 def run_stage(token, raw, seconds, stream):
     due=begin=time.monotonic()
@@ -166,6 +223,7 @@ def main():
     armed_started=False
     loop_warning_seen=False
     run_error=None
+    postflight_error=None
     OUT.parent.mkdir(parents=True,exist_ok=True)
     def deadline(_signum,_frame): raise TimeoutError('bench run hard deadline')
     signal.signal(signal.SIGALRM,deadline)
@@ -238,15 +296,31 @@ def main():
                 record(stream,'motor_final',line=motor_line)
             if motor_line!='front-right 0 front-left 0 rear-right 0 rear-left 0':
                 raise RuntimeError('motor output is not zero after disarm')
+        except (OSError,TimeoutError,RuntimeError,ValueError) as error:
+            postflight_error=postflight_error or error
+            with OUT.open('a',encoding='utf-8') as stream:
+                record(stream,'postflight_error',phase='serial_cleanup',error=str(error))
         finally:
-            serial.close()
-        state=request('GET','/web_rc/status',timeout=2)
-        with OUT.open('a',encoding='utf-8') as stream:
-            record(stream,'final',state=state)
-        if state.get('armed') is not False or state.get('throttle') != 0:
-            raise RuntimeError('final safe state not verified')
+            try:
+                serial.close()
+            except OSError as error:
+                postflight_error=postflight_error or error
+                with OUT.open('a',encoding='utf-8') as stream:
+                    record(stream,'postflight_error',phase='serial_close',error=str(error))
+        try:
+            state=request('GET','/web_rc/status',timeout=2)
+            with OUT.open('a',encoding='utf-8') as stream:
+                record(stream,'final',state=state)
+            if state.get('armed') is not False or state.get('throttle') != 0:
+                raise RuntimeError('final safe state not verified')
+        except (OSError,TimeoutError,RuntimeError,ValueError) as error:
+            postflight_error=postflight_error or error
+            with OUT.open('a',encoding='utf-8') as stream:
+                record(stream,'postflight_error',phase='web_final',error=str(error))
     print(OUT)
     if not armed_started:
+        if postflight_error:
+            raise RuntimeError(f'postflight safe-state verification failed before arming: {postflight_error}') from postflight_error
         if run_error: raise run_error
         return
     worst=None
@@ -275,14 +349,8 @@ def main():
             saved={}
             for path,suffix in (('/logs.csv','flight-log.csv'),
                                 ('/diag/trace.csv','loop-trace.csv')):
-                conn=http.client.HTTPConnection(HOST,PORT,timeout=15)
-                try:
-                    conn.request('GET',path,headers={'Connection':'close'})
-                    response=conn.getresponse()
-                    if response.status!=200:raise RuntimeError(f'{path}: HTTP {response.status}')
-                    saved[suffix]=OUT.parent/(OUT.stem+'-'+suffix)
-                    saved[suffix].write_bytes(response.read())
-                finally:conn.close()
+                saved[suffix]=OUT.parent/(OUT.stem+'-'+suffix)
+                download_csv_export(HOST,PORT,path,saved[suffix])
             with OUT.open('a',encoding='utf-8') as stream:
                 if run_error:
                     record(stream,'aborted',reason=str(run_error),log_status=status)
@@ -298,6 +366,13 @@ def main():
         with OUT.open('a',encoding='utf-8') as stream:
             record(stream,'evidence_or_acceptance_failed',error=str(error))
         raise RuntimeError(f'post-disarm evidence/acceptance failed: {error}; preserve frozen log') from error
+    if postflight_error:
+        if run_error:
+            raise RuntimeError(f'bench stopped safely after arming: {run_error}; '
+                               f'postflight verification also failed: {postflight_error}; '
+                               'frozen evidence saved') from postflight_error
+        raise RuntimeError(f'postflight safe-state verification failed: {postflight_error}; '
+                           'frozen evidence saved') from postflight_error
     if run_error:
         raise RuntimeError(f'bench stopped safely after arming: {run_error}; frozen evidence saved') from run_error
 
