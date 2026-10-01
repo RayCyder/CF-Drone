@@ -86,6 +86,42 @@ def read_truth(path: Path) -> dict[int, tuple[float, float, float]]:
                                       float(row["yaw_deg"])) for row in rows}
 
 
+def read_capture_timing(path: Path) -> tuple[list[int], int]:
+    timestamps: list[int] = []
+    with path.open(encoding="utf-8") as stream:
+        next(stream, None)
+        for line in stream:
+            try:
+                timestamps.append(int(line.split(",", 1)[0]))
+            except ValueError:
+                continue
+    if len(timestamps) < 500:
+        raise RuntimeError(f"too few capture samples in {path}: {len(timestamps)}")
+    intervals = [((b - a) & 0xFFFFFFFF) for a, b in zip(timestamps, timestamps[1:])]
+    median_dt_us = int(statistics.median(intervals))
+    if median_dt_us <= 0:
+        raise RuntimeError(f"capture has nonpositive median sample interval: {path}")
+    return timestamps, median_dt_us
+
+
+def first_active_index(skip_start_ms: float, median_dt_us: int) -> int:
+    return 450 + round(skip_start_ms * 1000.0 / median_dt_us)
+
+
+def angle_error_deg(sample: float, truth: float) -> float:
+    return ((sample - truth + 180.0) % 360.0) - 180.0
+
+
+def truth_rmse(samples: dict[int, tuple[float, float, float]],
+               truth: dict[int, tuple[float, float, float]],
+               indices: list[int]) -> tuple[float, float, float]:
+    if not indices:
+        raise RuntimeError("no overlapping truth samples")
+    return tuple(math.sqrt(statistics.fmean(
+        angle_error_deg(samples[index][axis], truth[index][axis]) ** 2
+        for index in indices)) for axis in range(3))
+
+
 def metrics(values: list[float]) -> tuple[float, float, float]:
     return statistics.fmean(values), statistics.pstdev(values), max(values) - min(values)
 
@@ -202,12 +238,14 @@ def main() -> int:
                   "roll std/pp deg (base→candidate) | "
                   "pitch std/pp deg (base→candidate) | static-to-motor mean shift R/P deg (base→candidate)")
         for capture in captures:
+            _, median_dt_us = read_capture_timing(capture)
+            active_start_index = first_active_index(args.skip_start_ms, median_dt_us)
             for tolerance in args.raw_tolerances:
                 for weight in args.acc_weights:
                     baseline = baseline_outputs[weight][capture]
                     candidate = candidates[(tolerance, weight)][capture]
                     static_indices = [index for index in baseline if 350 <= index < 450]
-                    active_indices = [index for index in baseline if index >= 450 + round(args.skip_start_ms)]
+                    active_indices = [index for index in baseline if index >= active_start_index]
                     if len(static_indices) < 50 or len(active_indices) < 100:
                         raise RuntimeError(f"insufficient pre-roll or motor samples in {capture}")
                     base_static = [statistics.fmean(baseline[index][axis] for index in static_indices)
@@ -224,16 +262,14 @@ def main() -> int:
                               f"{base_stats[0][1]:.4f}/{base_stats[0][2]:.4f}→{candidate_stats[0][1]:.4f}/{candidate_stats[0][2]:.4f} | "
                               f"{base_stats[1][1]:.4f}/{base_stats[1][2]:.4f}→{candidate_stats[1][1]:.4f}/{candidate_stats[1][2]:.4f} | ")
                     if truth:
-                        indices = [index for index in active_indices if index >= 1000 and
-                                   index in reference and index in candidate]
-                        if not indices:
-                            raise RuntimeError(f"no overlapping truth samples in {capture}")
-                        errors = []
-                        for axis in range(3):
-                            base_sq = [(baseline[index][axis] - reference[index][axis]) ** 2 for index in indices]
-                            cand_sq = [(candidate[index][axis] - reference[index][axis]) ** 2 for index in indices]
-                            errors.append((math.sqrt(statistics.fmean(base_sq)),
-                                           math.sqrt(statistics.fmean(cand_sq))))
+                        try:
+                            rmse_indices = [index for index in active_indices if index >= 1000 and
+                                            index in reference and index in candidate]
+                            base_rmse = truth_rmse(baseline, reference, rmse_indices)
+                            cand_rmse = truth_rmse(candidate, reference, rmse_indices)
+                        except RuntimeError as error:
+                            raise RuntimeError(f"{error} in {capture}") from error
+                        errors = zip(base_rmse, cand_rmse)
                         print(prefix + " / ".join(f"{base:.4f}→{cand:.4f}" for base, cand in errors))
                     else:
                         print(prefix + f"{base_shift[0]:+.3f}/{base_shift[1]:+.3f}→"
