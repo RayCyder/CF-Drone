@@ -724,6 +724,8 @@ private:
 
 static ResponsiveWebServer responsiveWebRCServer(80);
 WebServer &webRCServer = responsiveWebRCServer; // 主服务器：80端口
+static uint32_t webRCMaxRequestUs = 0;
+static uint32_t webRCSlowRequests = 0;
 
 #if WIFI_ENABLED
 extern bool isWiFiConfigPortalActive();
@@ -1170,7 +1172,7 @@ static bool consumeWebRCWarn(char *destination, size_t capacity) {
 // ==================== 最后处理的请求上下文（供响应构造使用）====================
 // ==================== HTTP 请求处理 ====================
 
-void handleWebRCRequest() {
+static void handleWebRCRequestBody() {
     if (rejectFlightApiInConfigPortal()) return;
     if (!webRCServer.hasArg("plain")) {
         webRCServer.send(400, "application/json", "{\"e\":\"no data\"}");
@@ -1211,6 +1213,14 @@ void handleWebRCRequest() {
     } else {
         webRCServer.send(400, "application/json", "{\"e\":\"parse failed\"}");
     }
+}
+
+void handleWebRCRequest() {
+    const uint32_t startedUs = micros();
+    handleWebRCRequestBody();
+    const uint32_t elapsedUs = (uint32_t)(micros() - startedUs);
+    if (elapsedUs > webRCMaxRequestUs) webRCMaxRequestUs = elapsedUs;
+    if (elapsedUs >= 100000UL && webRCSlowRequests < UINT32_MAX) ++webRCSlowRequests;
 }
 
 // ==================== 连接状态 ====================
@@ -1964,7 +1974,7 @@ void setupWebRC() {
         wifiDisconnects = getWiFiDisconnectCount();
         wifiLastDisconnectMs = getWiFiLastDisconnectMs();
 #endif
-        char json[640];
+        char json[704];
         const char *armReason = armBlockReason();
         const bool armReady = armed || !armReason;
         snprintf(json, sizeof(json),
@@ -1974,6 +1984,7 @@ void setupWebRC() {
             "\"wifi_disconnects\":%lu,\"wifi_last_disconnect_ms\":%lu,"
             "\"stick_age_ms\":%ld,\"packet_age_ms\":%ld,\"http_idle_drops\":%lu,"
             "\"http_max_handle_us\":%lu,\"http_slow_handles\":%lu,"
+            "\"http_rc_max_request_us\":%lu,\"http_rc_slow_requests\":%lu,"
             "\"control_source\":%u,\"thrust_target\":%.3f,"
             "\"arm_ready\":%s,\"arm_reason\":\"%s\"}",
             armed ? "true" : "false",
@@ -1989,6 +2000,8 @@ void setupWebRC() {
             (unsigned long)responsiveWebRCServer.idleDropCount(),
             (unsigned long)responsiveWebRCServer.maxHandleTimeUs(),
             (unsigned long)responsiveWebRCServer.slowHandleCount(),
+            (unsigned long)webRCMaxRequestUs,
+            (unsigned long)webRCSlowRequests,
             (unsigned)getCurrentControlSource(), thrustTarget,
             armReady ? "true" : "false", armed ? "飞控已解锁" :
                 (armReason ? armReason : "当前解锁条件已满足"));
