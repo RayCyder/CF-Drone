@@ -38,6 +38,22 @@ int main() {
     traceRing.push(trace);
     assert(traceRing.copyWorst(worst) && worst.dtUs==50000 && worst.loopSequence==4000 &&
            worst.sequence==2*LOOP_TRACE_CAPACITY+8);
+
+    LoopOverrunTraceRing retained;
+    for (uint32_t i=0;i<5;++i) {
+        trace.dtUs=1000+i;
+        trace.loopSequence=5000+i;
+        retained.push(trace);
+    }
+    retained.freeze();
+    trace.dtUs=9000;
+    trace.loopSequence=6000;
+    retained.push(trace);
+    assert(retained.frozen && retained.count==5 && retained.nextSequence==5);
+    assert(retained.copy(4,trace) && trace.loopSequence==5004);
+    assert(retained.copyWorst(worst) && worst.dtUs==1004 && worst.loopSequence==5004);
+    retained.clear();
+    assert(!retained.frozen && retained.count==0 && !retained.hasWorstRecord);
 #if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
     assert(trace.imuWait.waitStartedUs==3003 && trace.imuWait.interruptCount==3 && trace.imuWait.semaphoreTimeouts==4);
 #endif

@@ -55,6 +55,7 @@ struct LoopOverrunTraceRing {
     uint32_t overwritten = 0;
     uint8_t count = 0;
     bool hasWorstRecord = false;
+    bool frozen = false;
 
     void clear() {
         // Old slots are ignored via count/sequence; do not memset the ring in
@@ -63,9 +64,13 @@ struct LoopOverrunTraceRing {
         overwritten = 0;
         count = 0;
         hasWorstRecord = false;
+        frozen = false;
     }
 
+    void freeze() { frozen = true; }
+
     void push(const LoopOverrunTrace &trace) {
+        if (frozen) return;
         if (!hasWorstRecord || trace.dtUs > worstRecord.dtUs) {
             worstRecord = trace;
             worstRecord.sequence = nextSequence;

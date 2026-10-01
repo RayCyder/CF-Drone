@@ -200,3 +200,15 @@ To distinguish late GPTimer delivery from a task delayed while blocked in `xSema
 ### Idle trace check on the gyro-bias-gate firmware (2026-10-01)
 
 After flashing the estimator's two-stage stationary gyro-bias gate, a fresh `diag brief` reported `armed=0`, healthy IMU/motors, `4,077 mV`, and no active faults. The loop-trace export returned HTTP 200 with two retained rows and zero overwrites: the `1.766 ms` boot row and a `2.180 ms` row at `17.266 s` whose `serial_input_us=1,476` coincided with the serial IMU-status query. After at least 45 seconds without serial commands, the retained trace still had exactly those two rows; no new `>1.5 ms` interval was recorded in that idle window. The worst-row endpoint still pointed to the serial-query row, not to a newer event. This is a short disarmed regression check after the estimator firmware update; the separate historical ~6,055 s event remains unreproduced and unexplained. For direct LAN trace downloads on the development host, use `curl --noproxy '*'`; the configured HTTP proxy kept the connection open after delivering the CSV and caused a false client-side timeout.
+
+### Armed-loop trace capture for the reported full-throttle stutter (2026-10-01)
+
+The user reports that a perceptible stutter remains at full throttle. The existing prop-off, full-input replay only recorded 100 Hz flight-log samples; it cannot resolve a 1 kHz loop stall, nor can software motor commands prove that a physical motor kept turning. To preserve loop evidence without adding work to the production image, `tools/build_task_trace.sh` now has an opt-in `armed-loop` build mode (`CF_DRONE_CAPTURE_ARMED_LOOP_TRACE`). It records the most recent 32 control-loop rows while armed, including stage timings. It clears that ring on arm, freezes it on the first `dt > 1.5 ms` event, or freezes the final window on disarm. Thus later serial/HTTP diagnostics cannot overwrite the armed event. The existing `>5 ms` flight-log stall trigger remains unchanged; ordinary production builds do not enable per-loop capture.
+
+The host loop-metrics suite passed with freeze/clear coverage, and the ESP32-D0WD-V3 diagnostic image compiled successfully at `1,302,523 B` flash and `124,484 B` static RAM. The image has not been flashed or exercised on hardware. Build it with:
+
+```sh
+tools/build_task_trace.sh esp32:esp32:esp32 /private/tmp/cf-drone-armed-loop-trace-build armed-loop
+```
+
+The latest post-replacement individual-motor IMU capture still shows FR as the strongest acceleration-vibration sample: its acceleration-vector standard deviation is about `1.54 m/s²` with a dominant peak near `40.6 Hz`, compared with roughly `0.26–0.72 m/s²` on the other three motor captures. This supports checking the FR arm/mount/propulsion path, but it does not isolate motor versus frame resonance, and it does not establish that FR caused the reported loaded-flight stutter. The armed-loop trace can rule in or out a coincident scheduler/control-loop pause; a loaded physical-motor diagnosis still needs synchronized RPM and supply-current/voltage evidence on a guarded thrust stand.

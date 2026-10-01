@@ -20,8 +20,12 @@ case "$trace_mode" in
         trace_defines=-DCF_DRONE_DISABLE_IPC_TRACE_HOOK
         trace_wraps=vTaskSwitchContext
         ;;
+    armed-loop)
+        trace_defines=-DCF_DRONE_CAPTURE_ARMED_LOOP_TRACE
+        trace_wraps=
+        ;;
     *)
-        echo "Usage: $0 [fqbn] [build_dir] [full|ipc-only|scheduler-only]" >&2
+        echo "Usage: $0 [fqbn] [build_dir] [full|ipc-only|scheduler-only|armed-loop]" >&2
         exit 2
         ;;
 esac
@@ -31,9 +35,17 @@ if [ ! -x "$cli" ]; then
     exit 1
 fi
 
-"$cli" compile \
-    --fqbn "$fqbn" \
-    --build-path "$build_dir" \
-    --build-property "compiler.cpp.extra_flags=-DCF_DRONE_ENABLE_TASK_SWITCH_TRACE $trace_defines" \
-    --build-property "compiler.c.elf.extra_flags=-Wl,--wrap=$trace_wraps" \
-    "$repo_dir"
+if [ -n "$trace_wraps" ]; then
+    "$cli" compile \
+        --fqbn "$fqbn" \
+        --build-path "$build_dir" \
+        --build-property "compiler.cpp.extra_flags=-DCF_DRONE_ENABLE_TASK_SWITCH_TRACE $trace_defines" \
+        --build-property "compiler.c.elf.extra_flags=-Wl,--wrap=$trace_wraps" \
+        "$repo_dir"
+else
+    "$cli" compile \
+        --fqbn "$fqbn" \
+        --build-path "$build_dir" \
+        --build-property "compiler.cpp.extra_flags=$trace_defines" \
+        "$repo_dir"
+fi

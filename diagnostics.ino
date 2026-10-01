@@ -73,6 +73,12 @@ static portMUX_TYPE loopTraceMux = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t currentLoopTraceStages[LOOP_TRACE_STAGE_COUNT] = {};
 static uint32_t previousLoopBodyStages[LOOP_TRACE_STAGE_COUNT] = {};
 static uint32_t currentLoopSequence = 0;
+#if defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
+static bool armedLoopTraceCaptureStarted = false;
+static bool loopWasArmedForTrace = false;
+static bool armedLoopTraceTriggered = false;
+extern bool armed;
+#endif
 #if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
 static ImuWaitTrace currentImuWaitTrace = {};
 #endif
@@ -201,6 +207,11 @@ void resetLoopTraceState() {
     memset(currentLoopTraceStages, 0, sizeof(currentLoopTraceStages));
     memset(previousLoopBodyStages, 0, sizeof(previousLoopBodyStages));
     currentLoopSequence = 0;
+#if defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
+    armedLoopTraceCaptureStarted = false;
+    loopWasArmedForTrace = false;
+    armedLoopTraceTriggered = false;
+#endif
 }
 
 void setLoopTimingSequence(uint32_t loopSequence) {
@@ -280,11 +291,31 @@ bool hasBlockingDiagnosticFault() {
 void recordLoopTiming(float dt) {
     const uint32_t us = loopTiming.observe(dt);
     worstLoopDt = loopTiming.maximumUs * .000001f;
+#if defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
+    if (armed && !loopWasArmedForTrace) {
+        portENTER_CRITICAL(&loopTraceMux);
+        loopTrace.clear();
+        portEXIT_CRITICAL(&loopTraceMux);
+        armedLoopTraceCaptureStarted = true;
+        armedLoopTraceTriggered = false;
+    } else if (!armed && loopWasArmedForTrace && armedLoopTraceCaptureStarted) {
+        portENTER_CRITICAL(&loopTraceMux);
+        loopTrace.freeze();
+        portEXIT_CRITICAL(&loopTraceMux);
+    }
+    loopWasArmedForTrace = armed;
+    const bool captureTrace = (armed && armedLoopTraceCaptureStarted && !armedLoopTraceTriggered) ||
+        (us > 1500 && !armedLoopTraceCaptureStarted);
+#else
+    const bool captureTrace = us > 1500;
+#endif
     if (us > 1500) {
         if (loopOverrunCount < UINT32_MAX) ++loopOverrunCount;
         lastLoopOverrunMs = millis();
         haveLoopOverrun = true;
         setDiagnosticFault(DIAG_LOOP_OVERRUN, true);
+    }
+    if (captureTrace) {
         LoopOverrunTrace trace;
         trace.uptimeMs = millis();
         trace.dtUs = us;
@@ -302,6 +333,14 @@ void recordLoopTiming(float dt) {
         trace.stageUs[LOOP_TRACE_UNACCOUNTED] = attributedUs < us ? (uint32_t)(us - attributedUs) : 0;
         portENTER_CRITICAL(&loopTraceMux);
         loopTrace.push(trace);
+#if defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
+        // Preserve the pre-trigger window and first over-budget loop. Read it
+        // after disarming so diagnostics cannot overwrite the control event.
+        if (armed && us > 1500) {
+            loopTrace.freeze();
+            armedLoopTraceTriggered = true;
+        }
+#endif
         portEXIT_CRITICAL(&loopTraceMux);
     }
 }
