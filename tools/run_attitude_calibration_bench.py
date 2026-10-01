@@ -76,7 +76,7 @@ def check_web_link(stream):
     record(stream,'web_link_preflight',samples=len(latencies),
            min_ms=round(min(latencies),1),max_ms=round(max(latencies),1))
 
-def validate_log(path, trace_path):
+def validate_log(path, trace_path, expected_missed=None):
     with path.open(newline='',encoding='utf-8') as stream:
         rows=list(csv.DictReader(stream))
     armed=[row for row in rows if row['armed']=='1']
@@ -106,6 +106,11 @@ def validate_log(path, trace_path):
                'disarmed' if previous['armed']=='0' and current['armed']=='0' else
                'transition')
         gaps[phase]+=missing
+    if gaps['armed'] or gaps['transition']:
+        raise RuntimeError(f'flight-log gaps during or near arming require review: {gaps}')
+    if expected_missed is not None and sum(gaps.values()) != expected_missed:
+        raise RuntimeError(f'flight-log missed samples cannot be fully located: '
+                           f'file={gaps}, status={expected_missed}')
     return {'rows':len(rows),'armed_rows':len(armed),'platform_rows':len(platform),
             'max_armed_dt_ms':round(max(float(row['dt_s']) for row in armed)*1000,3),
             'min_armed_voltage_v':min(float(row['battery_v']) for row in armed),
@@ -219,7 +224,8 @@ def main():
                     saved[suffix]=OUT.parent/(OUT.stem+'-'+suffix)
                     saved[suffix].write_bytes(response.read())
                 finally:conn.close()
-            summary=validate_log(saved['flight-log.csv'],saved['loop-trace.csv'])
+            summary=validate_log(saved['flight-log.csv'],saved['loop-trace.csv'],
+                                 status.get('missedSamples'))
             with OUT.open('a',encoding='utf-8') as stream:
                 record(stream,'acceptance',**summary)
             print('frozen flight log and loop trace passed acceptance:',summary)
