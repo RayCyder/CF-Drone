@@ -10,6 +10,7 @@ import csv
 import datetime as dt
 import http.client
 import json
+import math
 import signal
 import time
 from pathlib import Path
@@ -19,7 +20,13 @@ from capture_motor_imu import SerialConsole, preflight
 from run_attitude_calibration_bench import classify_log_gaps
 
 ROOT = Path(__file__).resolve().parents[1]
-PLAN = "# phase: simulated takeoff, hold, descent\n1.0 20 0 0 0\n0.8 20 0 0 0\n0.8 10 0 0 0\n"
+MOTORS = ('motor_fr', 'motor_fl', 'motor_rr', 'motor_rl')
+
+
+def build_plan(hold_duration_s, hold_throttle_pct):
+    return ("# phase: simulated takeoff, hold, descent\n"
+            f"1.0 20 0 0 0\n{hold_duration_s:.1f} {hold_throttle_pct:.0f} 0 0 0\n"
+            "0.8 10 0 0 0\n")
 
 
 def request(host, port, method, path, body=None, content_type=None, timeout=0.6):
@@ -80,9 +87,15 @@ def main():
     parser.add_argument('--url', default='http://192.168.31.189/web_rc/status')
     parser.add_argument('--serial-port', default='/dev/cu.usbserial-10')
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'data/attitude')
+    parser.add_argument('--hold-duration-s', type=float, default=0.8)
+    parser.add_argument('--hold-throttle-pct', type=float, default=20)
     parser.add_argument('--confirm-no-props-fixed', action='store_true', required=True)
     parser.add_argument('--confirm-exclusive-control', action='store_true', required=True)
     args = parser.parse_args()
+    if (not math.isfinite(args.hold_duration_s) or not 0.8 <= args.hold_duration_s <= 10.0 or
+            not math.isfinite(args.hold_throttle_pct) or not 20 <= args.hold_throttle_pct <= 30):
+        parser.error('hold duration must be 0.8–10 s and hold throttle 20–30%')
+    plan = build_plan(args.hold_duration_s, args.hold_throttle_pct)
     url = urlsplit(args.url)
     if url.scheme != 'http' or not url.hostname or url.path != '/web_rc/status' or url.query or url.fragment:
         parser.error('--url must be a plain HTTP /web_rc/status URL')
@@ -94,6 +107,7 @@ def main():
     arm_command_sent = False
     route_error = None
     landing_seen = False
+    loop_warning_seen = False
 
     def timed_request(method, path, body=None, content_type=None):
         result, elapsed_ms, timing = request(host, port, method, path, body, content_type)
@@ -138,8 +152,8 @@ def main():
             lease, _ = timed_request('POST', '/web_rc/lease', '{}', 'application/json')
             token = lease['lease']
             lease_query = '?' + urlencode({'lease': token})
-            uploaded, _ = timed_request('POST', '/route/upload' + lease_query, PLAN, 'text/plain')
-            record(stream, 'uploaded', plan=PLAN, response=uploaded)
+            uploaded, _ = timed_request('POST', '/route/upload' + lease_query, plan, 'text/plain')
+            record(stream, 'uploaded', plan=plan, response=uploaded)
             revision = uploaded.get('plan_revision')
             route, _ = timed_request('GET', '/route/status')
             if route.get('state') != 'ready' or route.get('count') != 3 or route.get('plan_revision') != revision:
@@ -149,7 +163,7 @@ def main():
             if state.get('armed') or state.get('throttle') != 0 or state.get('control_source') != 2:
                 raise RuntimeError(f'neutral route preflight failed: {state}')
 
-            signal.alarm(15)
+            signal.alarm(math.ceil(1.0 + args.hold_duration_s + 0.8 + 12))
             serial.send('arm')
             arm_command_sent = True
             time.sleep(0.2)
@@ -184,7 +198,11 @@ def main():
                     last_stick = time.monotonic()
                     state, elapsed_ms = timed_request('GET', '/web_rc/status')
                     record(stream, 'web_running', elapsed_ms=elapsed_ms, state=state)
-                    if state.get('armed') is not True or state.get('faults') != 0 or state.get('voltage', 0) < 3.5:
+                    faults = state.get('faults', 0)
+                    if faults & 0x80 and not loop_warning_seen:
+                        loop_warning_seen = True
+                        record(stream, 'loop_overrun_warning', state=state)
+                    if state.get('armed') is not True or faults & ~0x80 or state.get('voltage', 0) < 3.5:
                         raise RuntimeError(f'route safety gate failed: {state}')
                 time.sleep(0.12)
             if seen_steps != {1, 2, 3}:
@@ -233,21 +251,28 @@ def main():
                                      ('/diag/trace/worst', 'loop-worst.json')):
                     download(host, port, path, output.with_name(output.stem + '-' + suffix))
                 rows = list(csv.DictReader(output.with_name(output.stem + '-flight-log.csv').open()))
+                worst = json.loads(output.with_name(output.stem + '-loop-worst.json').read_text())
                 sequence_rows = [row for row in rows if row['control_source'] == '3' and row['armed'] == '1']
                 armed_rows = [row for row in rows if row['armed'] == '1']
                 powered_rows = {motor: sum(float(row[motor]) > 0.05 for row in sequence_rows)
-                                for motor in ('motor_fr', 'motor_fl', 'motor_rr', 'motor_rl')}
+                                for motor in MOTORS}
+                mapped_rows = sum(float(row['rc_throttle']) >= 0.15 and
+                                  float(row['thrustTarget']) >= 0.13 and
+                                  all(float(row[motor]) > 0.05 for motor in MOTORS)
+                                  for row in sequence_rows)
                 gaps = classify_log_gaps(rows)
                 record(stream, 'flight_log_summary', rows=len(rows), sequence_rows=len(sequence_rows),
-                       powered_rows=powered_rows,
+                       powered_rows=powered_rows, mapped_rows=mapped_rows,
+                       loop_warning_seen=loop_warning_seen, worst_loop_dt_us=worst.get('dt_us'),
                        max_armed_dt_ms=max((float(row['dt_s']) * 1000 for row in armed_rows), default=0),
                        missed_samples=status.get('missedSamples'), gaps=gaps)
                 total_min = sum(bounds[0] for bounds in gaps.values())
                 total_max = sum(bounds[1] for bounds in gaps.values())
                 if not route_error and (
                     not landing_seen or route.get('state') != 'complete' or len(sequence_rows) < 100 or
-                    any(count < 20 for count in powered_rows.values()) or
-                    any(int(row['fault_mask']) != 0 or float(row['dt_s']) > 0.005 or
+                    any(count < 20 for count in powered_rows.values()) or mapped_rows < 40 or
+                    not worst.get('available') or worst.get('dt_us', 0) >= 5000 or
+                    any(int(row['fault_mask']) & ~0x80 or float(row['dt_s']) > 0.005 or
                         float(row['battery_v']) < 3.5 for row in armed_rows) or
                     gaps['armed'][1] or gaps['transition'][1] or
                     not total_min <= status.get('missedSamples', -1) <= total_max):
