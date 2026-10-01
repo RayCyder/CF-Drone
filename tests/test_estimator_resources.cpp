@@ -71,9 +71,10 @@ int main() {
 	assert(fabsf(adaptiveAccelerationWeight(0.003f, cosf(radians(5.0f))) - 0.003f) < 1e-6f);
 	const float midInnovationAngle = (5.0f + ESTIMATE_ACCEL_INNOVATION_MAX_DEG) * 0.5f;
 	const float midInnovation = adaptiveAccelerationWeight(0.003f, cosf(radians(midInnovationAngle)));
-	assert(fabsf(midInnovation - 0.00175f) < 1e-6f);
-	assert(fabsf(adaptiveAccelerationWeight(0.003f, cosf(radians(ESTIMATE_ACCEL_INNOVATION_MAX_DEG))) - 0.0005f) < 1e-6f);
-	assert(fabsf(adaptiveAccelerationWeight(0.003f, cosf(radians(ESTIMATE_ACCEL_INNOVATION_MAX_DEG + 10.0f))) - 0.0005f) < 1e-7f);
+	const float minimumAdaptiveWeight = min(0.003f, ESTIMATE_ACCEL_MIN_ADAPTIVE_WEIGHT);
+	assert(fabsf(midInnovation - (0.003f + minimumAdaptiveWeight) * 0.5f) < 1e-6f);
+	assert(fabsf(adaptiveAccelerationWeight(0.003f, cosf(radians(ESTIMATE_ACCEL_INNOVATION_MAX_DEG))) - minimumAdaptiveWeight) < 1e-6f);
+	assert(fabsf(adaptiveAccelerationWeight(0.003f, cosf(radians(ESTIMATE_ACCEL_INNOVATION_MAX_DEG + 10.0f))) - minimumAdaptiveWeight) < 1e-7f);
 	assert(fabsf(adaptiveAccelerationWeight(0.0002f, cosf(radians(ESTIMATE_ACCEL_INNOVATION_MAX_DEG + 10.0f))) - 0.0002f) < 1e-7f);
 
 	const Quaternion tilted = Quaternion::fromEuler(Vector(0.1f, 0.08f, 0.0f));
