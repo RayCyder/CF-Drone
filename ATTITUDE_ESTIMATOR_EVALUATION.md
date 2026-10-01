@@ -256,6 +256,23 @@ ESP32-D0WD-V3 构建数据（含后续原始模长置信度更新）：默认固
 
 代码现以编译宏 `EST_RAW_ACCEL_NORM_TOLERANCE` 暴露该候选门限，默认值仍为 `0.10`；`0.05` 候选目标板构建额外增加约 4 B Flash，静态 RAM 无变化。候选主机回归显式设置 `EST_ACC_WEIGHT=0.0005` 和 `5%` 门限并通过六份数据，但没有板上对照或绝对姿态参考。因此这项结果只支持把候选带到受控、无桨、固定姿态的板上 A/B，不构成生产参数切换依据；默认算法和参数继续保持不变。
 
+### 目标板默认/候选参数交错采集（2026-10-01）
+
+使用同一 ESP32-D0WD-V3、拆桨固定机架、上锁状态，对 FR/FL/RL/RR 各以 30% 输出运行 3 秒并记录 1,024 帧。先用默认固件（`EST_ACC_WEIGHT=0.003`、原始容差 `10%`）采一轮，再刷入原始容差 `5%` 的实验构建、通过 CLI 将权重设为 `0.0005` 后采第二轮；两轮均在结束后确认自动停转和 `armed=0`。默认轮数据为 [FR](data/attitude/motor-fr-20261001-084937.csv)、[FL](data/attitude/motor-fl-20261001-084948.csv)、[RL](data/attitude/motor-rl-20261001-084959.csv)、[RR](data/attitude/motor-rr-20261001-085010.csv)；候选轮为 [FR](data/attitude/motor-fr-20261001-085556.csv)、[FL](data/attitude/motor-fl-20261001-085607.csv)、[RL](data/attitude/motor-rl-20261001-085617.csv)、[RR](data/attitude/motor-rr-20261001-085628.csv)。FR 已按用户说明使用更换后的电机。
+
+为了消除两次采集振动不完全一致造成的混杂，把每份原始 CSV 分别用两组估计参数离线重放。对默认固件采集的四路输入，默认配置与候选配置的 roll 标准差均值为 `0.0687°→0.0266°`，pitch 为 `0.0225°→0.0065°`；对候选固件采集的四路输入，roll 为 `0.1093°→0.0405°`，pitch 为 `0.0374°→0.0133°`。四路每一份输入的 roll 与 pitch 标准差在候选下都下降。可用下面命令重现全部交叉回放：
+
+```sh
+python3 tools/compare_estimator_replay.py \
+  data/attitude/motor-fr-20261001-084937.csv data/attitude/motor-fl-20261001-084948.csv \
+  data/attitude/motor-rl-20261001-084959.csv data/attitude/motor-rr-20261001-085010.csv \
+  data/attitude/motor-fr-20261001-085556.csv data/attitude/motor-fl-20261001-085607.csv \
+  data/attitude/motor-rl-20261001-085617.csv data/attitude/motor-rr-20261001-085628.csv \
+  --acc-weights 0.0005,0.003 --raw-tolerances 0.05,0.1
+```
+
+这是固定机架、单电机、无桨的同输入输出波动回放，没有光学/转台真值，不能证明真实姿态误差下降，也没有覆盖四电机同时运行、桨叶负载或机动加速度。两轮构建的估计阶段 EMA 都约 `90 μs`，未见候选增加循环计算负担；采集期间 `diag`/串口预检会增加 `serial_input` 工作并累计短时 `LOOP_OVERRUN`，不能将这些诊断探针引起的间隔归到估计器。实验中曾有一次 `921600 baud` 上传中断；改用 `115200 baud` 后候选及默认镜像均写入并完成哈希校验。实验结束后已恢复默认固件，重启确认 `armed=0`、`imu_ok=1`、`motor_ok=1`、`battery_v=4.08` 且 `EST_ACC_WEIGHT=0.003`。生产配置仍保持默认，候选进入多电机、独立姿态参考验证前不切换。
+
 ### Web RC 解锁与油门输入冲突检查（2026-10-01）
 
 串口报告 STA 已连接；`/web_rc/status` 连续 10 秒报告 `active=true`、零油门/零姿态输入、4.08 V、故障位 0。零油门 Web RC 解锁成功，但发送 10% 油门时状态端点很快又读到 0%，自动化监视立即请求归零并上锁，没有继续到 15%/20%。在上锁状态以相同节奏发送 10% 输入，遥测在 0% 与 10% 间交替，说明控制输入被零值更新覆盖；现有 Web RC 协议没有会话身份或控制租约，无法判定零值来自第二个客户端还是其他活动输入源。
