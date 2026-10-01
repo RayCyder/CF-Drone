@@ -10,6 +10,7 @@ using portMUX_TYPE = int;
 #include "../vector.h"
 #include "../quaternion.h"
 #include "../diagnostics.h"
+#include "../task_switch_trace_runtime.h"
 #include "../level_calibration_state.h"
 
 double t=1,controlTime=0;
@@ -55,6 +56,14 @@ unsigned flightLogTriggerCount=0;
 void triggerFlightLog(uint32_t) {++flightLogTriggerCount;}
 bool tryArmWithSystemLog();
 bool systemLogArmingBlocked(){return false;}
+uint8_t taskSwitchTraceCoreCount(){return 0;}
+void taskSwitchTraceRange(uint8_t, uint32_t &oldest, uint32_t &next, uint32_t &overwritten){
+    oldest=next=overwritten=0;
+}
+bool copyTaskSwitchTrace(uint8_t, uint32_t, TaskSwitchTraceEvent &){return false;}
+uint8_t copyTaskIpcTrace(TaskIpcTraceEvent *, uint8_t, uint32_t &overwritten){
+    overwritten=0;return 0;
+}
 void failsafe(); void interpretControls(); void controlAttitude();void controlRates();void controlTorque();
 void desaturate(float&,float&,float&,float&);
 void descend();void clearControlledLanding();bool isControlledLandingActive();
@@ -67,6 +76,7 @@ void rcLossFailsafe();void autoFailsafe();void invertedFailsafe();void batteryFa
 #include "../control.ino"
 #include "../safety.ino"
 #include "../diagnostics.ino"
+#include "../slow_loop_retention.cpp"
 bool tryArmWithSystemLog(){armed=true;return true;}
 int main(){
     armed=false; mode=STAB; controlThrottle=0;

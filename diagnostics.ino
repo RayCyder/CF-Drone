@@ -1,5 +1,7 @@
 #include <Arduino.h>
+#if defined(ESP32)
 #include <esp_attr.h>
+#endif
 #include <stddef.h>
 #include <math.h>
 #include <string.h>
@@ -208,7 +210,7 @@ void initializeSlowLoopRetention(uint32_t resetReason) {
     slowLoopRetentionInitialized = true;
     const char *integrity = priorMagic != SLOW_LOOP_RETENTION_MAGIC ? "empty" :
         slowLoopRetentionIntegrity ? "ok" : "recovered";
-    Serial.printf("SLOW_LOOP_RETENTION reset_reason=%lu integrity=%s records=%u overwritten=%lu corrupt_slots=%lu bytes=%u\n",
+    print("SLOW_LOOP_RETENTION reset_reason=%lu integrity=%s records=%u overwritten=%lu corrupt_slots=%lu bytes=%u\n",
         (unsigned long)resetReason, integrity,
         (unsigned)slowLoopRetentionStore.count, (unsigned long)slowLoopRetentionStore.overwritten,
         (unsigned long)slowLoopRetentionStore.corruptSlots,
