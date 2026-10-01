@@ -29,16 +29,18 @@ POST_REPLACEMENT_CAPTURES = (
     "data/attitude/motor-rr-20261001-081759.csv",
 )
 SHARED_HEADERS = ("quaternion.h", "vector.h", "lpf.h", "util.h")
-RAW_TOLERANCE_DECL = "const float rawNormTolerance = ONE_G * 0.1f;"
 
 
-def compile_driver(compiler: str, include_source: Path, output: Path) -> None:
+def compile_driver(compiler: str, include_source: Path, output: Path,
+                   raw_tolerance: float | None = None) -> None:
     command = [
         compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-Wno-vla",
         "-I", str(ROOT / "tests/stubs"), "-I", str(ROOT),
         f'-DESTIMATOR_SOURCE="{include_source}"',
         str(ROOT / "tests/estimator_replay_driver.cpp"), "-o", str(output),
     ]
+    if raw_tolerance is not None:
+        command.insert(-3, f"-DEST_RAW_ACCEL_NORM_TOLERANCE={raw_tolerance:.9g}f")
     subprocess.run(command, check=True)
 
 
@@ -160,15 +162,9 @@ def main() -> int:
             for weight in args.acc_weights
         }
         candidates: dict[tuple[float, float], dict[Path, dict[int, tuple[float, float, float]]]] = {}
-        current_source_text = (ROOT / "estimate.ino").read_text()
-        if current_source_text.count(RAW_TOLERANCE_DECL) != 1:
-            raise RuntimeError("could not uniquely locate the raw accelerometer norm tolerance")
         for tolerance in args.raw_tolerances:
-            candidate_source = temp_path / f"estimate_rawtol_{tolerance:.4f}.ino"
-            replacement = f"const float rawNormTolerance = ONE_G * {tolerance:.6g}f;"
-            candidate_source.write_text(current_source_text.replace(RAW_TOLERANCE_DECL, replacement))
             candidate_binary = temp_path / f"candidate_{tolerance:.4f}"
-            compile_driver(compiler, candidate_source, candidate_binary)
+            compile_driver(compiler, ROOT / "estimate.ino", candidate_binary, tolerance)
             for weight in args.acc_weights:
                 candidates[(tolerance, weight)] = {
                     capture: read_output(candidate_binary, capture, initial_attitude, weight, args.gyro_bias)

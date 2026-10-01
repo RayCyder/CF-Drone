@@ -9,6 +9,11 @@
 
 float accWeight = 0.003;
 static const float ESTIMATE_NOMINAL_DT = 0.001f;
+#ifndef EST_RAW_ACCEL_NORM_TOLERANCE
+#define EST_RAW_ACCEL_NORM_TOLERANCE 0.10f
+#endif
+static_assert(EST_RAW_ACCEL_NORM_TOLERANCE > 0.0f && EST_RAW_ACCEL_NORM_TOLERANCE <= 1.0f,
+	"EST_RAW_ACCEL_NORM_TOLERANCE must be in (0, 1]");
 
 // ============== 水平修正 P 项 ==============
 float levelWeight = 0;  // 水平修正 P 项权重（关闭，无法区分陀螺温漂与机械不对称时会起负作用）
@@ -119,7 +124,7 @@ void applyAcc() {
 		// The filtered norm protects against translational acceleration, but can
 		// hide short motor-vibration peaks. Fade gravity correction using the raw
 		// specific-force magnitude as an independent confidence signal.
-		const float rawNormTolerance = ONE_G * 0.1f;
+		const float rawNormTolerance = ONE_G * EST_RAW_ACCEL_NORM_TOLERANCE;
 		const float rawNormConfidence = constrain(1.0f - fabsf(accNorm - ONE_G) / rawNormTolerance,
 			0.0f, 1.0f);
 		correctionConfidence *= rawNormConfidence;
