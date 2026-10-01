@@ -428,6 +428,29 @@ const EXPO    = 40;   // 指数曲线 40%
 let consecutiveFails = 0; // 连续失败计数，>=3 才判定断连
 let currentFlightMode = 2; // 当前飞行模式编号（与后端同步：2=自稳）
 let currentArmed = false;
+let armedStatusKnown = false;
+// 解锁时不从遥控页面发送配置、控制台或诊断请求，给飞行指令让路。
+// 保留飞行控制、失控处置以及这些流程所需的简短状态请求。
+const flightRequestPaths = new Set([
+  '/web_rc', '/web_rc/heartbeat', '/web_rc/lease', '/web_rc/status',
+  '/route/start', '/route/stop', '/route/takeover', '/route/status',
+  '/descent-calibration/start', '/descent-calibration/stop', '/descent-calibration/status',
+  '/console/disable'
+]);
+const nativeFetch = window.fetch.bind(window);
+window.fetch = (input, options) => {
+  const path = typeof input === 'string' ? input.split('?')[0] : new URL(input.url).pathname;
+  if ((!armedStatusKnown || currentArmed) && !flightRequestPaths.has(path))
+    return Promise.reject(new Error('飞控已解锁，非飞行请求已暂停'));
+  return nativeFetch(input, options);
+};
+document.addEventListener('click', event => {
+  const link = event.target.closest('a[href]');
+  if ((!armedStatusKnown || currentArmed) && link && ['/wifi', '/telemetry'].includes(new URL(link.href).pathname)) {
+    event.preventDefault();
+    showToast('请先上锁后打开配置或日志页面');
+  }
+}, true);
 let webRCLeaseToken = '';
 let webRCLeasePromise = null;
 let webRCLeaseBlocked = false;
@@ -439,6 +462,12 @@ let consolePollingTimer = null;
 let consoleLastTotal    = 0;   // 增量拉取游标：已展示到第 N 行
 let consoleFetchInFlight = false; // 防并发：上次 fetch 未返回时跳过本次
 let consolePanelOpen = false;
+function setArmedState(armed) {
+  const wasArmed = currentArmed;
+  currentArmed = !!armed;
+  armedStatusKnown = true;
+  if (currentArmed && !wasArmed && consolePanelOpen) toggleConsole();
+}
 let selfCheckOpen = false;
 let selfCheckRequestSequence = 0;
 let selfCheckHasData = false;
@@ -797,7 +826,7 @@ async function refreshRouteStatus(){
   try{
     const response=await fetch('/route/status',{cache:'no-store'});if(!response.ok)throw new Error('状态不可用');
     const data=await response.json();routeServerState=data.state;
-    if(data.arm!==undefined)currentArmed=!!data.arm;
+    if(data.arm!==undefined)setArmedState(data.arm);
     if(data.mode!==undefined){currentFlightMode=data.mode;document.getElementById('flight-mode').textContent=['直控','特技','自稳','不支持','自动'][data.mode]||'未知';}
     flightRouteRunning=data.state==='running'||data.state==='start_pending';routeHold=flightRouteRunning||data.state==='landing';
     if(routeUploadedRevision&&data.plan_revision!==routeUploadedRevision){routeUploadedRevision=0;routeUploadedText=null;routeMessage('飞控中的序列已改变，请上锁后重新上传当前内容。');}
@@ -1095,7 +1124,7 @@ function sendToESP(url, data) {
 
       // ARM 状态更新（所有响应都同步显示）
       if (resp.arm !== undefined && resp.rt !== 2) {
-        currentArmed = !!resp.arm;
+        setArmedState(resp.arm);
         const el   = document.getElementById('armed-status');
         const item = document.getElementById('armed-status-item');
         el.textContent = resp.arm ? '已解锁' : '已上锁';
@@ -1183,6 +1212,7 @@ function loadSelfCheckStatus(showLoading) {
   }).then(data => {
     if (requestId !== selfCheckRequestSequence) return;
     if (typeof data.faults !== 'number') throw new Error('diagnostics unsupported');
+    if (typeof data.armed === 'boolean') setArmedState(data.armed);
     selfCheckHasData = true;
     renderSelfCheckStatus(data);
     if (data.voltage !== undefined && data.voltage > 0.5)
@@ -1288,6 +1318,7 @@ function showSelfCheckUnavailable() {
 
 function updateConnectionStatus(connected) {
   connectionOk = connected;
+  if (!connected) armedStatusKnown = false;
   const dot  = document.getElementById('status-dot');
   const text = document.getElementById('connection-text');
   if (connected) { dot.className='status-dot connected'; text.textContent='已连接'; text.style.color='#0f8'; }
@@ -1361,6 +1392,7 @@ function toggleConsole() {
   const panel = document.getElementById('console-panel');
   const btn   = document.getElementById('btn-5');
   const open  = panel.style.display === 'none';
+  if (open && (!armedStatusKnown || currentArmed)) { showToast('请确认飞控已上锁后打开调试控制台'); return; }
   consolePanelOpen = open;
   panel.style.display = open ? 'flex' : 'none';
   if (open) { panel.style.flexDirection = 'column'; }
