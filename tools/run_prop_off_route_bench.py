@@ -89,6 +89,8 @@ def main():
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'data/attitude')
     parser.add_argument('--hold-duration-s', type=float, default=0.8)
     parser.add_argument('--hold-throttle-pct', type=float, default=20)
+    parser.add_argument('--capture-web-attitude', action='store_true',
+                        help='record one bounded read-only attitude snapshot per second')
     parser.add_argument('--confirm-no-props-fixed', action='store_true', required=True)
     parser.add_argument('--confirm-exclusive-control', action='store_true', required=True)
     args = parser.parse_args()
@@ -178,6 +180,8 @@ def main():
                 raise RuntimeError(f'route start rejected: {started}')
 
             last_stick = time.monotonic()
+            last_attitude_request = time.monotonic()
+            route_started_at = last_attitude_request
             seen_steps = set()
             while True:
                 route, elapsed_ms = timed_request('GET', '/route/status')
@@ -204,6 +208,17 @@ def main():
                         record(stream, 'loop_overrun_warning', state=state)
                     if state.get('armed') is not True or faults & ~0x80 or state.get('voltage', 0) < 3.5:
                         raise RuntimeError(f'route safety gate failed: {state}')
+                if args.capture_web_attitude and time.monotonic() - last_attitude_request >= 1.0:
+                    last_attitude_request = time.monotonic()
+                    try:
+                        attitude, elapsed_ms, timing = request(host, port, 'GET',
+                            '/level-calibration/status', timeout=0.25)
+                        record(stream, 'attitude_sample', elapsed_s=round(time.monotonic()-route_started_at, 3),
+                               roll_deg=attitude.get('roll_deg'), pitch_deg=attitude.get('pitch_deg'),
+                               armed=attitude.get('armed'), step=route.get('step'), elapsed_ms=elapsed_ms,
+                               **timing)
+                    except (OSError, TimeoutError, RuntimeError, ValueError) as error:
+                        record(stream, 'attitude_sample_unavailable', error=str(error))
                 time.sleep(0.12)
             if seen_steps != {1, 2, 3}:
                 raise RuntimeError(f'not all three route steps observed: {sorted(seen_steps)}')
