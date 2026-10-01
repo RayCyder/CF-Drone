@@ -377,6 +377,37 @@ python3 tools/compare_estimator_replay.py data/attitude/motor-*-20261001-*.csv \
 
 这项限幅修复了已知长 `dt` 下单样本过度修正的问题，但不会恢复停顿期间丢失的采样。加速度权重候选 `0.0005/5%` 仍需要独立姿态真值验证；其固定机架回放结果不足以支持替换生产参数。
 
+### 确定性合成姿态真值下的权重与 VQF 比较
+
+新增 [generate_synthetic_imu.py](tools/generate_synthetic_imu.py)，以 1 kHz 生成匹配的六轴 IMU CSV 与姿态真值 CSV；`compare_vqf_replay.py` 现在可用 `--truth-csv` 计算 VQF 和当前算法的横滚、俯仰、航向 RMSE，并从真值首帧初始化姿态。共比较六条 15 秒轨迹：同一组正弦姿态运动、不同随机噪声种子、`0–0.30g` 低频平动加速度、`0–0.70 m/s²` 的 179–193 Hz 振动；陀螺固定偏置为 `(0.002, -0.001, 0.0015) rad/s`。这是确定性算法仿真，不是飞行实测，也未建模饱和、安装误差或真实机架振型。
+
+六条轨迹等权平均 RMSE 如下，单位为度：
+
+| 算法设置 | Roll | Pitch | Yaw |
+|---|---:|---:|---:|
+| 当前互补算法 `0.003/10%` | 4.524 | 2.808 | 1.468 |
+| 当前互补算法 `0.003/5%` | 4.187 | 2.220 | 1.225 |
+| 当前互补算法 `0.0005/5%` | 1.277 | 0.748 | 0.853 |
+| VQF 6D，`tauAcc=3 s` | 2.300 | 1.993 | 1.364 |
+
+总体平均值掩盖了条件差异：在无平动或只有高频振动的两条动态轨迹中，`0.0005/5%` 明显比当前 `0.003/10%` 更差；平动加速度增大后，降低权重和收紧门限通常会减少由错误重力方向造成的误差。VQF 的短时间常数在无平动轨迹中更好，`3 s` 常数在部分平动轨迹中明显更好，但仍不是所有轴、所有场景都优于互补算法。航向没有磁力计观测，结果主要反映陀螺偏置和姿态耦合，不能视作绝对航向校准。
+
+这批有真值仿真验证了“单一固定加速度权重存在低动态加速度下陀螺偏置抑制与机动加速度误修正之间的权衡”，但其场景分布和参数属于人工设定。因此生产参数仍保持 `0.003/10%`，也不切换 VQF；下一步应基于有外部角度基准的台架运动数据，或更接近真实推力和振动的重复数据，验证是否采用基于创新量的自适应重力置信度。
+
+复现示例：
+
+```sh
+python3 tools/generate_synthetic_imu.py /tmp/cf-drone-sim/translation-012g \
+  --duration 15 --seed 434 --translation-g 0.12 --vibration 0.45 --gyro-noise 0.004
+python3 tools/compare_estimator_replay.py /tmp/cf-drone-sim/translation-012g-imu.csv \
+  --baseline-ref 1669106 --raw-tolerances 0.05,0.075,0.1 \
+  --acc-weights 0.0005,0.001,0.003 \
+  --truth-csv /tmp/cf-drone-sim/translation-012g-truth.csv
+python3 tools/compare_vqf_replay.py /tmp/cf-drone-sim/translation-012g-imu.csv \
+  --truth-csv /tmp/cf-drone-sim/translation-012g-truth.csv \
+  --tau-acc 0.5 --tau-acc 1 --tau-acc 3
+```
+
 ### 轻量串口预检与循环污染复测
 
 最近 trace 中，完整 `diag` 命令的 `serial_input_us` 多次达到 `1.3–1.6 ms`，并伴随约 `2.0–2.2 ms` 的循环间隔。电机采集脚本的预检只需判断 armed、IMU/电机初始化、电池电压和阻塞故障位，因此新增 `diag brief`，以单条整数摘要 `PREFLIGHT armed=… imu_ok=… motor_ok=… battery_mv=… faults=…` 回复；`tools/capture_motor_imu.py` 的预检已切换到此命令。目标板验证输出 `armed=0 imu_ok=1 motor_ok=1 battery_mv=4077 faults=0`。随后的 trace 中该命令对应 `serial_input_us=63`；同一记录 `dt_us=1680`，主要耗时在 `imu_wait_us=1009`，不再是串口摘要格式化。当前板端镜像 SHA-256：`11701d593d9f4b1bbd4a9613057e7d987690328e80e6cf4fb00bac99b4a46c28`。该单次读数确认 CLI 工作量明显下降，但不能代表常态循环统计，也不能用于归因历史数秒级卡顿。

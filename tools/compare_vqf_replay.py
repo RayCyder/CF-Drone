@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import math
 import shutil
 import statistics
@@ -55,9 +56,11 @@ def read_capture_timing(path: Path) -> tuple[list[int], int]:
     return timestamps, median_dt_us
 
 
-def run_driver(binary: Path, capture: Path, acc_weight: float) -> dict[int, tuple[float, float, float]]:
+def run_driver(binary: Path, capture: Path, acc_weight: float,
+               initial_attitude: tuple[float, float, float] = (0.0, 0.0, 0.0)) -> dict[int, tuple[float, float, float]]:
     result = subprocess.run(
-        [str(binary), str(capture), "0", "0", "0", str(acc_weight), "0", "0", "0"],
+        [str(binary), str(capture), *(str(value) for value in initial_attitude),
+         str(acc_weight), "0", "0", "0"],
         check=True, capture_output=True, text=True,
     )
     samples: dict[int, tuple[float, float, float]] = {}
@@ -65,6 +68,26 @@ def run_driver(binary: Path, capture: Path, acc_weight: float) -> dict[int, tupl
         index, roll, pitch, yaw = line.split(",")
         samples[int(index)] = (float(roll), float(pitch), float(yaw))
     return samples
+
+
+def read_truth(path: Path) -> dict[int, tuple[float, float, float]]:
+    with path.open(newline="", encoding="utf-8") as stream:
+        rows = csv.DictReader(stream)
+        truth = {int(row["sample"]): (float(row["roll_deg"]), float(row["pitch_deg"]),
+                                       float(row["yaw_deg"])) for row in rows}
+    if not truth or any(not math.isfinite(value) for sample in truth.values() for value in sample):
+        raise ValueError(f"truth CSV contains no finite samples: {path}")
+    return truth
+
+
+def truth_rmse(samples: dict[int, tuple[float, float, float]],
+               truth: dict[int, tuple[float, float, float]], first_index: int) -> tuple[float, float, float]:
+    indices = [index for index in samples if index >= max(1000, first_index) and index in truth]
+    if len(indices) < 100:
+        raise RuntimeError("insufficient overlapping samples for truth comparison")
+    return tuple(math.sqrt(statistics.fmean(
+        (((samples[i][axis] - truth[i][axis] + 180.0) % 360.0) - 180.0) ** 2
+        for i in indices)) for axis in range(3))
 
 
 def axis_summary(samples: dict[int, tuple[float, float, float]], axis: int,
@@ -87,6 +110,8 @@ def main() -> int:
                         help="VQF acceleration correction time constant in seconds; repeat to compare values (default: 3.0)")
     parser.add_argument("--min-confidence", type=float, action="append", dest="confidence_thresholds",
                         help="minimum accelerometer confidence required for a VQF update; repeat to compare values (default: 0.0)")
+    parser.add_argument("--truth-csv", type=Path,
+                        help="optional sample,roll_deg,pitch_deg,yaw_deg reference for synthetic traces")
     args = parser.parse_args()
     if not math.isfinite(args.acc_weight) or not 0.0 <= args.acc_weight <= 1.0:
         parser.error("--acc-weight must be finite and in [0, 1]")
@@ -101,6 +126,10 @@ def main() -> int:
     for capture in captures:
         if not capture.is_file():
             raise SystemExit(f"capture not found: {capture}")
+    truth_path = args.truth_csv.resolve() if args.truth_csv else None
+    if truth_path and not truth_path.is_file():
+        parser.error(f"truth CSV not found: {truth_path}")
+    truth = read_truth(truth_path) if truth_path else None
     tau_acc_values = args.tau_acc_values or [3.0]
     if any(not math.isfinite(value) or value <= 0.0 for value in tau_acc_values):
         parser.error("--tau-acc values must be finite and greater than zero")
@@ -128,21 +157,27 @@ def main() -> int:
                 compile_driver(compiler, vqf_bin, vqf=True, tau_acc=tau_acc,
                                estimator_source=estimator_source)
                 vqf_bins.append((tau_acc, threshold, vqf_bin))
-        print("Capture | estimator | roll mean/std/pp (deg) | pitch mean/std/pp (deg)")
+        print("Capture | estimator | roll mean/std/pp (deg) | pitch mean/std/pp (deg)" +
+              (" | RMSE roll/pitch/yaw (deg)" if truth else ""))
         for capture in captures:
             _, median_dt_us = read_capture_timing(capture)
             first_index = 450 + round(args.skip_start_ms * 1000.0 / median_dt_us)
-            current = run_driver(current_bin, capture, args.acc_weight)
+            initial_attitude = truth[min(truth)] if truth else (0.0, 0.0, 0.0)
+            current = run_driver(current_bin, capture, args.acc_weight, initial_attitude)
             outputs = [("current", current)]
             outputs.extend((f"VQF 6D tauAcc={tau_acc:g}s minConf>{threshold:g}",
-                            run_driver(vqf_bin, capture, args.acc_weight))
+                            run_driver(vqf_bin, capture, args.acc_weight, initial_attitude))
                            for tau_acc, threshold, vqf_bin in vqf_bins)
             for name, samples in outputs:
                 roll = axis_summary(samples, 0, first_index)
                 pitch = axis_summary(samples, 1, first_index)
-                print(f"{capture.name} | {name} | "
-                      f"{roll[0]:+.4f}/{roll[1]:.4f}/{roll[2]:.4f} | "
-                      f"{pitch[0]:+.4f}/{pitch[1]:.4f}/{pitch[2]:.4f}")
+                row = (f"{capture.name} | {name} | "
+                       f"{roll[0]:+.4f}/{roll[1]:.4f}/{roll[2]:.4f} | "
+                       f"{pitch[0]:+.4f}/{pitch[1]:.4f}/{pitch[2]:.4f}")
+                if truth:
+                    row += " | " + "/".join(f"{value:.4f}" for value in
+                                              truth_rmse(samples, truth, first_index))
+                print(row)
     return 0
 
 
