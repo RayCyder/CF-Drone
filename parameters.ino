@@ -560,10 +560,73 @@ bool isParameterDirty(const char *name) {
 	return dirty;
 }
 
+static bool isLevelRotationPairParameter(const char *name) {
+	return !strcmp(name, "IMU_ROT_ROLL") || !strcmp(name, "IMU_ROT_PITCH");
+}
+
+static bool persistDirtyLevelRotationPairInBatch() {
+	float oldRoll = NAN, oldPitch = NAN, newRoll = NAN, newPitch = NAN;
+	bool rollDirty = false, pitchDirty = false;
+	portENTER_CRITICAL(&parameterMux);
+	for (auto &parameter : parameters) {
+		if (!strcmp(parameter.name, "IMU_ROT_ROLL")) {
+			oldRoll = parameter.cache;
+			newRoll = parameter.getValue();
+			rollDirty = parameter.dirty;
+		} else if (!strcmp(parameter.name, "IMU_ROT_PITCH")) {
+			oldPitch = parameter.cache;
+			newPitch = parameter.getValue();
+			pitchDirty = parameter.dirty;
+		}
+	}
+	portEXIT_CRITICAL(&parameterMux);
+	if (!rollDirty && !pitchDirty) return false;
+	if (levelRotationRecoveryRequired ||
+		!validParameterValue("IMU_ROT_ROLL", false, newRoll) ||
+		!validParameterValue("IMU_ROT_PITCH", false, newPitch)) return false;
+
+	const level_rotation::CommitResult result = level_rotation::commit(storage, oldRoll, oldPitch, newRoll, newPitch);
+	if (!result.success) {
+		levelRotationRecoveryRequired = result.recoveryRequired;
+		setDiagnosticFault(DIAG_PARAMETER, !allParametersValid());
+		return false;
+	}
+
+	portENTER_CRITICAL(&parameterMux);
+	for (auto &parameter : parameters) {
+		if (!strcmp(parameter.name, "IMU_ROT_ROLL")) {
+			const bool wasDirty = parameter.dirty;
+			parameter.cache = newRoll;
+			const float current = parameter.getValue();
+			const bool nowDirty = current != parameter.cache &&
+				!(isnan(current) && isnan(parameter.cache));
+			if (wasDirty != nowDirty) {
+				if (nowDirty) ++dirtyParameterCount;
+				else if (dirtyParameterCount) --dirtyParameterCount;
+				parameter.dirty = nowDirty;
+			}
+		} else if (!strcmp(parameter.name, "IMU_ROT_PITCH")) {
+			const bool wasDirty = parameter.dirty;
+			parameter.cache = newPitch;
+			const float current = parameter.getValue();
+			const bool nowDirty = current != parameter.cache &&
+				!(isnan(current) && isnan(parameter.cache));
+			if (wasDirty != nowDirty) {
+				if (nowDirty) ++dirtyParameterCount;
+				else if (dirtyParameterCount) --dirtyParameterCount;
+				parameter.dirty = nowDirty;
+			}
+		}
+	}
+	portEXIT_CRITICAL(&parameterMux);
+	return true;
+}
+
 bool persistDirtyParametersInBatch() {
 	if (!parameterStorageReady) return false;
-	bool wroteAny = false;
+	bool wroteAny = persistDirtyLevelRotationPairInBatch();
 	for (auto &parameter : parameters) {
+		if (isLevelRotationPairParameter(parameter.name)) continue;
 		float value, cached;
 		bool dirty;
 		portENTER_CRITICAL(&parameterMux);
