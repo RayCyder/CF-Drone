@@ -6,7 +6,7 @@
 constexpr uint8_t LOOP_TRACE_STAGE_COUNT = 16;
 #if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
 // Reserve one former ring slot for the separately retained peak record.
-constexpr uint8_t LOOP_TRACE_CAPACITY = 19;
+constexpr uint8_t LOOP_TRACE_CAPACITY = 18;
 #else
 constexpr uint8_t LOOP_TRACE_CAPACITY = 32;
 #endif

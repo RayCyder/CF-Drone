@@ -1464,6 +1464,7 @@ void setupWebRC() {
         client.print(",imu_wait_start_us,imu_wait_end_us,imu_irq_count_delta,imu_last_irq_us");
         client.print(",imu_sem_takes,imu_sem_timeouts,imu_read_attempts,imu_read_ready");
         client.print(",imu_read_total_us,imu_read_max_us,imu_interrupt_source,imu_wait_result");
+        client.print(",imu_sem_wait_max_us");
 #endif
         client.print("\n");
 
@@ -1488,7 +1489,7 @@ void setupWebRC() {
             if (used > 0 && used < (int)sizeof(line)) {
                 const ImuWaitTrace &imuWait = trace.imuWait;
                 const int added = snprintf(line + used, sizeof(line) - (size_t)used,
-                    ",%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%u,%u",
+                    ",%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%u,%u,%u",
                     (unsigned long)imuWait.waitStartedUs,
                     (unsigned long)imuWait.waitEndedUs,
                     (unsigned long)imuWait.interruptCount,
@@ -1500,7 +1501,8 @@ void setupWebRC() {
                     (unsigned long)imuWait.readTotalUs,
                     (unsigned long)imuWait.readMaxUs,
                     (unsigned)imuWait.interruptSource,
-                    (unsigned)imuWait.result);
+                    (unsigned)imuWait.result,
+                    (unsigned)imuWait.semaphoreWaitMaxUs);
                 if (added < 0 || added >= (int)(sizeof(line) - (size_t)used)) used = -1;
                 else used += added;
             }
@@ -1546,13 +1548,14 @@ void setupWebRC() {
 #if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
         const ImuWaitTrace &imuWait = trace.imuWait;
         const int imuAdded = snprintf(json + used, sizeof(json) - (size_t)used,
-            ",\"imu_wait\":[%lu,%lu,%u,%lu,%u,%u,%u,%u,%u,%u,%u,%u]",
+            ",\"imu_wait\":[%lu,%lu,%u,%lu,%u,%u,%u,%u,%u,%u,%u,%u,%u]",
             (unsigned long)imuWait.waitStartedUs, (unsigned long)imuWait.waitEndedUs,
             (unsigned)imuWait.interruptCount, (unsigned long)imuWait.lastInterruptUs,
             (unsigned)imuWait.semaphoreTakes, (unsigned)imuWait.semaphoreTimeouts,
             (unsigned)imuWait.readAttempts, (unsigned)imuWait.readyReads,
             (unsigned)imuWait.readTotalUs, (unsigned)imuWait.readMaxUs,
-            (unsigned)imuWait.interruptSource, (unsigned)imuWait.result);
+            (unsigned)imuWait.interruptSource, (unsigned)imuWait.result,
+            (unsigned)imuWait.semaphoreWaitMaxUs);
         if (imuAdded < 0 || imuAdded >= (int)(sizeof(json) - (size_t)used)) {
             webRCServer.send(500, "application/json", "{\"error\":\"trace serialization failed\"}");
             return;

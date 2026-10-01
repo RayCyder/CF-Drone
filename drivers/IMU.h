@@ -125,7 +125,15 @@ private:
 				if (elapsedUs >= timeoutUs) break;
 				const uint32_t remaining = (timeoutUs - elapsedUs + 999UL) / 1000UL;
 				++diagnosticLastWait_.semaphoreTakes;
-				if (xSemaphoreTake(interruptSemaphore, pdMS_TO_TICKS(remaining)) != pdTRUE) {
+				const uint32_t semaphoreWaitStartedUs = (uint32_t)micros();
+				const BaseType_t semaphoreTaken = xSemaphoreTake(
+					interruptSemaphore, pdMS_TO_TICKS(remaining));
+				const uint32_t semaphoreWaitEndedUs = (uint32_t)micros();
+				const uint32_t semaphoreWaitUs = semaphoreWaitEndedUs - semaphoreWaitStartedUs;
+				if (semaphoreWaitUs > diagnosticLastWait_.semaphoreWaitMaxUs)
+					diagnosticLastWait_.semaphoreWaitMaxUs = semaphoreWaitUs > UINT16_MAX ?
+						UINT16_MAX : (uint16_t)semaphoreWaitUs;
+				if (semaphoreTaken != pdTRUE) {
 					++diagnosticLastWait_.semaphoreTimeouts;
 					break;
 				}

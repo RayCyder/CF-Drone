@@ -15,6 +15,7 @@ struct ImuWaitTrace {
 	uint16_t interruptCount = 0;
 	uint16_t semaphoreTakes = 0;
 	uint16_t semaphoreTimeouts = 0;
+	uint16_t semaphoreWaitMaxUs = 0;
 	uint16_t readAttempts = 0;
 	uint16_t readyReads = 0;
 	uint16_t readTotalUs = 0;
