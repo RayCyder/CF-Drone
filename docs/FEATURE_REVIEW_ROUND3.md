@@ -39,6 +39,7 @@
 - 核对 9 组恰好覆盖 `4478626` 祖先中的 235 个非合并提交，无重复、遗漏或额外提交。
 - 当前工作树起初因新增钩子缺失主机桩而无法链接；`aea217b` 后 `python3 tests/run_host_tests.py` 通过。`python3 tests/test_compare_estimator_replay.py` 的 4 个用例通过。
 - 水平校准修复后再次运行 `python3 tests/run_host_tests.py` 全部通过；`web_rc_html.h` 提取的脚本经 `node --check` 通过；ESP32 生产构建 Flash 1,326,627 B、RAM 124,484 B，`git diff --check` 通过。两个独立代码复核均未发现修复后剩余 P1/P2。
+- 从已提交的 `a77b9c5` 工作树重建 ESP32 镜像并刷写先前获授权的 `/dev/cu.usbserial-10`（MAC `20:50:0d:33:58:40`）；esptool 应用区写后哈希验证通过。复位后只读 `diag brief` 返回 `PREFLIGHT armed=0 imu_ok=1 motor_ok=1 battery_mv=4077 faults=0x00000000`，未执行解锁或电机操作。
 - 从已提交的 `3aa671b` 快照执行全量 C++ 主机回归通过；三个生产构建均通过：ESP32 Flash 1,314,179 B、RAM 124,348 B；ESP32-S3 Flash 1,295,476 B、RAM 124,156 B；ESP32-C3 Flash 530,120 B、RAM 71,820 B。
 - 用户此前明确允许向该 USB 设备刷写。`3aa671b` 的干净已提交 ESP32 生产镜像经 esptool `--no-stub` 以 115200 baud 写入 `/dev/cu.usbserial-10`，应用区写后哈希通过并由 RTS 复位。只读串口 `diag brief` 返回 `PREFLIGHT armed=0 imu_ok=1 motor_ok=1 battery_mv=4077 faults=0x00000000`。没有解锁或驱动电机。
 - 拆桨台架的实际 PWM/传感器故障注入、网络中断和飞行验收不由主机测试或编译替代。
