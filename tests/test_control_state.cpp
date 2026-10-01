@@ -42,7 +42,9 @@ void printInvalidParameterValues(){}
 void print(const char*,...) {}
 bool batteryBlocksArming(){return false;}
 bool isAccelCalibrationActive(){return false;}
-bool isLevelCalibrationActive(){return false;}
+bool levelCalibrationActive=false,parameterWritePending=false;
+bool isLevelCalibrationActive(){return levelCalibrationActive;}
+bool parameterPersistencePending(){return parameterWritePending;}
 void sendMotors() {}
 bool motorsActive(){for(float m:motors)if(m!=0)return true;return false;}
 unsigned systemEventCount=0;
@@ -65,6 +67,13 @@ void rcLossFailsafe();void autoFailsafe();void invertedFailsafe();void batteryFa
 #include "../diagnostics.ino"
 bool tryArmWithSystemLog(){armed=true;return true;}
 int main(){
+    armed=false; mode=STAB; controlThrottle=0;
+    levelCalibrationActive=true;
+    assert(!requestArm());
+    levelCalibrationActive=false;
+    parameterWritePending=true;
+    assert(!requestArm());
+    parameterWritePending=false;
     armed=true; mode=STAB; controlMode=0; controlThrottle=.7625f;
     control(); // establish the existing RC selector before entering LAND
     const Quaternion savedAttitudeTarget = attitudeTarget;

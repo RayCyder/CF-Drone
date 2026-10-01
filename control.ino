@@ -10,6 +10,7 @@
 #include "control.h"
 
 extern bool isLevelCalibrationActive();
+extern bool parameterPersistencePending();
 
 // 参数适配118mm轴距的微型四轴飞行器
 // ============== 角速率环（内环）参数 ==============
@@ -392,6 +393,7 @@ const char* armBlockReason() {
 	if (!imuOK) return "IMU 未就绪";
 	if (batteryBlocksArming()) return "电池电压低于解锁门槛 3.5 V";
 	if (hasBlockingDiagnosticFault()) return "存在阻止解锁的诊断故障，请查看 diag";
+	if (parameterPersistencePending()) return "参数尚未写入闪存，暂不可解锁";
 	if (systemLogArmingBlocked()) return "系统日志或参数正在写入，或写入后保护等待尚未结束";
 	return nullptr;
 }
