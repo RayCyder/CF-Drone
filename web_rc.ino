@@ -458,6 +458,8 @@ public:
     explicit ResponsiveWebServer(int port) : WebServer(port) {}
 
     uint32_t idleDropCount() const { return idleDrops; }
+    uint32_t maxHandleTimeUs() const { return maxHandleUs; }
+    uint32_t slowHandleCount() const { return slowHandles; }
 
     void handleClient() override {
         // WebServer serves one client at a time and otherwise waits 5 s for an
@@ -470,11 +472,17 @@ public:
             _currentStatus = HC_NONE;
             if (idleDrops < UINT32_MAX) ++idleDrops;
         }
+        const uint32_t startedUs = micros();
         WebServer::handleClient();
+        const uint32_t elapsedUs = (uint32_t)(micros() - startedUs);
+        if (elapsedUs > maxHandleUs) maxHandleUs = elapsedUs;
+        if (elapsedUs >= 100000UL && slowHandles < UINT32_MAX) ++slowHandles;
     }
 
 private:
     uint32_t idleDrops = 0;
+    uint32_t maxHandleUs = 0;
+    uint32_t slowHandles = 0;
 };
 
 static ResponsiveWebServer responsiveWebRCServer(80);
@@ -1470,6 +1478,7 @@ void setupWebRC() {
             "\"faults\":%lu,\"uptime_ms\":%lu,\"wifi_connected\":%s,"
             "\"wifi_disconnects\":%lu,\"wifi_last_disconnect_ms\":%lu,"
             "\"stick_age_ms\":%ld,\"packet_age_ms\":%ld,\"http_idle_drops\":%lu,"
+            "\"http_max_handle_us\":%lu,\"http_slow_handles\":%lu,"
             "\"control_source\":%u,\"thrust_target\":%.3f,"
             "\"arm_ready\":%s,\"arm_reason\":\"%s\"}",
             armed ? "true" : "false",
@@ -1483,6 +1492,8 @@ void setupWebRC() {
             stickUpdated ? (long)(now - lastStickUpdate) : -1L,
             updated ? (long)(now - lastUpdate) : -1L,
             (unsigned long)responsiveWebRCServer.idleDropCount(),
+            (unsigned long)responsiveWebRCServer.maxHandleTimeUs(),
+            (unsigned long)responsiveWebRCServer.slowHandleCount(),
             (unsigned)getCurrentControlSource(), thrustTarget,
             armReason ? "false" : "true", armReason ? armReason : "当前解锁条件已满足");
         webRCServer.send(200, "application/json", json);
