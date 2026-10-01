@@ -23,6 +23,7 @@
 #include "flight_log.h"
 #include "wifi_recovery_policy.h"
 #include "web_rc_lease_policy.h"
+#include "web_armed_route_policy.h"
 
 // 飞控统一控制变量（供协议适配层写入，与 SBUS/MAVLink 共用）
 extern double t;
@@ -1311,6 +1312,16 @@ void setupWebRC() {
         return next();
     });
 #endif
+
+    webRCServer.addMiddleware([](WebServer &server, Middleware::Callback next) {
+        const HTTPMethod method = server.method();
+        if ((armed || motorsActive()) && !webArmedRouteAllowed(server.uri().c_str(),
+            method == HTTP_GET, method == HTTP_POST)) {
+            server.send(423, "application/json", "{\"ok\":0,\"error\":\"non_flight_request_paused_while_armed\"}");
+            return true;
+        }
+        return next();
+    });
 
     webRCServer.on("/", HTTP_GET, []() {
 #if WIFI_ENABLED
