@@ -17,6 +17,7 @@
 #include "imu_capture.h"
 #include "control.h"
 #include "flight_log.h"
+#include "wifi_recovery_policy.h"
 
 // 飞控统一控制变量（供协议适配层写入，与 SBUS/MAVLink 共用）
 extern double t;
@@ -517,6 +518,24 @@ static String wifiJsonQuote(const char *value) {
 }
 #endif
 
+static bool rejectFlightApiInConfigPortal() {
+#if WIFI_ENABLED
+    if (!WifiRecoveryPolicy::flightApiAllowed(isWiFiConfigPortalActive())) {
+        webRCServer.send(403, "application/json", "{\"ok\":0,\"error\":\"flight_api_disabled_in_wifi_config_portal\"}");
+        return true;
+    }
+#endif
+    return false;
+}
+
+static bool rejectWiFiMaintenanceWhileActive() {
+    if (!WifiRecoveryPolicy::maintenanceAllowed(armed, motorsActive())) {
+        webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires_disarmed_motors_stopped\"}");
+        return true;
+    }
+    return false;
+}
+
 // ------旧PCB印刷地址访问 :8080 → 301跳转到80端口；旧地址全部淘汰后可删除------------
 // 8080端口兼容重定向：堆指针，setupWebRC()中动态构造，BSS仅占4字节
 // ESP32-C3无旧用户，条件编译去除以避免单核上200ms自旋阻塞和额外socket占用
@@ -837,6 +856,7 @@ static bool consumeWebRCWarn(char *destination, size_t capacity) {
 // ==================== HTTP 请求处理 ====================
 
 void handleWebRCRequest() {
+    if (rejectFlightApiInConfigPortal()) return;
     if (!webRCServer.hasArg("plain")) {
         webRCServer.send(400, "application/json", "{\"e\":\"no data\"}");
         return;
@@ -979,6 +999,7 @@ void setupWebRC() {
         webRCServer.send_P(200, "text/html; charset=utf-8", telemetryHtml);
     });
     webRCServer.on("/wifi/scan", HTTP_GET, []() {
+        if (rejectWiFiMaintenanceWhileActive()) return;
         int16_t scanState = WiFi.scanComplete();
         if (webRCServer.hasArg("refresh") || scanState == WIFI_SCAN_FAILED) {
             if (scanState == WIFI_SCAN_RUNNING) {
@@ -1024,6 +1045,7 @@ void setupWebRC() {
         webRCServer.send(200, "application/json", json);
     });
     webRCServer.on("/wifi/save", HTTP_POST, []() {
+        if (rejectWiFiMaintenanceWhileActive()) return;
         const String ssid = webRCServer.arg("ssid");
         const String password = webRCServer.arg("password");
         if (ssid.isEmpty() || ssid.length() > 32 || password.length() > 63 ||
@@ -1042,6 +1064,7 @@ void setupWebRC() {
         scheduleWiFiRestart();
     });
     webRCServer.on("/wifi/remove", HTTP_POST, []() {
+        if (rejectWiFiMaintenanceWhileActive()) return;
         const String ssid = webRCServer.arg("ssid");
         if (!removeWiFiProfile(ssid.c_str())) {
             const char *reason = wifiConfigLastError();
@@ -1057,6 +1080,7 @@ void setupWebRC() {
     webRCServer.on("/web_rc/heartbeat", HTTP_POST, handleWebRCRequest);
 
     webRCServer.on("/route/upload", HTTP_POST, []() {
+        if (rejectFlightApiInConfigPortal()) return;
         if (!webRCServer.hasArg("plain")) {
             webRCServer.send(400, "application/json", "{\"ok\":0,\"error\":\"missing sequence\"}");
             return;
@@ -1111,6 +1135,7 @@ void setupWebRC() {
         webRCServer.send(200, "application/json", response);
     });
     webRCServer.on("/route/start", HTTP_POST, []() {
+        if (rejectFlightApiInConfigPortal()) return;
         uint32_t revision = 0;
         if (!parseRevisionArg(revision)) {
             webRCServer.send(400, "application/json", "{\"ok\":0,\"error\":\"missing_revision\"}");
@@ -1133,6 +1158,7 @@ void setupWebRC() {
         webRCServer.send(202, "application/json", "{\"ok\":1,\"state\":\"start_pending\",\"pending\":true}");
     });
     webRCServer.on("/route/stop", HTTP_POST, []() {
+        if (rejectFlightApiInConfigPortal()) return;
         portENTER_CRITICAL(&openLoopMux);
         const bool active = openLoopState == OPEN_LOOP_STATE_RUNNING || openLoopState == OPEN_LOOP_STATE_START_PENDING;
         if (active) openLoopStopRequested = true;
@@ -1144,6 +1170,7 @@ void setupWebRC() {
         webRCServer.send(202, "application/json", "{\"ok\":1,\"pending\":true}");
     });
     webRCServer.on("/route/takeover", HTTP_POST, []() {
+        if (rejectFlightApiInConfigPortal()) return;
         portENTER_CRITICAL(&openLoopMux);
         const bool active = openLoopState == OPEN_LOOP_STATE_RUNNING || openLoopState == OPEN_LOOP_STATE_START_PENDING ||
             openLoopState == OPEN_LOOP_STATE_LANDING;
@@ -1180,6 +1207,7 @@ void setupWebRC() {
     });
 
     webRCServer.on("/vibration-calibration/start", HTTP_POST, []() {
+        if (rejectFlightApiInConfigPortal()) return;
         const bool confirmed = webRCServer.arg("confirm") == "1";
         portENTER_CRITICAL(&vibrationCalibrationMux);
         const bool active = vibrationCalibrationState == VIBRATION_QUEUED || vibrationCalibrationState == VIBRATION_RUNNING;
@@ -1246,6 +1274,7 @@ void setupWebRC() {
     });
 
     webRCServer.on("/descent-calibration/start", HTTP_POST, []() {
+        if (rejectFlightApiInConfigPortal()) return;
         portENTER_CRITICAL(&openLoopMux);
         const bool routeBusy = openLoopState == OPEN_LOOP_STATE_RUNNING ||
             openLoopState == OPEN_LOOP_STATE_START_PENDING || openLoopState == OPEN_LOOP_STATE_LANDING;
@@ -1261,6 +1290,7 @@ void setupWebRC() {
         webRCServer.send(202, "application/json", "{\"ok\":1,\"state\":\"recording\"}");
     });
     webRCServer.on("/descent-calibration/stop", HTTP_POST, []() {
+        if (rejectFlightApiInConfigPortal()) return;
         if (!stopDescentCalibration()) {
             webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"capture_not_recording\"}");
             return;
@@ -1274,6 +1304,7 @@ void setupWebRC() {
         webRCServer.send(200, "application/json", response);
     });
     webRCServer.on("/descent-calibration/clear", HTTP_POST, []() {
+        if (rejectFlightApiInConfigPortal()) return;
         if (armed || motorsActive()) {
             webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires_disarmed_motors_stopped\"}");
             return;
@@ -1296,6 +1327,7 @@ void setupWebRC() {
         webRCServer.send(200, "application/json", response);
     });
     webRCServer.on("/descent-calibration/save", HTTP_POST, []() {
+        if (rejectFlightApiInConfigPortal()) return;
         float value;
         if (armed || motorsActive() || !parameterPersistenceReady() ||
             !parseCalibrationValueArg(value) || !isfinite(value) || value < 0.05f || value > 0.5f) {
@@ -1414,6 +1446,7 @@ void setupWebRC() {
     });
 
     webRCServer.on("/console/cmd", HTTP_POST, []() {
+        if (rejectFlightApiInConfigPortal()) return;
         String cmd = webRCServer.arg("plain");
         cmd.trim();
         if (cmd.length() == 0) {
@@ -1435,12 +1468,14 @@ void setupWebRC() {
     });
 
     webRCServer.on("/console/enable", HTTP_POST, []() {
+        if (rejectFlightApiInConfigPortal()) return;
         webConsoleEnabled = true;
         webLog(motd);
         webRCServer.send(200, "application/json", "{\"ok\":1}");
     });
 
     webRCServer.on("/console/disable", HTTP_POST, []() {
+        if (rejectFlightApiInConfigPortal()) return;
         webConsoleEnabled = false;
         webRCServer.send(200, "application/json", "{\"ok\":1}");
     });
@@ -1472,6 +1507,7 @@ void setupWebRC() {
 #endif
         char json[640];
         const char *armReason = armBlockReason();
+        const bool armReady = armed || !armReason;
         snprintf(json, sizeof(json),
             "{\"armed\":%s,\"led_fast_blink\":%s,\"enabled\":%s,\"active\":%s,"
             "\"voltage\":%.2f,\"throttle\":%.1f,\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,"
@@ -1495,7 +1531,8 @@ void setupWebRC() {
             (unsigned long)responsiveWebRCServer.maxHandleTimeUs(),
             (unsigned long)responsiveWebRCServer.slowHandleCount(),
             (unsigned)getCurrentControlSource(), thrustTarget,
-            armReason ? "false" : "true", armReason ? armReason : "当前解锁条件已满足");
+            armReady ? "true" : "false", armed ? "飞控已解锁" :
+                (armReason ? armReason : "当前解锁条件已满足"));
         webRCServer.send(200, "application/json", json);
     });
 
@@ -1736,6 +1773,7 @@ void setupWebRC() {
     });
 
     webRCServer.on("/logs/resume", HTTP_POST, []() {
+        if (rejectFlightApiInConfigPortal()) return;
         if (armed || motorsActive()) {
             webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"motors active\"}");
             return;

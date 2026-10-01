@@ -26,5 +26,10 @@ int main() {
     assert(!staRetryDue(true, false, false, 10000, 10000));
     assert(!staRetryDue(false, false, true, 10000, 10000));
     assert(staRetryDue(true, false, true, 0x00000010U, 0xfffffff0U));
+    assert(maintenanceAllowed(false, false));
+    assert(!maintenanceAllowed(true, false));
+    assert(!maintenanceAllowed(false, true));
+    assert(flightApiAllowed(false));
+    assert(!flightApiAllowed(true));
     return 0;
 }

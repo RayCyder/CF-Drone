@@ -33,4 +33,12 @@ inline bool staRetryDue(bool staConfigured, bool connected, bool portalOpen,
     return staConfigured && !connected && portalOpen && deadlineReached(now, retryAt);
 }
 
+inline bool maintenanceAllowed(bool armed, bool motorsActive) {
+    return !armed && !motorsActive;
+}
+
+inline bool flightApiAllowed(bool configPortalActive) {
+    return !configPortalActive;
+}
+
 }  // namespace WifiRecoveryPolicy
