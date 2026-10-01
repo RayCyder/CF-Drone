@@ -65,3 +65,11 @@
 ## 停止条件和输出
 
 出现任何活动 fault、输出非零但未按流程预期、循环超时显著恶化、诊断数据损坏、重启、异常电压或遥控/上锁不确定，立即结束本轮并保持/恢复 disarmed、四路零输出；不为追数据继续运行。完成后产出只包含 capture、boot/reset、供电和 host request 证据的时间线，并逐条标注“观察”“推断”“未判定”。只有一个捕获同时提供同一 loop sequence 的 IMU wait + scheduler/IPC + reset/power 上下文，才算能回答本轮根因问题。
+
+## 本机实现状态（2026-10-02）
+
+已在 `diagnostics.ino` / `slow_loop_retention.*` 实现 RTC no-init 保留环：4 个定长槽，当前 full task-trace 构建的 RTC 区占用 2,416 B。所有 armed `dt >= 1,500 us` 的事件都会走轻量候选判断；每个 armed 周期最多进行 4 次 RTC 记录提交：最多两条不同慢阶段/明显更差的普通样本，首条 `dt >= 5,000 us` 样本，以及至多一次比已保存 stall 再长 `500 us` 的峰值替换。因此首两条普通告警不会耗尽保留预算，后续首个 5 ms stall 仍能留下证据。每槽最多带 18 条同 `loop_sequence` scheduler 事件，以及覆盖该循环时间窗的最长 flash IPC callback（若现有 IPC recorder 有匹配项）。task-trace 构建另外保存 IMU GPTimer/信号量/`read()` 统计。跨多次运行超过四槽后覆盖最旧槽并递增 `overwritten`。
+
+记录有版本/schema、header CRC、每槽 CRC 和最后写入的 commit 标记；开机 `BOOT` 行报告具名 reset reason，紧接的 `SLOW_LOOP_RETENTION` 行报告数字 reset reason、记录完整性、条数、覆盖数、损坏槽数和字节数。上锁后可从 `/diag/retained.csv` 读取记录；该端点不清除数据，只按环形策略覆盖旧记录。重启后若 RTC no-init 内容因掉电/棕断丢失或校验失败，header/槽校验会暴露这一点；RTC 保留不构成对物理断电数据恢复的保证。loop trace 中的 body 阶段值来自上一循环，并在 `recordLoopTiming()` 时与当前 IMU wait/gap 组合；循环尾已把 scheduler loop sequence 推进到下一次 dt 对应的编号，因此按同一个 `loop_sequence` 关联 scheduler 事件。
+
+本机已通过 ESP32 `full` task-trace、`full-armed-loop` task-trace 和生产构建。full trace 镜像为 1,337,923 B、静态 RAM 124,500 B，RTC no-init 2,416 B；full-armed-loop 镜像为 1,338,359 B、静态 RAM 124,524 B。生产镜像不包含 scheduler/IPC/IMU waiter hooks，因此仍能保留完整阶段数组而这些细分字段不可用。编译和静态检查不能测出新增触发路径的实际执行耗时；此版本尚未刷写或在硬件上验证，不能声称 observer overhead 已验收。RTC 只留最近四条跨运行记录；每个 armed 周期提交次数有界，若阶段样本和 stall 峰值超过预算，需把记录预算/选择策略纳入后续审查。

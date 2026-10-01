@@ -1,10 +1,17 @@
 #include <Arduino.h>
+#include <esp_attr.h>
+#include <stddef.h>
 #include <math.h>
 #include <string.h>
 #include "diagnostics.h"
 #include "system_log.h"
 #include "flight_log.h"
 #include "loop_metrics.h"
+#include "slow_loop_retention.h"
+#include "task_switch_trace_runtime.h"
+#if defined(ESP32) && defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+#include <esp_timer.h>
+#endif
 
 extern bool armed;
 
@@ -72,6 +79,22 @@ static LoopStageMetrics loopStages[] = {
 static uint32_t lastStageReportMs = 0;
 static LoopOverrunTraceRing loopTrace;
 static portMUX_TYPE loopTraceMux = portMUX_INITIALIZER_UNLOCKED;
+#if defined(ESP32)
+static RTC_NOINIT_ATTR SlowLoopRetentionStore slowLoopRetentionStore;
+#else
+static SlowLoopRetentionStore slowLoopRetentionStore = {};
+#endif
+static bool slowLoopRetentionIntegrity = false;
+static bool slowLoopRetentionInitialized = false;
+static bool slowLoopRetentionArmedSession = false;
+static uint8_t slowLoopRetentionSessionCount = 0;
+static uint8_t slowLoopRetentionRegularCount = 0;
+static uint16_t slowLoopRetentionStageMask = 0;
+static uint32_t slowLoopRetentionBestDtUs = 0;
+static uint32_t slowLoopRetentionBestStageUs = 0;
+static uint32_t slowLoopRetentionPeakDtUs = 0;
+static bool slowLoopRetentionPeakCaptured = false;
+static bool slowLoopRetentionPeakReplacementUsed = false;
 static uint32_t currentLoopTraceStages[LOOP_TRACE_STAGE_COUNT] = {};
 static uint32_t previousLoopBodyStages[LOOP_TRACE_STAGE_COUNT] = {};
 static uint32_t currentLoopSequence = 0;
@@ -83,6 +106,129 @@ static bool armedLoopTraceTriggered = false;
 #if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
 static ImuWaitTrace currentImuWaitTrace = {};
 #endif
+
+static void retainSlowLoopTrace(const LoopOverrunTrace &trace, uint8_t action) {
+    if (!slowLoopRetentionInitialized) return;
+    SlowLoopCapture capture{};
+    capture.capturedAtUs =
+#if defined(ESP32) && defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+        static_cast<uint32_t>(esp_timer_get_time());
+#else
+        micros();
+#endif
+    capture.trace = trace;
+
+    const uint8_t coreCount = taskSwitchTraceCoreCount();
+    for (uint8_t core = 0; core < coreCount; ++core) {
+        uint32_t oldest = 0, next = 0, overwritten = 0;
+        taskSwitchTraceRange(core, oldest, next, overwritten);
+        (void)overwritten;
+        for (uint32_t sequence = oldest; sequence < next &&
+             capture.schedulerCount < SLOW_LOOP_RETENTION_SCHEDULER_CAPACITY; ++sequence) {
+            TaskSwitchTraceEvent event{};
+            if (copyTaskSwitchTrace(core, sequence, event) &&
+                event.loopSequence == trace.loopSequence)
+                capture.scheduler[capture.schedulerCount++] = event;
+        }
+    }
+
+    TaskIpcTraceEvent ipc{};
+    uint32_t ipcOverwritten = 0;
+    if (copyTaskIpcTrace(&ipc, 1, ipcOverwritten)) {
+        const uint32_t intervalStartUs = capture.capturedAtUs - trace.dtUs;
+        const uint32_t eventOffsetUs = ipc.callbackStartedUs - intervalStartUs;
+        const uint32_t intervalStartBeforeCallbackUs = intervalStartUs - ipc.callbackStartedUs;
+        if (eventOffsetUs < trace.dtUs || intervalStartBeforeCallbackUs < ipc.callbackUs) {
+            capture.ipc = ipc;
+            capture.hasIpc = 1;
+        }
+    }
+
+    if (action == 2) replaceLatestSlowLoopCapture(slowLoopRetentionStore, capture);
+    else appendSlowLoopCapture(slowLoopRetentionStore, capture);
+}
+
+static uint8_t slowLoopCaptureAction(const LoopOverrunTrace &trace) {
+    if (!slowLoopRetentionArmedSession) {
+        slowLoopRetentionArmedSession = true;
+        slowLoopRetentionSessionCount = 0;
+        slowLoopRetentionRegularCount = 0;
+        slowLoopRetentionStageMask = 0;
+        slowLoopRetentionBestDtUs = 0;
+        slowLoopRetentionBestStageUs = 0;
+        slowLoopRetentionPeakDtUs = 0;
+        slowLoopRetentionPeakCaptured = false;
+        slowLoopRetentionPeakReplacementUsed = false;
+    }
+    if (trace.dtUs >= LOOP_STALL_LOG_TRIGGER_US) {
+        if (!slowLoopRetentionPeakCaptured) {
+            slowLoopRetentionPeakCaptured = true;
+            slowLoopRetentionPeakDtUs = trace.dtUs;
+            ++slowLoopRetentionSessionCount;
+            return 1;
+        }
+        if (!slowLoopRetentionPeakReplacementUsed &&
+            trace.dtUs >= slowLoopRetentionPeakDtUs + 500) {
+            slowLoopRetentionPeakReplacementUsed = true;
+            slowLoopRetentionPeakDtUs = trace.dtUs;
+            ++slowLoopRetentionSessionCount;
+            return 2;
+        }
+        return 0;
+    }
+    if (slowLoopRetentionPeakCaptured ||
+        slowLoopRetentionRegularCount >= SLOW_LOOP_RETENTION_CAPACITY - 2) return 0;
+    uint16_t stageMask = 0;
+    uint32_t dominantStageUs = 0;
+    for (uint8_t stage = 0; stage < LOOP_TRACE_UNACCOUNTED; ++stage) {
+        const uint32_t durationUs = trace.stageUs[stage];
+        if (durationUs >= 250) stageMask |= (uint16_t)(1U << stage);
+        if (durationUs > dominantStageUs) dominantStageUs = durationUs;
+    }
+    if (!stageMask) stageMask = 0x8000U; // retain a bucket for unattributed events
+    const bool newStageClass = (stageMask & (uint16_t)~slowLoopRetentionStageMask) != 0;
+    const bool newWorst = trace.dtUs >= slowLoopRetentionBestDtUs +
+            SLOW_LOOP_RETENTION_NEW_WORST_MARGIN_US ||
+        dominantStageUs >= slowLoopRetentionBestStageUs +
+            SLOW_LOOP_RETENTION_NEW_WORST_MARGIN_US;
+    if (slowLoopRetentionRegularCount && !newStageClass && !newWorst) return 0;
+    ++slowLoopRetentionSessionCount;
+    ++slowLoopRetentionRegularCount;
+    slowLoopRetentionStageMask |= stageMask;
+    if (trace.dtUs > slowLoopRetentionBestDtUs) slowLoopRetentionBestDtUs = trace.dtUs;
+    if (dominantStageUs > slowLoopRetentionBestStageUs)
+        slowLoopRetentionBestStageUs = dominantStageUs;
+    return 1;
+}
+
+void initializeSlowLoopRetention(uint32_t resetReason) {
+    const uint32_t priorMagic = slowLoopRetentionStore.magic;
+    const bool intact = initializeSlowLoopRetentionStore(slowLoopRetentionStore);
+    slowLoopRetentionIntegrity = priorMagic != SLOW_LOOP_RETENTION_MAGIC || intact;
+    slowLoopRetentionInitialized = true;
+    const char *integrity = priorMagic != SLOW_LOOP_RETENTION_MAGIC ? "empty" :
+        slowLoopRetentionIntegrity ? "ok" : "recovered";
+    Serial.printf("SLOW_LOOP_RETENTION reset_reason=%lu integrity=%s records=%u overwritten=%lu corrupt_slots=%lu bytes=%u\n",
+        (unsigned long)resetReason, integrity,
+        (unsigned)slowLoopRetentionStore.count, (unsigned long)slowLoopRetentionStore.overwritten,
+        (unsigned long)slowLoopRetentionStore.corruptSlots,
+        (unsigned)sizeof(slowLoopRetentionStore));
+}
+
+uint8_t retainedSlowLoopCount() {
+    return slowLoopRetentionInitialized ? slowLoopRetentionStore.count : 0;
+}
+
+uint32_t retainedSlowLoopOverwritten() {
+    return slowLoopRetentionInitialized ? slowLoopRetentionStore.overwritten : 0;
+}
+
+bool retainedSlowLoopIntegrity() { return slowLoopRetentionIntegrity; }
+
+bool copyRetainedSlowLoop(uint8_t index, SlowLoopCapture &destination) {
+    return slowLoopRetentionInitialized &&
+        copySlowLoopCapture(slowLoopRetentionStore, index, destination);
+}
 
 static int traceStageForLoopStage(LoopStageId stage) {
     switch (stage) {
@@ -323,9 +469,9 @@ void recordLoopTiming(float dt) {
         portEXIT_CRITICAL(&loopTraceMux);
     }
     loopWasArmedForTrace = armed;
-    const bool captureTrace = armedLoopTraceCaptureStarted && !armedLoopTraceTriggered;
 #endif
     if (!armed) {
+        slowLoopRetentionArmedSession = false;
         if (haveLoopOverrun) {
             setDiagnosticFault(DIAG_LOOP_OVERRUN, false);
             haveLoopOverrun = false;
@@ -334,8 +480,10 @@ void recordLoopTiming(float dt) {
     }
     const uint32_t us = loopTiming.observe(dt);
     worstLoopDt = loopTiming.maximumUs * .000001f;
-#if !defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
-    const bool captureTrace = us > 1500;
+#if defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
+    const bool captureTrace = (armedLoopTraceCaptureStarted && !armedLoopTraceTriggered) || us >= 1500;
+#else
+    const bool captureTrace = us >= 1500;
 #endif
     if (us > 1500) {
         if (loopOverrunCount < UINT32_MAX) ++loopOverrunCount;
@@ -347,6 +495,9 @@ void recordLoopTiming(float dt) {
         LoopOverrunTrace trace;
         trace.uptimeMs = millis();
         trace.dtUs = us;
+        // Previous-loop body stages and current IMU wait both belong to this
+        // dt interval; the scheduler sequence was advanced to this number at
+        // the prior loop's step boundary.
         trace.loopSequence = currentLoopSequence;
 #if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
         trace.imuWait = currentImuWaitTrace;
@@ -360,6 +511,7 @@ void recordLoopTiming(float dt) {
         for (uint8_t i = 0; i < LOOP_TRACE_UNACCOUNTED; ++i) attributedUs += trace.stageUs[i];
         trace.stageUs[LOOP_TRACE_UNACCOUNTED] = attributedUs < us ? (uint32_t)(us - attributedUs) : 0;
         portENTER_CRITICAL(&loopTraceMux);
+        trace.sequence = loopTrace.nextSequence;
         loopTrace.push(trace);
 #if defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
         // Preserve the pre-trigger window and first stall-sized loop. Minor
@@ -371,6 +523,10 @@ void recordLoopTiming(float dt) {
         }
 #endif
         portEXIT_CRITICAL(&loopTraceMux);
+        if (armed && us >= 1500) {
+            const uint8_t action = slowLoopCaptureAction(trace);
+            if (action) retainSlowLoopTrace(trace, action);
+        }
     }
 }
 

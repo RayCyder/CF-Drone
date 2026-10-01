@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include "loop_metrics.h"
 
+struct SlowLoopCapture;
+
 enum DiagnosticFault : uint32_t {
 	DIAG_IMU_INIT       = 1UL << 0,
 	DIAG_IMU_TIMEOUT    = 1UL << 1,
@@ -82,6 +84,11 @@ uint32_t getLoopTraceNextSequence();
 void getLoopTraceRange(uint32_t &oldest, uint32_t &next, uint32_t &overwritten);
 bool copyLoopTrace(uint32_t sequence, LoopOverrunTrace &destination);
 bool copyWorstLoopTrace(LoopOverrunTrace &destination);
+void initializeSlowLoopRetention(uint32_t resetReason);
+uint8_t retainedSlowLoopCount();
+uint32_t retainedSlowLoopOverwritten();
+bool retainedSlowLoopIntegrity();
+bool copyRetainedSlowLoop(uint8_t index, SlowLoopCapture &destination);
 const char *getLoopTraceStageName(uint8_t stage);
 void resetLoopTraceState();
 void initializeDiagnostics();

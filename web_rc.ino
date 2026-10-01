@@ -10,6 +10,7 @@
 #include "web_rc_html.h"
 #include "board_config.h"
 #include "diagnostics.h"
+#include "slow_loop_retention.h"
 #include "task_switch_trace_runtime.h"
 #include "system_log.h"
 #include "web_rc_input.h"
@@ -2156,6 +2157,77 @@ void setupWebRC() {
         json[used++] = '}';
         json[used] = '\0';
         webRCServer.send(200, "application/json", json);
+    });
+
+    webRCServer.on("/diag/retained.csv", HTTP_GET, []() {
+        if (armed || motorsActive()) {
+            webRCServer.send(409, "text/plain", "motors active; disarm before downloading retained traces\n");
+            return;
+        }
+        WiFiClient client = webRCServer.client();
+        client.setNoDelay(true);
+        client.setTimeout(100);
+        client.print("HTTP/1.1 200 OK\r\nContent-Type: text/csv; charset=utf-8\r\n");
+        client.print("Cache-Control: no-store\r\nConnection: close\r\n");
+        client.printf("X-Retained-Integrity: %s\r\nX-Retained-Count: %u\r\nX-Retained-Overwritten: %lu\r\n\r\n",
+            retainedSlowLoopIntegrity() ? "ok" : "recovered_or_empty",
+            (unsigned)retainedSlowLoopCount(), (unsigned long)retainedSlowLoopOverwritten());
+        client.print("type,capture_index,capture_sequence,loop_sequence,uptime_ms,dt_us");
+        for (uint8_t stage = 0; stage < LOOP_TRACE_STAGE_COUNT; ++stage)
+            client.printf(",stage%u_us", (unsigned)stage);
+        client.print(",detail\n");
+        for (uint8_t index = 0; index < retainedSlowLoopCount() && client.connected(); ++index) {
+            SlowLoopCapture capture{};
+            if (!copyRetainedSlowLoop(index, capture)) continue;
+            const LoopOverrunTrace &trace = capture.trace;
+            client.printf("capture,%u,%lu,%lu,%lu,%lu",
+                (unsigned)index, (unsigned long)capture.sequence,
+                (unsigned long)trace.loopSequence, (unsigned long)trace.uptimeMs,
+                (unsigned long)trace.dtUs);
+            for (uint8_t stage = 0; stage < LOOP_TRACE_STAGE_COUNT; ++stage)
+                client.printf(",%lu", (unsigned long)trace.stageUs[stage]);
+#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+            const ImuWaitTrace &imu = trace.imuWait;
+            client.printf(",imu=%lu;%lu;%u;%lu;%u;%u;%u;%u;%u;%u;%u;%u;%u",
+                (unsigned long)imu.waitStartedUs, (unsigned long)imu.waitEndedUs,
+                (unsigned)imu.interruptCount, (unsigned long)imu.lastInterruptUs,
+                (unsigned)imu.semaphoreTakes, (unsigned)imu.semaphoreTimeouts,
+                (unsigned)imu.readAttempts, (unsigned)imu.readyReads,
+                (unsigned)imu.readTotalUs, (unsigned)imu.readMaxUs,
+                (unsigned)imu.interruptSource, (unsigned)imu.result,
+                (unsigned)imu.semaphoreWaitMaxUs);
+#else
+            client.print(",imu=unavailable");
+#endif
+            client.print("\n");
+            for (uint8_t i = 0; i < capture.schedulerCount && client.connected(); ++i) {
+                const TaskSwitchTraceEvent &event = capture.scheduler[i];
+                client.printf("scheduler,%u,%lu,%lu",
+                    (unsigned)index, (unsigned long)capture.sequence,
+                    (unsigned long)event.loopSequence);
+                for (uint8_t column = 0; column < LOOP_TRACE_STAGE_COUNT + 3; ++column)
+                    client.print(',');
+                client.printf("sequence=%lu;timestamp_us=%lu;capture_id=%u;task_handle=0x%08lx;core=%u;event=%u;dropped=%u\n",
+                    (unsigned long)event.sequence, (unsigned long)event.timestampUs,
+                    (unsigned)event.captureId,
+                    (unsigned long)event.taskHandle, (unsigned)event.coreId,
+                    (unsigned)event.kind, (unsigned)event.droppedEvents);
+            }
+            if (capture.hasIpc && client.connected()) {
+                const TaskIpcTraceEvent &ipc = capture.ipc;
+                client.printf("ipc,%u,%lu,%lu",
+                    (unsigned)index, (unsigned long)capture.sequence,
+                    (unsigned long)trace.loopSequence);
+                for (uint8_t column = 0; column < LOOP_TRACE_STAGE_COUNT + 3; ++column)
+                    client.print(',');
+                client.printf("sequence=%lu;request_us=%lu;callback_start_us=%lu;callback_us=%lu;caller_task=0x%08lx;caller_pc=0x%08lx;caller_core=%u;target_core=%u\n",
+                    (unsigned long)ipc.sequence, (unsigned long)ipc.requestUs,
+                    (unsigned long)ipc.callbackStartedUs, (unsigned long)ipc.callbackUs,
+                    (unsigned long)ipc.callerTask, (unsigned long)ipc.callerPc,
+                    (unsigned)ipc.callerCore, (unsigned)ipc.targetCore);
+            }
+        }
+        client.stop();
     });
 
     webRCServer.on("/diag/scheduler.csv", HTTP_GET, []() {

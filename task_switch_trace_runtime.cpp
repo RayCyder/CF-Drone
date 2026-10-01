@@ -121,11 +121,13 @@ uint8_t copyTaskIpcTrace(TaskIpcTraceEvent *destination, uint8_t capacity,
     return 0;
 #else
     if (!destination || !capacity) { overwritten = taskIpcTraceOverwritten; return 0; }
+    portENTER_CRITICAL(&taskIpcTraceMux);
     const uint32_t count = taskIpcTraceCount < capacity ? taskIpcTraceCount : capacity;
     const uint32_t first = taskIpcTraceNext - count;
     for (uint32_t i = 0; i < count; ++i)
         destination[i] = taskIpcTrace[(first + i) % TASK_IPC_TRACE_CAPACITY];
     overwritten = taskIpcTraceOverwritten;
+    portEXIT_CRITICAL(&taskIpcTraceMux);
     return static_cast<uint8_t>(count);
 #endif
 }

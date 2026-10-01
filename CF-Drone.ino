@@ -82,6 +82,7 @@ void setup() {
 		__DATE__, __TIME__, ESP.getChipModel(), ESP.getChipRevision(),
 		(unsigned long)ESP.getCpuFreqMHz(), (unsigned long)ESP.getFlashChipSize(),
 		resetReasonName(esp_reset_reason()), (int)esp_reset_reason(), (unsigned long)ESP.getFreeHeap());
+	initializeSlowLoopRetention((uint32_t)esp_reset_reason());
 	print("程序开始初始化！\n");
 	initializeSystemLog(); // 恢复上次启动的故障/系统事件历史
 	setupParameters(); // 从Flash加载参数（未存储时使用默认值），并记录 NVS/迁移事件
