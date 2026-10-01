@@ -42,6 +42,7 @@ void printInvalidParameterValues(){}
 void print(const char*,...) {}
 bool batteryBlocksArming(){return false;}
 bool isAccelCalibrationActive(){return false;}
+bool isLevelCalibrationActive(){return false;}
 void sendMotors() {}
 bool motorsActive(){for(float m:motors)if(m!=0)return true;return false;}
 unsigned systemEventCount=0;
