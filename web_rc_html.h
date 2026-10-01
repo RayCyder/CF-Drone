@@ -359,7 +359,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   <section id="route-page" class="route-page" aria-hidden="true">
     <div class="route-shell">
       <div class="diagnostic-top"><h2>相对航线（遥控输出序列）</h2><div class="diagnostic-actions"><button onclick="closeRoutePage()">返回遥控器</button></div></div>
-      <p class="route-help">航线定义为按时间排列的遥控输出：每段设置油门、横滚、俯仰和偏航输入，可表达平移、转向及升降趋势。每段数值是该段持续使用的输入，不是相对上一段的增量。飞控没有位置或高度反馈，实际轨迹会受风、推力和机体响应影响。连接断开、执行周期中断、完成或停止时会转入定推力下降；需操作者确认情况后上锁。</p>
+      <p class="route-help">航线定义为按时间排列的遥控输出：每段设置油门、横滚、俯仰和偏航输入，可表达平移、转向及升降趋势。每段数值是该段持续使用的输入，不是相对上一段的增量。飞控没有位置或高度反馈，实际轨迹会受风、推力和机体响应影响。连接断开、执行周期中断、完成或停止时会转入定推力下降；若末段油门低于设定的下降推力，进入下降时油门可能上升。下降推力需先用带桨实测标定，着陆后由操作者确认并上锁。</p>
       <p class="route-help">每行：持续秒数（0.1–600） 油门百分比（0–100） 横滚/俯仰/偏航遥控输入（各 -100–100，不是角度）。最多 128 段、合计 30 分钟、正文 4096 字节；空行和 # 注释不执行。当前序列正常结束也会进入定推力下降。若后续增加“结束后近似悬停”，其控制方式应为保持末段油门、横滚/俯仰/偏航回中以尝试保持垂直加速度接近 0；这不具备高度/位置保持能力。</p>
       <textarea id="route-editor" class="route-editor" spellcheck="false" aria-label="开环控制序列"></textarea>
       <div class="route-page-actions"><button onclick="saveRoute()">保存到浏览器</button><button id="route-upload" onclick="uploadRoute()">上传并校验</button><button id="route-start" class="run" onclick="startRoute()">启动已上传序列</button><button id="route-stop" class="stop" onclick="stopRoute()">停止并下降</button><button id="route-takeover" onclick="takeManualControl()">接管摇杆</button></div>
