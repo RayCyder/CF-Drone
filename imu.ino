@@ -15,6 +15,7 @@ MPU9250 imu(SPI, BOARD_SPI_CS);
 ImuCaptureBuffer imuCapture;
 
 bool imuOK = false; // IMU 初始化是否成功；false 时禁止解锁，readIMU() 跳过等待
+bool imuSampleValid = false; // 当前主循环是否发布了新的有效 IMU 样本
 extern bool saveParameterNow(const char *name);
 
 // IMU 安装方向（欧拉角，单位 rad）。默认值 (0, 0, -PI/2) 对应本 PCB 的安装方式：
@@ -82,6 +83,7 @@ bool configureIMU() {
 }
 
 void readIMU() {
+	imuSampleValid = false;
 	if (!imuOK) return; // IMU 故障时跳过，gyro/acc 保持零值，主循环继续运行
 	static uint8_t consecutiveGoodFrames = 0;
 	const uint32_t waitStarted = micros();
@@ -97,9 +99,11 @@ void readIMU() {
 	}
 	recordLoopStage(LOOP_STAGE_IMU_WAIT, micros() - waitStarted);
 	const uint32_t processStarted = micros();
-	imu.getGyro(gyro.x, gyro.y, gyro.z);
-	imu.getAccel(acc.x, acc.y, acc.z);
-	if (!gyro.valid() || !acc.valid()) {
+	Vector sampledGyro;
+	Vector sampledAcc;
+	imu.getGyro(sampledGyro.x, sampledGyro.y, sampledGyro.z);
+	imu.getAccel(sampledAcc.x, sampledAcc.y, sampledAcc.z);
+	if (!sampledGyro.valid() || !sampledAcc.valid()) {
 		recordLoopStage(LOOP_STAGE_IMU_PROCESS, micros() - processStarted);
 		consecutiveGoodFrames = 0;
 		setDiagnosticFault(DIAG_IMU_INVALID, true);
@@ -107,18 +111,17 @@ void readIMU() {
 	}
 	// Keep the calibrated sensor-frame reading before online bias subtraction
 	// and body-axis rotation for optional, disarmed temperature diagnostics.
-	const Vector rawGyroSensor = gyro;
-	calibrationRawAcc = acc;
-	++calibrationRawAccSequence;
-	if (consecutiveGoodFrames < 100) ++consecutiveGoodFrames;
-	if (consecutiveGoodFrames >= 100) {
-		setDiagnosticFault(DIAG_IMU_TIMEOUT, false);
-		setDiagnosticFault(DIAG_IMU_INVALID, false);
-	}
-	calibrateGyroOnce();
+	const Vector rawGyroSensor = sampledGyro;
+	calibrateGyroOnce(sampledGyro, sampledAcc);
 	// apply scale and bias
-	acc = (acc - accBias) / accScale;
-	gyro = gyro - gyroBias;
+	Vector bodyAcc = (sampledAcc - accBias) / accScale;
+	Vector bodyGyro = sampledGyro - gyroBias;
+	if (!bodyAcc.valid() || !bodyGyro.valid() || !imuRotation.valid()) {
+		recordLoopStage(LOOP_STAGE_IMU_PROCESS, micros() - processStarted);
+		consecutiveGoodFrames = 0;
+		setDiagnosticFault(DIAG_IMU_INVALID, true);
+		return;
+	}
 	// rotate to body frame using imuRotation Euler angles
 	// 旋转四元数缓存：imuRotation 为运行时常量（仅参数变更时改变），
 	// 缓存后每帧仅做 3 次浮点比较，消除原先每帧 6 次 sinf/cosf 调用。
@@ -131,14 +134,30 @@ void readIMU() {
 		_cachedRotY = imuRotation.y;
 		_cachedRotZ = imuRotation.z;
 	}
-	acc  = Quaternion::rotateVector(acc,  _imuRotQuat);
-	gyro = Quaternion::rotateVector(gyro, _imuRotQuat);
+	bodyAcc  = Quaternion::rotateVector(bodyAcc,  _imuRotQuat);
+	bodyGyro = Quaternion::rotateVector(bodyGyro, _imuRotQuat);
+	if (!bodyAcc.valid() || !bodyGyro.valid()) {
+		recordLoopStage(LOOP_STAGE_IMU_PROCESS, micros() - processStarted);
+		consecutiveGoodFrames = 0;
+		setDiagnosticFault(DIAG_IMU_INVALID, true);
+		return;
+	}
+	calibrationRawAcc = sampledAcc;
+	++calibrationRawAccSequence;
+	gyro = bodyGyro;
+	acc = bodyAcc;
+	imuSampleValid = true;
+	if (consecutiveGoodFrames < 100) ++consecutiveGoodFrames;
+	if (consecutiveGoodFrames >= 100) {
+		setDiagnosticFault(DIAG_IMU_TIMEOUT, false);
+		setDiagnosticFault(DIAG_IMU_INVALID, false);
+	}
 	imuCapture.append(micros(), gyro.x, gyro.y, gyro.z, acc.x, acc.y, acc.z, imu.getTemp(),
 		rawGyroSensor.x, rawGyroSensor.y, rawGyroSensor.z);
 	recordLoopStage(LOOP_STAGE_IMU_PROCESS, micros() - processStarted);
 }
 
-void calibrateGyroOnce() {
+void calibrateGyroOnce(const Vector &rawGyroSensor, const Vector &rawAccSensor) {
 	static Delay landedDelay(2);
 	static StationaryImuDetector stationaryDetector;
 	static bool gyroBiasInitialized = false;
@@ -154,12 +173,12 @@ void calibrateGyroOnce() {
 	// on this MPU-6500, so use a wider bootstrap gate. Afterwards detect motion
 	// relative to the learned bias with a tighter limit; otherwise a slow steady
 	// rotation can be learned as bias and then subtracted from the flight rate.
-	const Vector gyroBiasResidual = gyro - gyroBias;
+	const Vector gyroBiasResidual = rawGyroSensor - gyroBias;
 	const float maxGyroMean = gyroBiasInitialized
 		? StationaryImuDetector::MAX_GYRO_MEAN_RAD_S
 		: StationaryImuDetector::BOOTSTRAP_GYRO_MEAN_RAD_S;
 	const StationaryImuDetector::Result stationarity = stationaryDetector.update(
-		gyroBiasResidual, acc, stationaryGyroMean, maxGyroMean);
+		gyroBiasResidual, rawAccSensor, stationaryGyroMean, maxGyroMean);
 	if (stationarity == StationaryImuDetector::WINDOW_COLLECTING) return;
 	if (stationarity != StationaryImuDetector::STATIONARY) {
 		landedDelay.update(false);

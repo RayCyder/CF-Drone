@@ -6,6 +6,35 @@
 #include "lpf.h"
 #include "util.h"
 #include "attitude_vqf.h"
+#if defined(ARDUINO)
+#include "diagnostics.h"
+#include "control.h"
+#endif
+
+#ifndef ESTIMATOR_REPORT_IMU_INVALID
+#if defined(ARDUINO)
+#define ESTIMATOR_REPORT_IMU_INVALID(active) setDiagnosticFault(DIAG_IMU_INVALID, active)
+#else
+#define ESTIMATOR_REPORT_IMU_INVALID(active) do { (void)(active); } while (0)
+#endif
+#endif
+
+#ifndef ESTIMATOR_DISARM_CRITICAL
+#if defined(ARDUINO)
+#define ESTIMATOR_DISARM_CRITICAL() disarm(DISARM_REASON_CRITICAL_FAULT)
+#else
+#define ESTIMATOR_DISARM_CRITICAL() do {} while (0)
+#endif
+#endif
+
+#ifndef ESTIMATOR_IMU_SAMPLE_VALID
+#if defined(ARDUINO)
+extern bool imuSampleValid;
+#define ESTIMATOR_IMU_SAMPLE_VALID() imuSampleValid
+#else
+#define ESTIMATOR_IMU_SAMPLE_VALID() true
+#endif
+#endif
 
 float accWeight = 0.0005f;
 // Last-sample estimator evidence copied into the bounded flight log. This
@@ -82,7 +111,51 @@ LowPassFilter<Vector> accelerationFusionFilter(EST_ACCEL_FUSION_FILTER_ALPHA); /
 static VqfAttitudeEstimator vqfAttitudeEstimator;
 #endif
 
+static bool attitudeStateUsable(const Quaternion &q) {
+	const float n = q.norm();
+	return q.valid() && isfinite(n) && n > 1e-6f;
+}
+
+static void resetEstimatorFiniteState() {
+	attitude = Quaternion();
+	rates = Vector();
+	levelGyroBias = Vector();
+	accelCorrectionConfidence = 0.0f;
+	landed = false;
+	ratesFilter.reset();
+	accelerationFusionFilter.reset();
+}
+
+static void reportEstimatorInvalidState() {
+	ESTIMATOR_REPORT_IMU_INVALID(true);
+	if (armed) ESTIMATOR_DISARM_CRITICAL();
+}
+
 void estimate() {
+	if (!ESTIMATOR_IMU_SAMPLE_VALID()) {
+		reportEstimatorInvalidState();
+		accelCorrectionConfidence = 0.0f;
+		landed = false;
+		return;
+	}
+	if (!gyro.valid() || !acc.valid() || !isfinite(dt) || dt <= 0.0f) {
+		reportEstimatorInvalidState();
+		resetEstimatorFiniteState();
+		return;
+	}
+	if (!attitudeStateUsable(attitude)) {
+		reportEstimatorInvalidState();
+		resetEstimatorFiniteState();
+		return;
+	} else if (fabsf(attitude.norm() - 1.0f) > 1e-3f) {
+		attitude.normalize();
+	}
+	if (!rates.valid()) {
+		reportEstimatorInvalidState();
+		rates = Vector();
+		ratesFilter.reset();
+		return;
+	}
 	#if ATTITUDE_ESTIMATOR_VQF
 	const float accNorm = acc.norm();
 	if (!isfinite(accNorm) || accNorm < 1e-3f) {
