@@ -13,6 +13,8 @@ float motors[4]; // normalized motor thrusts in range [0..1]
 
 // 电机引脚（对应 MOTOR_REAR_LEFT=0, MOTOR_REAR_RIGHT=1, MOTOR_FRONT_RIGHT=2, MOTOR_FRONT_LEFT=3）
 int motorPins[4] = BOARD_MOTOR_PINS; // RL, RR, FR, FL
+static int configuredMotorPins[4] = {};
+static bool motorPinConfigInitialized = false;
 
 int pwmFrequency = 25000; // ESP32-C3 LEDC 默认 XTAL 时钟 40MHz，10-bit 上限 39062Hz；
                           // ESP32 APB 80MHz，10-bit 上限 78125Hz；
@@ -39,9 +41,10 @@ void setupMotors() {
 
 	// 先解绑所有引脚（重复调用时清理旧 LEDC 通道），再拉低防止误转
 	for (int i = 0; i < 4; i++) {
-		ledcDetach(motorPins[i]);         // 首次调用时无绑定会静默返回 false，无副作用
-		pinMode(motorPins[i], OUTPUT);
-		digitalWrite(motorPins[i], LOW);
+		const int pin = motorPinConfigInitialized ? configuredMotorPins[i] : motorPins[i];
+		ledcDetach(pin);                  // 首次调用时无绑定会静默返回 false，无副作用
+		pinMode(pin, OUTPUT);
+		digitalWrite(pin, LOW);
 	}
 
 	// configure pins
@@ -61,6 +64,8 @@ void setupMotors() {
 		}
 		print("  motor%d pin=%d ledcAttach=%s\n", i, motorPins[i], ok ? "OK" : "FAIL");
 	}
+	memcpy(configuredMotorPins, motorPins, sizeof(configuredMotorPins));
+	motorPinConfigInitialized = true;
 	setDiagnosticFault(DIAG_MOTOR_INIT, !motorOutputsOK);
 
 	sendMotors();
