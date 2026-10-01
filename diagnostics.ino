@@ -229,10 +229,12 @@ static void reportLoopStages() {
         if (entry.pendingWorstUs && (!worst || entry.pendingWorstUs > worst->pendingWorstUs)) worst = &entry;
     }
     if (worst) {
-        char message[48];
-        snprintf(message, sizeof(message), "stage=%s duration_us=%lu", worst->name,
-            (unsigned long)worst->pendingWorstUs);
-        recordSystemLogEvent("SLOW_LOOP", message);
+        char message[64];
+        snprintf(message, sizeof(message), "stage=%s duration_us=%lu budget_us=%lu", worst->name,
+            (unsigned long)worst->pendingWorstUs, (unsigned long)worst->budgetUs);
+        // Stage-level budget misses are useful telemetry, but are not a slow
+        // whole-loop event. Reserve SLOW_LOOP for measured loop stalls.
+        recordSystemLogEvent("STAGE_BUDGET", message);
     }
     for (auto &entry : loopStages) entry.pendingWorstUs = 0;
 }
