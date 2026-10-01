@@ -9,6 +9,7 @@ import csv
 import datetime as dt
 import http.client
 import json
+import math
 import signal
 import time
 from pathlib import Path
@@ -91,10 +92,18 @@ def validate_log(path, trace_path):
         trace_rows=list(csv.DictReader(stream))
     if trace_rows:
         raise RuntimeError(f'{len(trace_rows)} loop overrun trace rows require review')
+    confidence=[float(row['accel_correction_confidence']) for row in platform]
+    accel_norms=[math.sqrt(sum(float(row[f'acc_{axis}'])**2 for axis in 'xyz'))
+                 for row in platform]
+    in_gravity_band=sum(9.80665*0.95<=value<=9.80665*1.05
+                        for value in accel_norms)
     return {'rows':len(rows),'armed_rows':len(armed),'platform_rows':len(platform),
             'max_armed_dt_ms':round(max(float(row['dt_s']) for row in armed)*1000,3),
             'min_armed_voltage_v':min(float(row['battery_v']) for row in armed),
             'min_armed_mix_scale':min(float(row['mix_scale']) for row in armed),
+            'platform_zero_confidence_rows':sum(value==0 for value in confidence),
+            'platform_mean_confidence':round(sum(confidence)/len(confidence),4),
+            'platform_accel_norm_in_1g_5pct_rows':in_gravity_band,
             'trace_rows':len(trace_rows)}
 
 def main():
