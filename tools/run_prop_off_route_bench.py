@@ -23,19 +23,33 @@ PLAN = "# phase: simulated takeoff, hold, descent\n1.0 20 0 0 0\n0.8 20 0 0 0\n0
 
 
 def request(host, port, method, path, body=None, content_type=None, timeout=0.6):
-    connection = http.client.HTTPConnection(host, port, timeout=timeout)
+    timings = {'tcp_connect_ms': 0.0}
+
+    class TimedHTTPConnection(http.client.HTTPConnection):
+        def connect(self):
+            started = time.monotonic()
+            super().connect()
+            timings['tcp_connect_ms'] = round((time.monotonic() - started) * 1000, 1)
+
+    connection = TimedHTTPConnection(host, port, timeout=timeout)
     headers = {'Connection': 'close'}
     if content_type:
         headers['Content-Type'] = content_type
     start = time.monotonic()
     try:
         connection.request(method, path, body=body, headers=headers)
+        request_done = time.monotonic()
+        timings['request_send_ms'] = round(max(0, request_done - start - timings['tcp_connect_ms'] / 1000) * 1000, 1)
         response = connection.getresponse()
+        headers_done = time.monotonic()
+        timings['response_headers_ms'] = round((headers_done - request_done) * 1000, 1)
         data = response.read()
-        elapsed_ms = round((time.monotonic() - start) * 1000, 1)
+        finished = time.monotonic()
+        timings['response_body_ms'] = round((finished - headers_done) * 1000, 1)
+        timings['total_ms'] = round((finished - start) * 1000, 1)
         if response.status not in (200, 202):
             raise RuntimeError(f'{path}: HTTP {response.status} {data[:160]!r}')
-        return json.loads(data), elapsed_ms
+        return json.loads(data), timings['total_ms'], timings
     finally:
         connection.close()
 
@@ -82,9 +96,10 @@ def main():
     landing_seen = False
 
     def timed_request(method, path, body=None, content_type=None):
-        result, elapsed_ms = request(host, port, method, path, body, content_type)
+        result, elapsed_ms, timing = request(host, port, method, path, body, content_type)
+        record(stream, 'http_timing', path=path.split('?', 1)[0], **timing)
         if arm_command_sent and elapsed_ms > 300:
-            record(stream, 'web_latency_warning', path=path.split('?', 1)[0], elapsed_ms=elapsed_ms)
+            record(stream, 'web_latency_warning', path=path.split('?', 1)[0], elapsed_ms=elapsed_ms, **timing)
         return result, elapsed_ms
 
     def stick_zero(stream):
@@ -197,9 +212,9 @@ def main():
             serial.close()
             if motors != 'front-right 0 front-left 0 rear-right 0 rear-left 0' or 'armed=0' not in brief:
                 raise RuntimeError('final serial safe state not verified')
-            state, _ = request(host, port, 'GET', '/web_rc/status', timeout=2)
+            state, _, _ = request(host, port, 'GET', '/web_rc/status', timeout=2)
             record(stream, 'web_final', state=state)
-            route, _ = request(host, port, 'GET', '/route/status', timeout=2)
+            route, _, _ = request(host, port, 'GET', '/route/status', timeout=2)
             record(stream, 'route_final', state=route)
             if (state.get('armed') is not False or state.get('throttle') != 0 or
                 route.get('arm') != 0 or route.get('mode') != 2):
@@ -208,7 +223,7 @@ def main():
         if arm_command_sent:
             deadline = time.monotonic() + 3
             while True:
-                status, _ = request(host, port, 'GET', '/logs/status', timeout=2)
+                status, _, _ = request(host, port, 'GET', '/logs/status', timeout=2)
                 if status.get('state') == 'FROZEN' or time.monotonic() >= deadline:
                     break
                 time.sleep(0.1)
