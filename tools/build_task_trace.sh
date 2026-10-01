@@ -18,6 +18,10 @@ case "$trace_mode" in
         trace_defines=
         trace_wraps=vTaskSwitchContext,--wrap=esp_ipc_call_nonblocking,--wrap=spi_flash_op_block_func
         ;;
+    full-armed-loop)
+        trace_defines=-DCF_DRONE_CAPTURE_ARMED_LOOP_TRACE
+        trace_wraps=vTaskSwitchContext,--wrap=esp_ipc_call_nonblocking,--wrap=spi_flash_op_block_func
+        ;;
     ipc-only)
         trace_defines=-DCF_DRONE_DISABLE_SCHEDULER_TRACE_HOOK
         trace_wraps=esp_ipc_call_nonblocking,--wrap=spi_flash_op_block_func
@@ -31,7 +35,7 @@ case "$trace_mode" in
         trace_wraps=
         ;;
     *)
-        echo "Usage: $0 [fqbn] [build_dir] [full|ipc-only|scheduler-only|armed-loop]" >&2
+        echo "Usage: $0 [fqbn] [build_dir] [full|full-armed-loop|ipc-only|scheduler-only|armed-loop]" >&2
         exit 2
         ;;
 esac

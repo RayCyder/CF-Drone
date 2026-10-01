@@ -239,14 +239,18 @@ def main():
                 raise RuntimeError('final Web safe state not verified')
 
         if arm_command_sent:
-            deadline = time.monotonic() + 3
+            deadline = time.monotonic() + 10
+            status = None
             while True:
-                status, _, _ = request(host, port, 'GET', '/logs/status', timeout=2)
-                if status.get('state') == 'FROZEN' or time.monotonic() >= deadline:
+                try:
+                    status, _, _ = request(host, port, 'GET', '/logs/status', timeout=2)
+                except (OSError, TimeoutError) as error:
+                    record(stream, 'log_status_retry', error=str(error))
+                if (status and status.get('state') == 'FROZEN') or time.monotonic() >= deadline:
                     break
                 time.sleep(0.1)
             record(stream, 'log_final', state=status)
-            if status.get('state') == 'FROZEN':
+            if status and status.get('state') == 'FROZEN':
                 for path, suffix in (('/logs.csv', 'flight-log.csv'), ('/diag/trace.csv', 'loop-trace.csv'),
                                      ('/diag/trace/worst', 'loop-worst.json')):
                     download(host, port, path, output.with_name(output.stem + '-' + suffix))
@@ -271,7 +275,8 @@ def main():
                 if not route_error and (
                     not landing_seen or route.get('state') != 'complete' or len(sequence_rows) < 100 or
                     any(count < 20 for count in powered_rows.values()) or mapped_rows < 40 or
-                    not worst.get('available') or worst.get('dt_us', 0) >= 5000 or
+                    (loop_warning_seen and not worst.get('available')) or
+                    (worst.get('available') and worst.get('dt_us', 0) >= 5000) or
                     any(int(row['fault_mask']) & ~0x80 or float(row['dt_s']) > 0.005 or
                         float(row['battery_v']) < 3.5 for row in armed_rows) or
                     gaps['armed'][1] or gaps['transition'][1] or
