@@ -77,6 +77,7 @@ uint32_t getLoopTraceOldestSequence();
 uint32_t getLoopTraceNextSequence();
 void getLoopTraceRange(uint32_t &oldest, uint32_t &next, uint32_t &overwritten);
 bool copyLoopTrace(uint32_t sequence, LoopOverrunTrace &destination);
+bool copyWorstLoopTrace(LoopOverrunTrace &destination);
 const char *getLoopTraceStageName(uint8_t stage);
 void resetLoopTraceState();
 void initializeDiagnostics();

@@ -5,7 +5,8 @@
 
 constexpr uint8_t LOOP_TRACE_STAGE_COUNT = 16;
 #if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
-constexpr uint8_t LOOP_TRACE_CAPACITY = 20;
+// Reserve one former ring slot for the separately retained peak record.
+constexpr uint8_t LOOP_TRACE_CAPACITY = 19;
 #else
 constexpr uint8_t LOOP_TRACE_CAPACITY = 32;
 #endif
@@ -49,9 +50,11 @@ struct LoopOverrunTrace {
 
 struct LoopOverrunTraceRing {
     LoopOverrunTrace records[LOOP_TRACE_CAPACITY] = {};
+    LoopOverrunTrace worstRecord = {};
     uint32_t nextSequence = 0;
     uint32_t overwritten = 0;
     uint8_t count = 0;
+    bool hasWorstRecord = false;
 
     void clear() {
         // Old slots are ignored via count/sequence; do not memset the ring in
@@ -59,9 +62,15 @@ struct LoopOverrunTraceRing {
         nextSequence = 0;
         overwritten = 0;
         count = 0;
+        hasWorstRecord = false;
     }
 
     void push(const LoopOverrunTrace &trace) {
+        if (!hasWorstRecord || trace.dtUs > worstRecord.dtUs) {
+            worstRecord = trace;
+            worstRecord.sequence = nextSequence;
+            hasWorstRecord = true;
+        }
         LoopOverrunTrace &destination = records[nextSequence % LOOP_TRACE_CAPACITY];
         destination = trace;
         destination.sequence = nextSequence++;
@@ -76,6 +85,12 @@ struct LoopOverrunTraceRing {
         const LoopOverrunTrace &source = records[sequence % LOOP_TRACE_CAPACITY];
         if (source.sequence != sequence) return false;
         destination = source;
+        return true;
+    }
+
+    bool copyWorst(LoopOverrunTrace &destination) const {
+        if (!hasWorstRecord) return false;
+        destination = worstRecord;
         return true;
     }
 };

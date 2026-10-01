@@ -1513,6 +1513,61 @@ void setupWebRC() {
         client.stop();
     });
 
+    webRCServer.on("/diag/trace/worst", HTTP_GET, []() {
+        if (armed || motorsActive()) {
+            webRCServer.send(409, "text/plain", "motors active; disarm before reading loop traces\n");
+            return;
+        }
+        LoopOverrunTrace trace;
+        if (!copyWorstLoopTrace(trace)) {
+            webRCServer.send(200, "application/json", "{\"available\":false}");
+            return;
+        }
+        char json[512];
+        int used = snprintf(json, sizeof(json),
+            "{\"available\":true,\"sequence\":%lu,\"uptime_ms\":%lu,"
+            "\"dt_us\":%lu,\"loop_sequence\":%lu,\"stage_us\":[",
+            (unsigned long)trace.sequence, (unsigned long)trace.uptimeMs,
+            (unsigned long)trace.dtUs, (unsigned long)trace.loopSequence);
+        for (uint8_t i = 0; i < LOOP_TRACE_STAGE_COUNT && used > 0 && used < (int)sizeof(json); ++i) {
+            const int added = snprintf(json + used, sizeof(json) - (size_t)used,
+                "%s%lu", i ? "," : "", (unsigned long)trace.stageUs[i]);
+            if (added < 0 || added >= (int)(sizeof(json) - (size_t)used)) {
+                used = -1;
+                break;
+            }
+            used += added;
+        }
+        if (used <= 0 || used + 3 >= (int)sizeof(json)) {
+            webRCServer.send(500, "application/json", "{\"error\":\"trace serialization failed\"}");
+            return;
+        }
+        json[used++] = ']';
+#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+        const ImuWaitTrace &imuWait = trace.imuWait;
+        const int imuAdded = snprintf(json + used, sizeof(json) - (size_t)used,
+            ",\"imu_wait\":[%lu,%lu,%u,%lu,%u,%u,%u,%u,%u,%u,%u,%u]",
+            (unsigned long)imuWait.waitStartedUs, (unsigned long)imuWait.waitEndedUs,
+            (unsigned)imuWait.interruptCount, (unsigned long)imuWait.lastInterruptUs,
+            (unsigned)imuWait.semaphoreTakes, (unsigned)imuWait.semaphoreTimeouts,
+            (unsigned)imuWait.readAttempts, (unsigned)imuWait.readyReads,
+            (unsigned)imuWait.readTotalUs, (unsigned)imuWait.readMaxUs,
+            (unsigned)imuWait.interruptSource, (unsigned)imuWait.result);
+        if (imuAdded < 0 || imuAdded >= (int)(sizeof(json) - (size_t)used)) {
+            webRCServer.send(500, "application/json", "{\"error\":\"trace serialization failed\"}");
+            return;
+        }
+        used += imuAdded;
+#endif
+        if (used + 2 >= (int)sizeof(json)) {
+            webRCServer.send(500, "application/json", "{\"error\":\"trace serialization failed\"}");
+            return;
+        }
+        json[used++] = '}';
+        json[used] = '\0';
+        webRCServer.send(200, "application/json", json);
+    });
+
     webRCServer.on("/diag/scheduler.csv", HTTP_GET, []() {
         if (armed || motorsActive()) {
             webRCServer.send(409, "text/plain", "motors active; disarm before downloading scheduler trace\n");

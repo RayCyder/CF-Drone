@@ -187,6 +187,13 @@ bool copyLoopTrace(uint32_t sequence, LoopOverrunTrace &destination) {
     return copied;
 }
 
+bool copyWorstLoopTrace(LoopOverrunTrace &destination) {
+    portENTER_CRITICAL(&loopTraceMux);
+    const bool copied = loopTrace.copyWorst(destination);
+    portEXIT_CRITICAL(&loopTraceMux);
+    return copied;
+}
+
 void resetLoopTraceState() {
     portENTER_CRITICAL(&loopTraceMux);
     loopTrace.clear();
