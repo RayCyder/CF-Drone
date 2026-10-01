@@ -33,7 +33,8 @@ extern const char* motd;
 // ==================== 连接状态标志 ====================
 bool webRCEnabled    = false;  // Web RC 当前有有效连接（由 readWebRC() 每帧更新）
 bool useWebRC        = false;  // 当前正在使用 Web RC 控制（与 webRCEnabled 保持同步）
-bool webRCUpdated    = false;  // 收到过至少一次摇杆数据（首次连接前为 false）
+bool webRCUpdated    = false;  // 收到过至少一次网页控制包（首次连接前为 false）
+static bool webRCStickUpdated = false; // 心跳不能单独接管实体遥控
 bool webConsoleEnabled = false; // Web 调试控制台开关：POST /console/enable 开启，开启后 print() 写入缓冲区
 char webRCWarnMsg[64] = ""; // 待发送给前端的警告消息，发送一次后自动清空
 
@@ -51,6 +52,7 @@ float webRCThrottle = 0.0f;
 uint16_t webRCButtons    = 0;       // 16位按钮位掩码，bit0=解锁 bit1=上锁 bit2=急停 bit6=STAB bit7=ACRO bit8=ALTHOLD
 static uint16_t webRCButtonPressEdges = 0;
 unsigned long webRCLastUpdate = 0;  // 最后一次收包的 millis() 时间戳
+unsigned long webRCLastStickUpdate = 0; // 最后一次摇杆包的时间戳
 
 // Browser-uploaded open-loop sequence. Fixed double buffers avoid heap churn and
 // keep route execution local to the flight loop after upload.
@@ -661,6 +663,8 @@ void setWebRCInput(float roll, float pitch, float yaw, float throttle) {
     webRCRoll     = pRoll;
     webRCLastUpdate = millis();
     webRCUpdated  = true;
+    webRCLastStickUpdate = webRCLastUpdate;
+    webRCStickUpdated = true;
     portEXIT_CRITICAL(&webRCStateMux);
 
     // 写入统一控制变量（与 SBUS/MAVLink 同路径）
@@ -838,12 +842,17 @@ void handleWebRCRequest() {
 
 bool isWebRCEnabled() {
     bool updated;
-    unsigned long lastUpdate;
+    bool stickUpdated;
+    unsigned long lastUpdate, lastStickUpdate;
     portENTER_CRITICAL(&webRCStateMux);
     updated = webRCUpdated;
+    stickUpdated = webRCStickUpdated;
     lastUpdate = webRCLastUpdate;
+    lastStickUpdate = webRCLastStickUpdate;
     portEXIT_CRITICAL(&webRCStateMux);
-    return updated && (millis() - lastUpdate < WEB_RC_TIMEOUT_MS);
+    const unsigned long now = millis();
+    return updated && stickUpdated && (now - lastUpdate < WEB_RC_TIMEOUT_MS) &&
+        (now - lastStickUpdate < WEB_RC_TIMEOUT_MS);
 }
 
 bool isUsingWebRC() {
@@ -1399,14 +1408,20 @@ void setupWebRC() {
 
     webRCServer.on("/web_rc/status", HTTP_GET, []() {
         bool updated;
-        unsigned long lastUpdate;
+        bool stickUpdated;
+        unsigned long lastUpdate, lastStickUpdate;
         float throttle, roll, pitch, yaw;
         portENTER_CRITICAL(&webRCStateMux);
         updated = webRCUpdated;
+        stickUpdated = webRCStickUpdated;
         lastUpdate = webRCLastUpdate;
+        lastStickUpdate = webRCLastStickUpdate;
         throttle = webRCThrottle; roll = webRCRoll; pitch = webRCPitch; yaw = webRCYaw;
         portEXIT_CRITICAL(&webRCStateMux);
-        const bool enabled = updated && (millis() - lastUpdate < WEB_RC_TIMEOUT_MS);
+        const unsigned long now = millis();
+        const bool enabled = updated && stickUpdated &&
+            (now - lastUpdate < WEB_RC_TIMEOUT_MS) &&
+            (now - lastStickUpdate < WEB_RC_TIMEOUT_MS);
         float vbat = batteryVoltage;
         if (isnan(vbat) || vbat < 0.0f) vbat = 0.0f;
         char json[448];

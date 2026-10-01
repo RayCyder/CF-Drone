@@ -25,6 +25,7 @@ extern float controlRoll, controlPitch, controlThrottle, controlYaw;
 extern bool webRCEnabled;
 extern bool useWebRC;
 extern unsigned long webRCLastUpdate;
+extern unsigned long webRCLastStickUpdate;
 bool isUsingWebRC();
 #endif
 
@@ -139,12 +140,14 @@ void webRCLossFailsafe() {
 	if (!armed) return;
 
 	// 使用毫秒直接比较，避免整数除法引入的最大1秒误差
-	const unsigned long linkAgeMs = millis() - webRCLastUpdate;
-	if (linkAgeMs <= WEB_RC_LOSS_TIMEOUT_MS) {
+	const unsigned long nowMs = millis();
+	const unsigned long linkAgeMs = nowMs - webRCLastUpdate;
+	const unsigned long stickAgeMs = nowMs - webRCLastStickUpdate;
+	if (linkAgeMs <= WEB_RC_LOSS_TIMEOUT_MS && stickAgeMs <= WEB_RC_LOSS_TIMEOUT_MS) {
 		timeoutHandled = false;
 		return;
 	}
-	// WEB_RC_TIMEOUT_MS is longer than this failsafe threshold. Without a latch,
+	// The 10 s active-source timeout is longer than this failsafe threshold. Without a latch,
 	// readWebRC() re-enables the stale link in that gap and repeats this work
 	// on every control-loop iteration until the longer timeout expires.
 	if (timeoutHandled) return;
@@ -156,7 +159,7 @@ void webRCLossFailsafe() {
 		useWebRC = false;
 		return;
 	}
-	print("Web RC连接丢失，启动下降\n");
+	print("Web RC连接或摇杆输入丢失，启动下降\n");
 	descend();
 	webRCEnabled = false;
 	useWebRC = false;

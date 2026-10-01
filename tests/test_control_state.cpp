@@ -29,6 +29,7 @@ bool isLocalSequenceRunning(){return localSequenceActive;}
 unsigned localSequenceCancelCount=0;
 void cancelLocalSequenceForManualMode(){++localSequenceCancelCount;localSequenceActive=false;}
 unsigned long webRCLastUpdate=0;
+unsigned long webRCLastStickUpdate=0;
 bool isUsingWebRC(){return webRCEnabled && useWebRC;}
 uint16_t webEdges=0;
 uint16_t takeWebRCButtonPressEdges(uint16_t* buttons){*buttons=webEdges; const uint16_t result=webEdges; webEdges=0;return result;}
@@ -101,6 +102,19 @@ int main(){
     assert(!(getActiveDiagnosticFaults() & DIAG_AUTO_TARGET_TIMEOUT)); // manual descent isn't an external timeout
     disarm(); assert(!isControlledLandingActive() && !armed);
     for(float m:motors) assert(m==0);
+    // Heartbeats cannot keep a stale Web stick command alive while armed.
+    armed=true; mode=STAB; thrustTarget=.7f;
+    webRCEnabled=useWebRC=true;
+    webRCLastUpdate=nowMs-100;
+    webRCLastStickUpdate=nowMs-9000;
+    webRCLossFailsafe();
+    assert(isControlledLandingActive());
+    assert(getActiveDiagnosticFaults() & DIAG_WEB_RC_LOSS);
+    webRCLastUpdate=webRCLastStickUpdate=nowMs;
+    webRCLossFailsafe(); // reset the timeout latch for later cases
+    webRCEnabled=useWebRC=false;
+    disarm();
+    setDiagnosticFault(DIAG_WEB_RC_LOSS, false);
     controlMode=NAN; controlThrottle=0;
     assert(!setFlightMode(ALTHOLD));
     assert(!setFlightMode(AUTO)); // no preflight target stream

@@ -6,6 +6,7 @@
 #include "drivers/SBUS.h"
 #include "util.h"
 #include "board_config.h"
+#include "control.h"
 
 // ---- 协议配置变量（默认值来自板级宏，可通过参数覆盖）----
 int rcProtocol = BOARD_RC_PROTOCOL; // 0=SBUS, 1=CRSF(ELRS)
@@ -154,6 +155,15 @@ void setupRC() {
 	initDefaultRCCalibration();
 }
 
+static bool physicalRCControlsActive() {
+#if WEB_RC_ENABLED
+	// Keep parsing receiver frames, but let only the selected source write targets.
+	return !isUsingWebRC();
+#else
+	return true;
+#endif
+}
+
 bool readRC() {
 	if (rcRxPin < 0) return false; // RC 未启用
 
@@ -165,8 +175,10 @@ bool readRC() {
 			++rcSerialBytesRead;
 		}
 		if (parseCRSFBuffer()) {
-			normalizeRC();
-			controlTime = t;
+			if (physicalRCControlsActive()) {
+				normalizeRC();
+				controlTime = t;
+			}
 			return true;
 		}
 		return false;
@@ -177,8 +189,10 @@ bool readRC() {
 			for (int i = 0; i < 16; i++) channels[i] = data.ch[i];
 			++rcProtocolFramesValid;
 			++rcChannelFramesAccepted;
-			normalizeRC();
-			controlTime = t;
+			if (physicalRCControlsActive()) {
+				normalizeRC();
+				controlTime = t;
+			}
 			return true;
 		}
 		return false;

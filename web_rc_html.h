@@ -992,7 +992,7 @@ const diagnosticChecks = [
   {bit:4,   name:'IMU 数据有效性', advice:'检查传感器数据、安装方向和校准参数。'},
   {bit:8,   name:'电机输出初始化', advice:'拆下螺旋桨后检查电机引脚、PWM 配置和接线。'},
   {bit:16,  name:'遥控链路', advice:'检查接收机供电、协议、串口引脚和遥控链路。'},
-  {bit:32,  name:'网页遥控链路', advice:'检查遥控页面连接和 Wi-Fi 链路。'},
+  {bit:32,  name:'网页遥控链路', advice:'检查遥控页面连接、Wi-Fi 和摇杆数据是否持续发送。'},
   {bit:64,  name:'电池电压', advice:'检查电池电量、分压电阻和 ADC 引脚。'},
   {bit:128, name:'控制循环时序', advice:'检查循环负载、通信请求和日志输出是否过重。'},
   {bit:256, name:'参数有效性', advice:'检查参数值；修正后重启并重新查看自检状态。'},

@@ -31,7 +31,7 @@ static DiagnosticState diagnosticStates[] = {
 	{DIAG_IMU_INVALID, "IMU_INVALID", "CRITICAL", "检查IMU数据和安装/校准参数", false, 0, 0, 0, 0, 0},
 	{DIAG_MOTOR_INIT, "MOTOR_INIT", "CRITICAL", "拆桨后检查电机引脚、PWM配置和接线", false, 0, 0, 0, 0, 0},
 	{DIAG_RC_LOSS, "RC_LOSS", "WARNING", "检查接收机供电、协议、串口引脚和链路", false, 0, 0, 0, 0, 0},
-	{DIAG_WEB_RC_LOSS, "WEB_RC_LOSS", "WARNING", "检查遥控客户端连接和Wi-Fi链路", false, 0, 0, 0, 0, 0},
+	{DIAG_WEB_RC_LOSS, "WEB_RC_LOSS", "WARNING", "检查遥控客户端连接、Wi-Fi和摇杆数据", false, 0, 0, 0, 0, 0},
 	{DIAG_BATTERY_LOW, "BATTERY_LOW", "WARNING", "检查电池电量、分压电阻和ADC引脚", false, 0, 0, 0, 0, 0},
 	{DIAG_LOOP_OVERRUN, "LOOP_OVERRUN", "WARNING", "检查循环负载、通信请求和日志输出", false, 0, 0, 0, 0, 0},
 	{DIAG_PARAMETER, "PARAMETER", "CRITICAL", "检查参数范围；修正后重启并重新执行diag", false, 0, 0, 0, 0, 0},
