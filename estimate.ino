@@ -12,11 +12,24 @@ static const float ESTIMATE_NOMINAL_DT = 0.001f;
 // A long scheduler stall yields only one fresh accelerometer sample, not a
 // history representative of the whole gap. Bound gravity feedback to 5 ms.
 static const float ESTIMATE_MAX_ACCEL_CORRECTION_DT = 0.005f;
+// Fade gravity feedback between 5 and 25 degrees of estimator/accelerometer
+// disagreement; keep a small gain floor to limit gyro-bias drift.
+static const float ESTIMATE_ACCEL_INNOVATION_MIN_RAD = 0.08726646f; // 5 deg
+static const float ESTIMATE_ACCEL_INNOVATION_MAX_RAD = 0.43633231f; // 25 deg
+static const float ESTIMATE_ACCEL_MIN_ADAPTIVE_WEIGHT = 0.0005f;
 #ifndef EST_RAW_ACCEL_NORM_TOLERANCE
 #define EST_RAW_ACCEL_NORM_TOLERANCE 0.10f
 #endif
 static_assert(EST_RAW_ACCEL_NORM_TOLERANCE > 0.0f && EST_RAW_ACCEL_NORM_TOLERANCE <= 1.0f,
 	"EST_RAW_ACCEL_NORM_TOLERANCE must be in (0, 1]");
+
+static float adaptiveAccelerationWeight(float configuredWeight, float gravityAlignment) {
+	const float innovation = acosf(constrain(gravityAlignment, -1.0f, 1.0f));
+	const float innovationRatio = constrain((innovation - ESTIMATE_ACCEL_INNOVATION_MIN_RAD) /
+		(ESTIMATE_ACCEL_INNOVATION_MAX_RAD - ESTIMATE_ACCEL_INNOVATION_MIN_RAD), 0.0f, 1.0f);
+	const float minimumWeight = min(configuredWeight, ESTIMATE_ACCEL_MIN_ADAPTIVE_WEIGHT);
+	return configuredWeight + (minimumWeight - configuredWeight) * innovationRatio;
+}
 
 // ============== 水平修正 P 项 ==============
 float levelWeight = 0;  // 水平修正 P 项权重（关闭，无法区分陀螺温漂与机械不对称时会起负作用）
@@ -136,8 +149,10 @@ void applyAcc() {
 
 	// calculate accelerometer correction
 	Vector up = Quaternion::rotateVector(Vector(0, 0, 1), attitude);
+	const float gravityAlignment = Vector::dot(gravityReference / gravityNorm, up);
+	const float correctionWeight = adaptiveAccelerationWeight(accWeight, gravityAlignment);
 	Vector correction = Vector::rotationVectorBetween(gravityReference, up) *
-		(accWeight * correctionConfidence *
+		(correctionWeight * correctionConfidence *
 			(min(dt, ESTIMATE_MAX_ACCEL_CORRECTION_DT) / ESTIMATE_NOMINAL_DT));
 
 	// apply correction

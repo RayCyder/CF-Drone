@@ -67,6 +67,14 @@ static Quaternion runAirborneAccCorrection(float sampleDt, int samples) {
 }
 
 int main() {
+	assert(fabsf(adaptiveAccelerationWeight(0.003f, 1.0f) - 0.003f) < 1e-7f);
+	assert(fabsf(adaptiveAccelerationWeight(0.003f, cosf(radians(5.0f))) - 0.003f) < 1e-6f);
+	const float midInnovation = adaptiveAccelerationWeight(0.003f, cosf(radians(15.0f)));
+	assert(fabsf(midInnovation - 0.00175f) < 1e-6f);
+	assert(fabsf(adaptiveAccelerationWeight(0.003f, cosf(radians(25.0f))) - 0.0005f) < 1e-6f);
+	assert(fabsf(adaptiveAccelerationWeight(0.003f, cosf(radians(35.0f))) - 0.0005f) < 1e-7f);
+	assert(fabsf(adaptiveAccelerationWeight(0.0002f, cosf(radians(35.0f))) - 0.0002f) < 1e-7f);
+
 	const Quaternion tilted = Quaternion::fromEuler(Vector(0.1f, 0.08f, 0.0f));
 	resetEstimator(tilted);
 	levelWeight = 0.0f;
