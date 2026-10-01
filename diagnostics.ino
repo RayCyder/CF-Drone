@@ -6,6 +6,8 @@
 #include "flight_log.h"
 #include "loop_metrics.h"
 
+extern bool armed;
+
 #if WEB_RC_ENABLED
 extern bool isUsingWebRC();
 #endif
@@ -77,7 +79,6 @@ static uint32_t currentLoopSequence = 0;
 static bool armedLoopTraceCaptureStarted = false;
 static bool loopWasArmedForTrace = false;
 static bool armedLoopTraceTriggered = false;
-extern bool armed;
 #endif
 #if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
 static ImuWaitTrace currentImuWaitTrace = {};
@@ -112,7 +113,7 @@ static const char *const loopTraceStageNames[LOOP_TRACE_STAGE_COUNT] = {
 
 static_assert(sizeof(loopStages) / sizeof(loopStages[0]) == LOOP_STAGE_COUNT, "stage index/name table mismatch");
 void recordLoopStage(LoopStageId stage, uint32_t durationUs) {
-    if (stage >= LOOP_STAGE_COUNT) return;
+    if (!armed || stage >= LOOP_STAGE_COUNT) return;
     auto &entry = loopStages[stage];
     ++entry.samples;
     entry.average.update(durationUs);
@@ -219,6 +220,15 @@ void setLoopTimingSequence(uint32_t loopSequence) {
 }
 
 static void reportLoopStages() {
+    static bool wasArmed = false;
+    if (!armed) {
+        if (wasArmed) {
+            for (auto &entry : loopStages) entry.pendingWorstUs = 0;
+            wasArmed = false;
+        }
+        return;
+    }
+    wasArmed = true;
     const uint32_t now = millis();
     if ((uint32_t)(now - lastStageReportMs) < 5000) return;
     lastStageReportMs = now;
@@ -240,6 +250,7 @@ static void reportLoopStages() {
 }
 
 void setDiagnosticFault(DiagnosticFault fault, bool active) {
+	if (fault == DIAG_LOOP_OVERRUN && !armed) active = false;
 	const uint32_t now = millis();
 	for (size_t i = 0; i < sizeof(diagnosticStates) / sizeof(diagnosticStates[0]); ++i) {
 		DiagnosticState &state = diagnosticStates[i];
@@ -247,7 +258,6 @@ void setDiagnosticFault(DiagnosticFault fault, bool active) {
 		if (active != state.active) {
 			state.lastSeen = now;
 			if (active) {
-				extern bool armed;
 				if (armed && fault != DIAG_LOOP_OVERRUN) triggerFlightLog((uint32_t)fault);
 				if (state.occurrences < UINT16_MAX) state.occurrences++;
 				if (state.occurrences == 1) state.firstSeen = now;
@@ -265,12 +275,11 @@ void setDiagnosticFault(DiagnosticFault fault, bool active) {
 					active ? "ACTIVE" : "CLEARED", state.name,
 					(unsigned long)getActiveDiagnosticFaults());
 			}
-			recordSystemLogEvent("DIAG", eventMessage);
+			if (fault != DIAG_LOOP_OVERRUN || armed) recordSystemLogEvent("DIAG", eventMessage);
 			// Fault transitions happen inside the flight loop. Keep them in the
 			// event ring for SSE/diag instead of synchronously draining UART here.
 		}
 		if (fault == DIAG_LOOP_OVERRUN && active && dt * 1000000.0f >= LOOP_STALL_LOG_TRIGGER_US) {
-			extern bool armed;
 			if (armed) triggerFlightLog((uint32_t)fault);
 		}
 		return;
@@ -291,8 +300,6 @@ bool hasBlockingDiagnosticFault() {
 }
 
 void recordLoopTiming(float dt) {
-    const uint32_t us = loopTiming.observe(dt);
-    worstLoopDt = loopTiming.maximumUs * .000001f;
 #if defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
     if (armed && !loopWasArmedForTrace) {
         portENTER_CRITICAL(&loopTraceMux);
@@ -306,9 +313,18 @@ void recordLoopTiming(float dt) {
         portEXIT_CRITICAL(&loopTraceMux);
     }
     loopWasArmedForTrace = armed;
-    const bool captureTrace = (armed && armedLoopTraceCaptureStarted && !armedLoopTraceTriggered) ||
-        (us > 1500 && !armedLoopTraceCaptureStarted);
-#else
+    const bool captureTrace = armedLoopTraceCaptureStarted && !armedLoopTraceTriggered;
+#endif
+    if (!armed) {
+        if (haveLoopOverrun) {
+            setDiagnosticFault(DIAG_LOOP_OVERRUN, false);
+            haveLoopOverrun = false;
+        }
+        return;
+    }
+    const uint32_t us = loopTiming.observe(dt);
+    worstLoopDt = loopTiming.maximumUs * .000001f;
+#if !defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
     const bool captureTrace = us > 1500;
 #endif
     if (us > 1500) {

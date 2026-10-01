@@ -195,15 +195,16 @@ int main(){
     dt=.005001f; recordLoopTiming(dt);
     assert(flightLogTriggerCount==triggerCountBeforeJitter+1); // a sustained-scale stall preserves the armed snapshot
     armed=false;
-    assert(loopTiming.samples==4 && loopTiming.invalid==2 && loopTiming.maximumUs==5001);
+    assert(loopTiming.samples==2 && loopTiming.invalid==0 && loopTiming.maximumUs==5001);
     const unsigned eventCount=systemEventCount;
     for(int i=0;i<1000;i++) recordLoopStage(LOOP_STAGE_CONTROL_LAW,201);
     assert(systemEventCount==eventCount); // hot-path counters do not format/emit events
-    assert(loopStages[LOOP_STAGE_CONTROL_LAW].overBudget==1000);
+    assert(loopStages[LOOP_STAGE_CONTROL_LAW].overBudget==0);
     nowMs=0; recordLoopTiming(.002f); nowMs=10001; updateDiagnostics();
     assert(!(getActiveDiagnosticFaults() & DIAG_LOOP_OVERRUN));
 
     clearDiagnosticHistory();
+    armed=true;
     beginLoopTraceCycle();
     recordLoopStage(LOOP_STAGE_RC_WEB,120);
     recordLoopStage(LOOP_STAGE_ESTIMATE,240);

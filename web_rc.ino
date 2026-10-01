@@ -115,7 +115,7 @@ extern bool isParameterDirty(const char *name);
 extern bool parameterPersistenceReady();
 extern float webRCThrottleScale, webRCStickScale, webRCYawScale;
 extern float stickDeadzone, throttleDeadzone;
-extern WebServer webRCServer;
+extern WebServer &webRCServer;
 
 #define WEB_LOG_CSV_COLUMNS_CAPACITY 41
 #define WEB_LOG_CSV_ROW_CAPACITY 1024
@@ -447,7 +447,26 @@ static float lastValidYaw      = 0.0f;     // 上次通过验证的偏航值
 static unsigned long lastDataErrorTime = 0; // 上次数据异常时间，用于限速错误日志输出
 
 // ==================== Web 服务器 ====================
-WebServer webRCServer(80);          // 主服务器：80端口（标准HTTP，无需在URL中写端口）
+class ResponsiveWebServer : public WebServer {
+public:
+    explicit ResponsiveWebServer(int port) : WebServer(port) {}
+
+    void handleClient() override {
+        // WebServer serves one client at a time and otherwise waits 5 s for an
+        // accepted socket to send its first byte. Browser preconnects can hold
+        // up every stick packet even though the control loop remains healthy.
+        if (_currentStatus == HC_WAIT_READ && !_currentClient.available() &&
+            (uint32_t)(millis() - _statusChange) > 150) {
+            _currentClient.stop();
+            _currentClient = NetworkClient();
+            _currentStatus = HC_NONE;
+        }
+        WebServer::handleClient();
+    }
+};
+
+static ResponsiveWebServer responsiveWebRCServer(80);
+WebServer &webRCServer = responsiveWebRCServer; // 主服务器：80端口
 
 #if WIFI_ENABLED
 extern bool isWiFiConfigPortalActive();
