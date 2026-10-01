@@ -97,6 +97,15 @@ def validate_log(path, trace_path):
                  for row in platform]
     in_gravity_band=sum(9.80665*0.95<=value<=9.80665*1.05
                         for value in accel_norms)
+    gaps={'armed':0,'disarmed':0,'transition':0}
+    for previous,current in zip(rows,rows[1:]):
+        missing=max(0,round((float(current['t'])-float(previous['t']))/0.01)-1)
+        if not missing:
+            continue
+        phase=('armed' if previous['armed']=='1' and current['armed']=='1' else
+               'disarmed' if previous['armed']=='0' and current['armed']=='0' else
+               'transition')
+        gaps[phase]+=missing
     return {'rows':len(rows),'armed_rows':len(armed),'platform_rows':len(platform),
             'max_armed_dt_ms':round(max(float(row['dt_s']) for row in armed)*1000,3),
             'min_armed_voltage_v':min(float(row['battery_v']) for row in armed),
@@ -104,6 +113,9 @@ def validate_log(path, trace_path):
             'platform_zero_confidence_rows':sum(value==0 for value in confidence),
             'platform_mean_confidence':round(sum(confidence)/len(confidence),4),
             'platform_accel_norm_in_1g_5pct_rows':in_gravity_band,
+            'missing_samples_in_armed_gaps':gaps['armed'],
+            'missing_samples_in_disarmed_gaps':gaps['disarmed'],
+            'missing_samples_across_arm_transition':gaps['transition'],
             'trace_rows':len(trace_rows)}
 
 def main():
