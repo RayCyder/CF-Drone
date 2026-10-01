@@ -659,7 +659,7 @@ async function refreshLevelCalibrationStatus(){
     if(!response.ok)throw new Error('飞控未返回水平校准状态');
     const data=await response.json();
     document.getElementById('level-calibration-live').textContent=`当前估计姿态：Roll ${Number(data.roll_deg).toFixed(2)}° · Pitch ${Number(data.pitch_deg).toFixed(2)}°（机身水平时应接近 0°）`;
-    const names={empty:'尚未采集',collecting:'正在采集静止 IMU',ready:'数据合格，等待确认',applying:'正在保存',applied:'安装角已应用',rejected:'本次采集未通过'};
+    const names={empty:'尚未采集',queued:'已排队，等待飞控主循环开始采集',collecting:'正在采集静止 IMU',processing:'正在分块处理 IMU 数据',ready:'数据合格，等待确认',applying:'正在保存',applied:'安装角已应用',rejected:'本次采集未通过',cancelling:'正在取消采集'};
     let detail=names[data.state]||'状态未知';
     if(data.state==='ready'||data.state==='applied'){
       const r=(Number(data.new_rot_roll_rad)-Number(data.old_rot_roll_rad))*180/Math.PI;
@@ -668,10 +668,14 @@ async function refreshLevelCalibrationStatus(){
     }
     if(data.state==='rejected')detail+=`（${data.reason}）；请确认机身静止、水平和 IMU 正常后重试`;
     if(data.state==='applied')detail+=data.persist_pending?'；等待参数写入':'；参数写入已完成，请复核水平读数';
+    if(data.pending&&data.state!=='applied')detail+='；请求已提交，等待飞控处理';
     status.textContent=detail;
-    document.getElementById('level-calibration-start').disabled=data.armed||data.state==='collecting'||data.state==='applying'||data.state==='ready';
+    const busy=['queued','collecting','processing','applying','cancelling'].includes(data.state);
+    document.getElementById('level-calibration-start').disabled=data.armed||busy||data.state==='ready';
     document.getElementById('level-calibration-apply').disabled=data.armed||data.state!=='ready';
-    document.getElementById('level-calibration-discard').disabled=data.state==='collecting'||data.state==='applying';
+    const discard=document.getElementById('level-calibration-discard');
+    discard.textContent=['queued','collecting','processing','cancelling'].includes(data.state)?'取消采集':'放弃建议';
+    discard.disabled=data.state==='applying'||data.state==='cancelling';
   }catch(error){status.textContent=error.message||'水平校准状态读取失败';}
 }
 async function startLevelCalibration(){
@@ -680,6 +684,7 @@ async function startLevelCalibration(){
   try{
     const response=await controlFetch('/level-calibration/start',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({confirm:'1'})});
     const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'采集启动失败');
+    document.getElementById('level-calibration-status').textContent='采集请求已提交，等待飞控主循环开始…';
     refreshLevelCalibrationStatus();
   }catch(error){document.getElementById('level-calibration-status').textContent=error.message||'采集启动失败';}
 }

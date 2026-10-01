@@ -136,9 +136,11 @@ static_assert(WEB_LOG_CSV_COLUMNS_CAPACITY >= FLIGHT_LOG_COLUMNS, "HTTP CSV expo
 static_assert(WEB_LOG_CSV_ROW_CAPACITY >= 1024, "HTTP CSV rows require at least 1024 bytes");
 
 enum LevelCalibrationState : uint8_t {
-    LEVEL_EMPTY, LEVEL_COLLECTING, LEVEL_READY, LEVEL_APPLYING, LEVEL_APPLIED, LEVEL_REJECTED
+    LEVEL_EMPTY, LEVEL_QUEUED, LEVEL_COLLECTING, LEVEL_PROCESSING,
+    LEVEL_READY, LEVEL_APPLYING, LEVEL_APPLIED, LEVEL_REJECTED, LEVEL_CANCELLING
 };
-static uint8_t levelCalibrationState = LEVEL_EMPTY;
+static portMUX_TYPE levelCalibrationMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint8_t levelCalibrationState = LEVEL_EMPTY;
 static const char *levelCalibrationReason = "empty";
 static Vector levelCalibrationBaseRotation;
 static Vector levelCalibrationProposedRotation;
@@ -148,48 +150,106 @@ static float levelCalibrationAccelNorm = 0.0f;
 static float levelCalibrationAccelSd = 0.0f;
 static float levelCalibrationGyroSd = 0.0f;
 static uint32_t levelCalibrationStartedMs = 0;
+static bool levelCalibrationStartRequested = false;
+static bool levelCalibrationCancelRequested = false;
+static bool levelCalibrationCaptureOwned = false;
+static uint16_t levelCalibrationProcessCount = 0;
+static uint16_t levelCalibrationProcessIndex = 0;
+static float levelCalibrationSum[6] = {};
+static float levelCalibrationSquared[6] = {};
+static bool levelCalibrationProcessComplete = false;
+static const uint16_t LEVEL_CALIBRATION_PROCESS_CHUNK = 64;
 
 bool isLevelCalibrationActive() {
     const uint8_t state = __atomic_load_n(&levelCalibrationState, __ATOMIC_ACQUIRE);
-    return state == LEVEL_COLLECTING || state == LEVEL_READY || state == LEVEL_APPLYING;
+    return state == LEVEL_QUEUED || state == LEVEL_COLLECTING || state == LEVEL_PROCESSING ||
+        state == LEVEL_READY || state == LEVEL_APPLYING || state == LEVEL_CANCELLING;
 }
 
 static void setLevelCalibrationState(uint8_t state, const char *reason) {
-    levelCalibrationReason = reason;
+    portENTER_CRITICAL(&levelCalibrationMux);
+    levelCalibrationReason = reason ? reason : "unknown";
     __atomic_store_n(&levelCalibrationState, (uint8_t)state, __ATOMIC_RELEASE);
+    portEXIT_CRITICAL(&levelCalibrationMux);
 }
 
-static void finishLevelCalibrationCapture() {
-    if (levelCalibrationState != LEVEL_COLLECTING || imuCapture.state() != IMU_CAPTURE_READY) return;
-    const uint16_t count = imuCapture.size();
-    float sum[6] = {}, squared[6] = {};
-    bool complete = count == IMU_CAPTURE_CAPACITY;
-    for (uint16_t i = 0; complete && i < count; ++i) {
-        ImuCaptureSample sample;
-        complete = imuCapture.copy(i, sample);
-        if (!complete) break;
-        const float values[6] = {
-            sample.accCentiMetersPerSec2[0] * 0.01f,
-            sample.accCentiMetersPerSec2[1] * 0.01f,
-            sample.accCentiMetersPerSec2[2] * 0.01f,
-            sample.gyroMicroRadPerSec[0] * 1e-6f,
-            sample.gyroMicroRadPerSec[1] * 1e-6f,
-            sample.gyroMicroRadPerSec[2] * 1e-6f
-        };
-        for (uint8_t axis = 0; axis < 6; ++axis) {
-            sum[axis] += values[axis];
-            squared[axis] += values[axis] * values[axis];
-        }
+static bool publishLevelCalibrationReady() {
+    portENTER_CRITICAL(&levelCalibrationMux);
+    const bool ready = levelCalibrationState == LEVEL_PROCESSING &&
+        !__atomic_load_n(&levelCalibrationCancelRequested, __ATOMIC_ACQUIRE);
+    if (ready) {
+        levelCalibrationReason = "ready_for_confirmation";
+        __atomic_store_n(&levelCalibrationState, (uint8_t)LEVEL_READY, __ATOMIC_RELEASE);
     }
+    portEXIT_CRITICAL(&levelCalibrationMux);
+    return ready;
+}
+
+static uint8_t getLevelCalibrationState() {
+    return __atomic_load_n(&levelCalibrationState, __ATOMIC_ACQUIRE);
+}
+
+static bool getLevelCalibrationStartRequested() {
+    return __atomic_load_n(&levelCalibrationStartRequested, __ATOMIC_ACQUIRE);
+}
+
+static bool getLevelCalibrationCancelRequested() {
+    return __atomic_load_n(&levelCalibrationCancelRequested, __ATOMIC_ACQUIRE);
+}
+
+static void setLevelCalibrationStartRequested(bool requested) {
+    __atomic_store_n(&levelCalibrationStartRequested, requested, __ATOMIC_RELEASE);
+}
+
+static void setLevelCalibrationCancelRequested(bool requested) {
+    __atomic_store_n(&levelCalibrationCancelRequested, requested, __ATOMIC_RELEASE);
+}
+
+static bool takeLevelCalibrationStartRequest() {
+    return __atomic_exchange_n(&levelCalibrationStartRequested, false, __ATOMIC_ACQ_REL);
+}
+
+static bool takeLevelCalibrationCancelRequest() {
+    return __atomic_exchange_n(&levelCalibrationCancelRequested, false, __ATOMIC_ACQ_REL);
+}
+
+static void getLevelCalibrationSnapshot(uint8_t &state, const char *&reason) {
+    portENTER_CRITICAL(&levelCalibrationMux);
+    state = levelCalibrationState;
+    reason = levelCalibrationReason;
+    portEXIT_CRITICAL(&levelCalibrationMux);
+}
+
+static void resetLevelCalibrationProcessing() {
+    levelCalibrationProcessCount = 0;
+    levelCalibrationProcessIndex = 0;
+    levelCalibrationProcessComplete = false;
+    for (uint8_t axis = 0; axis < 6; ++axis) {
+        levelCalibrationSum[axis] = 0.0f;
+        levelCalibrationSquared[axis] = 0.0f;
+    }
+}
+
+static void startLevelCalibrationProcessing() {
+    resetLevelCalibrationProcessing();
+    levelCalibrationProcessCount = imuCapture.size();
+    levelCalibrationProcessComplete = levelCalibrationProcessCount == IMU_CAPTURE_CAPACITY;
+    setLevelCalibrationState(LEVEL_PROCESSING, "processing");
+}
+
+static void finishLevelCalibrationProcessing() {
+    const uint16_t count = levelCalibrationProcessCount;
+    const bool complete = levelCalibrationProcessComplete && count == IMU_CAPTURE_CAPACITY;
     imuCapture.release();
+    levelCalibrationCaptureOwned = false;
     if (!complete) {
         setLevelCalibrationState(LEVEL_REJECTED, "incomplete_capture");
         return;
     }
     float mean[6], sd[6];
     for (uint8_t axis = 0; axis < 6; ++axis) {
-        mean[axis] = sum[axis] / count;
-        sd[axis] = sqrtf(max(0.0f, squared[axis] / count - mean[axis] * mean[axis]));
+        mean[axis] = levelCalibrationSum[axis] / count;
+        sd[axis] = sqrtf(max(0.0f, levelCalibrationSquared[axis] / count - mean[axis] * mean[axis]));
     }
     const Vector gravity(mean[0], mean[1], mean[2]);
     levelCalibrationAccelNorm = gravity.norm();
@@ -222,7 +282,91 @@ static void finishLevelCalibrationCapture() {
     levelCalibrationBeforeRollDeg = degrees(atan2f(gravity.y, gravity.z));
     levelCalibrationBeforePitchDeg = degrees(atan2f(-gravity.x, sqrtf(gravity.y * gravity.y + gravity.z * gravity.z)));
     levelCalibrationProposedRotation = candidate;
-    setLevelCalibrationState(LEVEL_READY, "ready_for_confirmation");
+    publishLevelCalibrationReady();
+}
+
+static void processLevelCalibrationCaptureChunk() {
+    if (getLevelCalibrationState() != LEVEL_PROCESSING) return;
+    uint16_t processed = 0;
+    while (levelCalibrationProcessComplete &&
+        levelCalibrationProcessIndex < levelCalibrationProcessCount &&
+        processed < LEVEL_CALIBRATION_PROCESS_CHUNK) {
+        ImuCaptureSample sample;
+        if (!imuCapture.copy(levelCalibrationProcessIndex, sample)) {
+            levelCalibrationProcessComplete = false;
+            break;
+        }
+        const float values[6] = {
+            sample.accCentiMetersPerSec2[0] * 0.01f,
+            sample.accCentiMetersPerSec2[1] * 0.01f,
+            sample.accCentiMetersPerSec2[2] * 0.01f,
+            sample.gyroMicroRadPerSec[0] * 1e-6f,
+            sample.gyroMicroRadPerSec[1] * 1e-6f,
+            sample.gyroMicroRadPerSec[2] * 1e-6f
+        };
+        for (uint8_t axis = 0; axis < 6; ++axis) {
+            levelCalibrationSum[axis] += values[axis];
+            levelCalibrationSquared[axis] += values[axis] * values[axis];
+        }
+        ++levelCalibrationProcessIndex;
+        ++processed;
+    }
+    if (!levelCalibrationProcessComplete || levelCalibrationProcessIndex >= levelCalibrationProcessCount) {
+        finishLevelCalibrationProcessing();
+    }
+}
+
+static void serviceLevelCalibration() {
+    const uint8_t state = getLevelCalibrationState();
+    if (takeLevelCalibrationCancelRequest()) {
+        setLevelCalibrationStartRequested(false);
+        if (levelCalibrationCaptureOwned) {
+            if (imuCapture.state() == IMU_CAPTURE_RUNNING) imuCapture.stop();
+            imuCapture.release();
+            levelCalibrationCaptureOwned = false;
+        }
+        resetLevelCalibrationProcessing();
+        setLevelCalibrationState(LEVEL_EMPTY, "cancelled");
+        return;
+    }
+    if (state == LEVEL_QUEUED && takeLevelCalibrationStartRequest()) {
+        resetLevelCalibrationProcessing();
+        if (armed || motorsActive() || !imuOK || isAccelCalibrationActive() || motorTestActive ||
+            vibrationRouteBusy() || vibrationCalibrationState == VIBRATION_QUEUED ||
+            vibrationCalibrationState == VIBRATION_RUNNING || isLocalSequenceRunning() ||
+            !parameterPersistenceReady() || imuCapture.state() != IMU_CAPTURE_IDLE) {
+            setLevelCalibrationState(LEVEL_REJECTED, "preflight_failed");
+            return;
+        }
+        levelCalibrationBaseRotation = imuRotation;
+        if (!imuCapture.start(armed, motorsActive(), ESP.getFreeHeap())) {
+            setLevelCalibrationState(LEVEL_REJECTED, "capture_start_failed");
+            return;
+        }
+        levelCalibrationCaptureOwned = true;
+        levelCalibrationStartedMs = millis();
+        setLevelCalibrationState(LEVEL_COLLECTING, "collecting");
+        return;
+    }
+    if (state == LEVEL_COLLECTING) {
+        const ImuCaptureState captureState = imuCapture.state();
+        if (captureState == IMU_CAPTURE_READY) {
+            startLevelCalibrationProcessing();
+        } else if ((uint32_t)(millis() - levelCalibrationStartedMs) > 5000U) {
+            if (captureState == IMU_CAPTURE_RUNNING) imuCapture.stop();
+            if (levelCalibrationCaptureOwned) {
+                imuCapture.release();
+                levelCalibrationCaptureOwned = false;
+            }
+            setLevelCalibrationState(LEVEL_REJECTED, "capture_timeout");
+        } else if (captureState == IMU_CAPTURE_IDLE && levelCalibrationCaptureOwned) {
+            imuCapture.release();
+            levelCalibrationCaptureOwned = false;
+            setLevelCalibrationState(LEVEL_REJECTED, "capture_stopped");
+        }
+        return;
+    }
+    if (state == LEVEL_PROCESSING) processLevelCalibrationCaptureChunk();
 }
 
 static const char *flightLogStateName(FlightLogState state) {
@@ -1433,48 +1577,40 @@ void setupWebRC() {
             webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires_level_confirm_disarmed_stationary_imu_and_free_capture\"}");
             return;
         }
-        levelCalibrationBaseRotation = imuRotation;
-        setLevelCalibrationState(LEVEL_COLLECTING, "collecting");
-        if (!imuCapture.start(armed, motorsActive(), ESP.getFreeHeap())) {
-            setLevelCalibrationState(LEVEL_REJECTED, "capture_start_failed");
-            webRCServer.send(503, "application/json", "{\"ok\":0,\"error\":\"capture_start_failed\"}");
-            return;
-        }
-        levelCalibrationStartedMs = millis();
-        webRCServer.send(202, "application/json", "{\"ok\":1,\"state\":\"collecting\"}");
+        setLevelCalibrationStartRequested(true);
+        setLevelCalibrationCancelRequested(false);
+        setLevelCalibrationState(LEVEL_QUEUED, "queued");
+        webRCServer.send(202, "application/json", "{\"ok\":1,\"state\":\"queued\",\"pending\":true}");
     });
     webRCServer.on("/level-calibration/status", HTTP_GET, []() {
-        if (levelCalibrationState == LEVEL_COLLECTING) {
-            if (imuCapture.state() == IMU_CAPTURE_READY) finishLevelCalibrationCapture();
-            else if ((uint32_t)(millis() - levelCalibrationStartedMs) > 5000U) {
-                imuCapture.stop();
-                vTaskDelay(1);
-                imuCapture.release();
-                setLevelCalibrationState(LEVEL_REJECTED, "capture_timeout");
-            }
-        }
-        const char *names[] = {"empty", "collecting", "ready", "applying", "applied", "rejected"};
+        const char *names[] = {"empty", "queued", "collecting", "processing", "ready", "applying", "applied", "rejected", "cancelling"};
         const Vector angles = attitude.toEuler();
+        uint8_t state;
+        const char *reason;
+        getLevelCalibrationSnapshot(state, reason);
+        const bool pending = getLevelCalibrationStartRequested() || getLevelCalibrationCancelRequested();
         char json[512];
         snprintf(json, sizeof(json),
             "{\"state\":\"%s\",\"reason\":\"%s\",\"armed\":%s,\"roll_deg\":%.3f,\"pitch_deg\":%.3f,"
             "\"before_roll_deg\":%.3f,\"before_pitch_deg\":%.3f,\"acc_norm\":%.3f,"
             "\"acc_sd\":%.4f,\"gyro_sd\":%.5f,\"old_rot_roll_rad\":%.6f,"
             "\"old_rot_pitch_rad\":%.6f,\"new_rot_roll_rad\":%.6f,\"new_rot_pitch_rad\":%.6f,"
-            "\"persist_pending\":%s}",
-            names[levelCalibrationState], levelCalibrationReason, armed ? "true" : "false",
+            "\"persist_pending\":%s,\"pending\":%s}",
+            names[state], reason, armed ? "true" : "false",
             degrees(angles.x), degrees(angles.y),
             levelCalibrationBeforeRollDeg, levelCalibrationBeforePitchDeg,
             levelCalibrationAccelNorm, levelCalibrationAccelSd, levelCalibrationGyroSd,
             levelCalibrationBaseRotation.x, levelCalibrationBaseRotation.y,
             levelCalibrationProposedRotation.x, levelCalibrationProposedRotation.y,
-            (isParameterDirty("IMU_ROT_ROLL") || isParameterDirty("IMU_ROT_PITCH")) ? "true" : "false");
+            (isParameterDirty("IMU_ROT_ROLL") || isParameterDirty("IMU_ROT_PITCH")) ? "true" : "false",
+            pending ? "true" : "false");
         webRCServer.send(200, "application/json", json);
     });
     webRCServer.on("/level-calibration/apply", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
         if (!requireWebRCLease()) return;
-        if (webRCServer.arg("confirm") != "1" || levelCalibrationState != LEVEL_READY ||
+        if (webRCServer.arg("confirm") != "1" || getLevelCalibrationState() != LEVEL_READY ||
+            getLevelCalibrationCancelRequested() ||
             armed || motorsActive() || !imuOK || motorTestActive || vibrationRouteBusy() ||
             isAccelCalibrationActive() || !parameterPersistenceReady() ||
             imuRotation.x != levelCalibrationBaseRotation.x ||
@@ -1500,8 +1636,15 @@ void setupWebRC() {
     webRCServer.on("/level-calibration/discard", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
         if (!requireWebRCLease()) return;
-        if (levelCalibrationState == LEVEL_COLLECTING || levelCalibrationState == LEVEL_APPLYING) {
+        const uint8_t state = getLevelCalibrationState();
+        if (state == LEVEL_APPLYING) {
             webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"capture_busy\"}");
+            return;
+        }
+        if (state == LEVEL_QUEUED || state == LEVEL_COLLECTING || state == LEVEL_PROCESSING || state == LEVEL_CANCELLING) {
+            setLevelCalibrationCancelRequested(true);
+            setLevelCalibrationState(LEVEL_CANCELLING, "cancelling");
+            webRCServer.send(202, "application/json", "{\"ok\":1,\"pending\":true}");
             return;
         }
         setLevelCalibrationState(LEVEL_EMPTY, "empty");
@@ -2214,6 +2357,7 @@ void setupWebRC() {
 void readWebRC() {
     processWebRCInputQueue();
     stepOpenLoopSequence();
+    serviceLevelCalibration();
     serviceVibrationCalibration();
     
     if (isWebRCEnabled()) {
