@@ -41,7 +41,8 @@ def c_float_literal(value: float) -> str:
 def compile_driver(compiler: str, include_source: Path, output: Path,
                    raw_tolerance: float | None = None,
                    innovation_max_deg: float | None = None,
-                   adaptive_min_weight: float | None = None) -> None:
+                   adaptive_min_weight: float | None = None,
+                   fusion_filter_alpha: float | None = None) -> None:
     command = [
         compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-Wno-vla",
         "-I", str(ROOT / "tests/stubs"), "-I", str(ROOT),
@@ -54,6 +55,8 @@ def compile_driver(compiler: str, include_source: Path, output: Path,
         command.insert(-3, f"-DESTIMATE_ACCEL_INNOVATION_MAX_DEG={c_float_literal(innovation_max_deg)}")
     if adaptive_min_weight is not None:
         command.insert(-3, f"-DESTIMATE_ACCEL_MIN_ADAPTIVE_WEIGHT={c_float_literal(adaptive_min_weight)}")
+    if fusion_filter_alpha is not None:
+        command.insert(-3, f"-DEST_ACCEL_FUSION_FILTER_ALPHA={c_float_literal(fusion_filter_alpha)}")
     subprocess.run(command, check=True)
 
 

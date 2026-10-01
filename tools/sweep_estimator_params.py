@@ -59,6 +59,8 @@ def main() -> int:
     parser.add_argument("--innovation-max-deg", type=comma_floats, default=[15.0, 25.0])
     parser.add_argument("--adaptive-min-weights", type=comma_floats, default=[0.0005],
                         help="minimum acceleration correction weight used above the innovation floor")
+    parser.add_argument("--fusion-alphas", type=comma_floats, default=[0.2],
+                        help="coefficient for the gravity-fusion accelerometer low-pass path")
     parser.add_argument("--gyro-bias", type=gyro_bias, default=(0.0, 0.0, 0.0),
                         help="additional bias applied to each generated gyro stream")
     args = parser.parse_args()
@@ -72,16 +74,19 @@ def main() -> int:
         parser.error("innovation upper bounds must be in (5, 180]")
     if any(not 0.0 <= item <= 1.0 for item in args.adaptive_min_weights):
         parser.error("adaptive minimum weights must be in [0, 1]")
+    if any(not 0.0 < item <= 1.0 for item in args.fusion_alphas):
+        parser.error("fusion filter alpha must be in (0, 1]")
 
     import shutil
     compiler = shutil.which("clang++") or shutil.which("g++")
     if not compiler:
         raise SystemExit("A C++17 compiler is required")
-    configs = [(weight, tolerance, maximum, minimum)
+    configs = [(weight, tolerance, maximum, minimum, alpha)
                for weight in args.weights
                for tolerance in args.raw_tolerances
                for maximum in args.innovation_max_deg
-               for minimum in args.adaptive_min_weights]
+               for minimum in args.adaptive_min_weights
+               for alpha in args.fusion_alphas]
 
     def run(work_dir: Path) -> int:
         traces: list[tuple[Path, dict[int, tuple[float, float, float]], tuple[float, float]]] = []
@@ -101,9 +106,9 @@ def main() -> int:
 
         binaries: dict[tuple[float, float, float], Path] = {}
         for index, config in enumerate(configs):
-            weight, tolerance, maximum, minimum = config
+            weight, tolerance, maximum, minimum, alpha = config
             binary = work_dir / f"replay-{index}"
-            compile_driver(compiler, ROOT / "estimate.ino", binary, tolerance, maximum, minimum)
+            compile_driver(compiler, ROOT / "estimate.ino", binary, tolerance, maximum, minimum, alpha)
             binaries[config] = binary
 
         print(f"traces={len(traces)} configs={len(configs)} duration={args.duration:g}s "
@@ -112,10 +117,10 @@ def main() -> int:
             f"p{index}:translation={translation:g}g,vibration={vibration:g}m/s^2"
             for index, (translation, vibration) in enumerate(PROFILES)))
         profile_names = [f"p{index}_R/P/Y" for index in range(len(PROFILES))]
-        print("weight,tolerance,innovation_deg,adaptive_min_weight,mean_R_RMSE_deg,mean_P_RMSE_deg,"
+        print("weight,tolerance,innovation_deg,adaptive_min_weight,fusion_alpha,mean_R_RMSE_deg,mean_P_RMSE_deg,"
               "mean_Y_RMSE_deg,worst_profile_R+P_deg," + ",".join(profile_names))
         for config, binary in binaries.items():
-            weight, tolerance, maximum, minimum = config
+            weight, tolerance, maximum, minimum, alpha = config
             per_profile: dict[tuple[float, float], list[list[float]]] = {
                 profile: [[], [], []] for profile in PROFILES
             }
@@ -137,7 +142,7 @@ def main() -> int:
                      for axis in range(3)]
             worst = max(profile_means[profile][0] + profile_means[profile][1]
                         for profile in PROFILES)
-            print(f"{weight:.6g},{tolerance:.6g},{maximum:.6g},{minimum:.6g},"
+            print(f"{weight:.6g},{tolerance:.6g},{maximum:.6g},{minimum:.6g},{alpha:.6g},"
                   f"{means[0]:.4f},{means[1]:.4f},{means[2]:.4f},{worst:.4f}," +
                   ",".join("/".join(f"{value:.4f}" for value in profile_means[profile])
                             for profile in PROFILES))

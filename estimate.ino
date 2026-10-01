@@ -69,7 +69,12 @@ LowPassFilter<Vector> ratesFilter(0.2f); // 1 ms reference coefficient; about 35
 // remains available to logging and calibration, while motor vibration is
 // attenuated before the 1 g confidence gate so aliased high-frequency vibration
 // does not disable attitude correction for most of a motor run.
-LowPassFilter<Vector> accelerationFusionFilter(0.2f); // about 35.5 Hz at 1 kHz
+#ifndef EST_ACCEL_FUSION_FILTER_ALPHA
+#define EST_ACCEL_FUSION_FILTER_ALPHA 0.2f
+#endif
+static_assert(EST_ACCEL_FUSION_FILTER_ALPHA > 0.0f && EST_ACCEL_FUSION_FILTER_ALPHA <= 1.0f,
+	"EST_ACCEL_FUSION_FILTER_ALPHA must be in (0, 1]");
+LowPassFilter<Vector> accelerationFusionFilter(EST_ACCEL_FUSION_FILTER_ALPHA); // 35.5 Hz at 1 kHz by default
 #if ATTITUDE_ESTIMATOR_VQF
 static VqfAttitudeEstimator vqfAttitudeEstimator;
 #endif
