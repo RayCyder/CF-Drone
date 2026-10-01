@@ -15,7 +15,10 @@ with tempfile.TemporaryDirectory(prefix='cf-drone-tests-') as tmp:
         if test.name == 'test_estimator_resources.cpp':
             variants.append(('_innovation_max_25', ['-DESTIMATE_ACCEL_INNOVATION_MAX_DEG=25.0f']))
             variants.append(('_adaptive_floor_00025', ['-DESTIMATE_ACCEL_MIN_ADAPTIVE_WEIGHT=0.00025f']))
-            variants.append(('_fusion_filter_alpha_010', ['-DEST_ACCEL_FUSION_FILTER_ALPHA=0.1f']))
+            variants.append(('_fusion_filter_alpha_010', [
+                '-DEST_ACCEL_FUSION_FILTER_ALPHA=0.1f',
+                '-DTEST_EXPECT_EST_ACCEL_FUSION_FILTER_ALPHA=0.1f',
+            ]))
         for suffix, defines in variants:
             binary = str(Path(tmp) / f'{test.stem}{suffix}')
             subprocess.run([compiler, '-std=c++17', '-Wall', '-Wextra', '-Werror', '-Wno-vla',

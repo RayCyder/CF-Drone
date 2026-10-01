@@ -20,6 +20,10 @@ void applyLevel();
 
 #include "../estimate.ino"
 
+#ifndef TEST_EXPECT_EST_ACCEL_FUSION_FILTER_ALPHA
+#define TEST_EXPECT_EST_ACCEL_FUSION_FILTER_ALPHA 0.2f
+#endif
+
 static void resetEstimator(Quaternion q) {
 	attitude = q;
 	levelGyroBias = Vector(0, 0, 0);
@@ -70,6 +74,12 @@ static Quaternion runAirborneAccCorrection(float sampleDt, int samples) {
 int main() {
 	assert(accWeight == 0.0005f);
 	assert(EST_RAW_ACCEL_NORM_TOLERANCE == 0.05f);
+	assert(fabsf(EST_ACCEL_FUSION_FILTER_ALPHA - TEST_EXPECT_EST_ACCEL_FUSION_FILTER_ALPHA) < 1e-7f);
+	accelerationFusionFilter.reset();
+	accelerationFusionFilter.update(Vector(0.0f, 0.0f, ONE_G), 0.001f, 0.001f);
+	const Vector alphaStep = accelerationFusionFilter.update(Vector(ONE_G, 0.0f, 0.0f), 0.001f, 0.001f);
+	assert(fabsf(alphaStep.x - ONE_G * TEST_EXPECT_EST_ACCEL_FUSION_FILTER_ALPHA) < 1e-5f);
+	assert(fabsf(alphaStep.z - ONE_G * (1.0f - TEST_EXPECT_EST_ACCEL_FUSION_FILTER_ALPHA)) < 1e-5f);
 	assert(fabsf(adaptiveAccelerationWeight(0.003f, 1.0f) - 0.003f) < 1e-7f);
 	assert(fabsf(adaptiveAccelerationWeight(0.003f, cosf(radians(5.0f))) - 0.003f) < 1e-6f);
 	const float midInnovationAngle = (5.0f + ESTIMATE_ACCEL_INNOVATION_MAX_DEG) * 0.5f;
