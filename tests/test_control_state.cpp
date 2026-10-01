@@ -123,6 +123,24 @@ int main(){
     localSequenceActive=true; armed=false; mode=STAB; controlThrottle=0; controlYaw=1;
     interpretControls(); assert(!armed); // generated sequence values are not RC arm gestures
     assert(setFlightMode(STAB) && !localSequenceActive && localSequenceCancelCount==1);
+    controlRoll=controlPitch=controlYaw=0; controlThrottle=.3f; controlMode=NAN;
+    webRCEnabled=useWebRC=false; localSequenceActive=false; setFlightMode(STAB);
+    nowMs=20000;
+    assert(canAcceptMavlinkManualControl());
+    markManualControlInput(CONTROL_SOURCE_MAVLINK_MANUAL);
+    interpretControls();
+    assert(getCurrentControlSource()==CONTROL_SOURCE_MAVLINK_MANUAL);
+    markManualControlInput(CONTROL_SOURCE_PHYSICAL_RC);
+    assert(!canAcceptMavlinkManualControl()); // fresh physical RC owns manual input between frames
+    nowMs+=251;
+    assert(canAcceptMavlinkManualControl());
+    webRCEnabled=useWebRC=true;
+    assert(!canAcceptMavlinkManualControl());
+    webRCEnabled=useWebRC=false;
+    localSequenceActive=true;
+    assert(!canAcceptMavlinkManualControl());
+    localSequenceActive=false;
+    controlThrottle=0;
     AutoAttitudeCommand cmd{Quaternion(),Vector(),.5f,true,false};
     AutoAttitudeCommand invalid=cmd; invalid.attitude=Quaternion(0,0,0,0);
     assert(!submitAutoAttitudeTarget(invalid));
@@ -136,6 +154,7 @@ int main(){
     nowMs+=50; assert(submitAutoAttitudeTarget(cmd));
     assert(autoTargetReady() && !armed);
     assert(setFlightMode(AUTO));
+    assert(!canAcceptMavlinkManualControl());
     assert(requestArm());
     controlTime=t-100; // a stale manual RC stream must not interrupt external AUTO
     failsafe(); assert(!isControlledLandingActive());
@@ -151,6 +170,7 @@ int main(){
     assert(mode==AUTO && isControlledLandingActive()); // unsupported ALTHOLD cannot take over
     webRCEnabled=useWebRC=false;
     const float landingThrust=thrustTarget;
+    assert(!canAcceptMavlinkManualControl());
     for(int i=0;i<3;i++){nowMs+=50;submitAutoAttitudeTarget(cmd);}
     assert(isControlledLandingActive() && thrustTarget==landingThrust);
     updateDiagnostics(); assert(getActiveDiagnosticFaults() & DIAG_AUTO_TARGET_TIMEOUT);

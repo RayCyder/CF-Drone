@@ -178,6 +178,7 @@ bool readRC() {
 			if (physicalRCControlsActive()) {
 				normalizeRC();
 				controlTime = t;
+				markManualControlInput(CONTROL_SOURCE_PHYSICAL_RC);
 			}
 			return true;
 		}
@@ -192,6 +193,7 @@ bool readRC() {
 			if (physicalRCControlsActive()) {
 				normalizeRC();
 				controlTime = t;
+				markManualControlInput(CONTROL_SOURCE_PHYSICAL_RC);
 			}
 			return true;
 		}

@@ -28,7 +28,8 @@ enum ControlSource {
     CONTROL_SOURCE_LOCAL_SEQUENCE = 3,
     CONTROL_SOURCE_EXTERNAL_ATTITUDE = 4,
     CONTROL_SOURCE_EXTERNAL_MOTORS = 5,
-    CONTROL_SOURCE_LANDING = 6
+    CONTROL_SOURCE_LANDING = 6,
+    CONTROL_SOURCE_MAVLINK_MANUAL = 7
 };
 
 enum DisarmReason : uint8_t {
@@ -88,6 +89,8 @@ bool autoTargetTimedOut();
 void resetAutoTargetState();
 ControlSource getCurrentControlSource();
 void setCurrentControlSource(ControlSource source);
+void markManualControlInput(ControlSource source);
+bool canAcceptMavlinkManualControl();
 Vector constrainRatesToConfiguredLimits(const Vector& rates);
 bool ratesWithinConfiguredLimits(const Vector& rates);
 

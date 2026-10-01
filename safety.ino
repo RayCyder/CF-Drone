@@ -66,6 +66,12 @@ void rcLossFailsafe() {
 	if (controlTime == 0) return; // no RC at all
 	if (!armed) return;
 	if (mode == AUTO) return; // AUTO has an independent external-target timeout.
+	const ControlSource source = getCurrentControlSource();
+	if (source == CONTROL_SOURCE_LOCAL_SEQUENCE ||
+		source == CONTROL_SOURCE_EXTERNAL_ATTITUDE ||
+		source == CONTROL_SOURCE_EXTERNAL_MOTORS ||
+		source == CONTROL_SOURCE_LANDING)
+		return;
 #if WEB_RC_ENABLED
 	if (isUsingWebRC()) return; // WebRC独立负责其超时（webRCLossFailsafe）
 #endif

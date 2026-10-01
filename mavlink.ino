@@ -40,6 +40,7 @@ Rate telemetryFast(BOARD_MAVLINK_TELEM_FAST_HZ);  // 遥测频率：C3=5Hz（降
 
 volatile bool mavlinkConnected = false;
 LogByteQueue<1024> mavlinkPrintBuffer;
+static portMUX_TYPE mavlinkPrintBufferMux = portMUX_INITIALIZER_UNLOCKED;
 static LogTransferCursor mavlinkLogTransfer;
 static int mavlinkParameterCursor = -1;
 static QueueHandle_t mavlinkRxQueue = nullptr;
@@ -207,6 +208,7 @@ void handleMavlink(const void *_msg) {
 		if (m.x < -1000 || m.x > 1000 || m.y < -1000 || m.y > 1000 ||
 			m.r < -1000 || m.r > 1000 || m.z < 0 || m.z > 1000)
 			return;
+		if (!canAcceptMavlinkManualControl()) return;
 
 		controlThrottle = m.z / 1000.0f;
 		controlPitch = m.x / 1000.0f;
@@ -214,6 +216,7 @@ void handleMavlink(const void *_msg) {
 		controlYaw = m.r / 1000.0f;
 		controlMode = NAN;
 		controlTime = t;
+		markManualControlInput(CONTROL_SOURCE_MAVLINK_MANUAL);
 	}
 
 	if (msg.msgid == MAVLINK_MSG_ID_PARAM_REQUEST_LIST) {
@@ -417,23 +420,40 @@ void serviceMavlinkParameterList() {
 }
 
 void mavlinkPrint(const char* str) {
-    if (!armed && !motorsActive() && mavlinkConnected) mavlinkPrintBuffer.push(str);
+    if (!armed && !motorsActive() && mavlinkConnected) {
+        portENTER_CRITICAL(&mavlinkPrintBufferMux);
+        mavlinkPrintBuffer.push(str);
+        portEXIT_CRITICAL(&mavlinkPrintBufferMux);
+    }
 }
 
 void sendMavlinkPrint() {
-    if (armed || motorsActive()) { mavlinkPrintBuffer.clear(); return; }
+    if (armed || motorsActive()) {
+        portENTER_CRITICAL(&mavlinkPrintBufferMux);
+        mavlinkPrintBuffer.clear();
+        portEXIT_CRITICAL(&mavlinkPrintBufferMux);
+        return;
+    }
     uint8_t data[MAVLINK_MSG_SERIAL_CONTROL_FIELD_DATA_LEN] = {};
+    uint32_t dropped = 0;
+    bool more = false;
+    portENTER_CRITICAL(&mavlinkPrintBufferMux);
     size_t count = mavlinkPrintBuffer.pop(data, sizeof(data));
     if (!count && mavlinkPrintBuffer.dropped) {
-        count = snprintf((char *)data, sizeof(data), "[console overflow: %lu bytes dropped]\n",
-            (unsigned long)mavlinkPrintBuffer.dropped);
-        if (count >= sizeof(data)) count = sizeof(data)-1;
+        dropped = mavlinkPrintBuffer.dropped;
         mavlinkPrintBuffer.dropped = 0;
+    }
+    more = mavlinkPrintBuffer.size() != 0;
+    portEXIT_CRITICAL(&mavlinkPrintBufferMux);
+    if (!count && dropped) {
+        count = snprintf((char *)data, sizeof(data), "[console overflow: %lu bytes dropped]\n",
+            (unsigned long)dropped);
+        if (count >= sizeof(data)) count = sizeof(data)-1;
     }
     if (!count) return;
     mavlink_message_t msg;
     mavlink_msg_serial_control_pack(mavlinkSysId, MAV_COMP_ID_AUTOPILOT1, &msg,
-        SERIAL_CONTROL_DEV_SHELL, mavlinkPrintBuffer.size() ? SERIAL_CONTROL_FLAG_MULTI : 0,
+        SERIAL_CONTROL_DEV_SHELL, more ? SERIAL_CONTROL_FLAG_MULTI : 0,
         0, 0, (uint8_t)count, data, 0, 0);
     sendMessage(&msg);
 }

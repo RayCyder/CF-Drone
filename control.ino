@@ -103,6 +103,7 @@ float motorMixScale = 1.0f;
 #define AUTO_THRUST_MAX 1.0f
 #define AUTO_QUAT_NORM_MIN 0.5f
 #define AUTO_QUAT_NORM_MAX 1.5f
+#define MANUAL_SOURCE_ARBITRATION_MS 250UL
 
 static AutoTargetKind autoTargetKind = AUTO_TARGET_NONE;
 static AutoAttitudeCommand autoAttitudeCommand;
@@ -113,6 +114,9 @@ static uint8_t autoTargetValidCount = 0;
 static uint32_t autoTargetAppliedMs = 0;
 static bool autoTargetAppliedValid = false;
 static ControlSource currentControlSource = CONTROL_SOURCE_NONE;
+static ControlSource latestManualControlSource = CONTROL_SOURCE_NONE;
+static uint32_t physicalRCManualInputMs = 0;
+static uint32_t mavlinkManualInputMs = 0;
 
 // ============== 软件配平参数 ==============
 // 用于补偿机械不对称（重心偏移、电机/桨叶推力差异、IMU 安装偏斜等）引起的固定方向漂移。
@@ -188,6 +192,45 @@ ControlSource getCurrentControlSource() {
 
 void setCurrentControlSource(ControlSource source) {
 	currentControlSource = source;
+}
+
+void markManualControlInput(ControlSource source) {
+	const uint32_t now = millis();
+	if (source == CONTROL_SOURCE_PHYSICAL_RC) {
+		physicalRCManualInputMs = now;
+		latestManualControlSource = source;
+	} else if (source == CONTROL_SOURCE_MAVLINK_MANUAL) {
+		mavlinkManualInputMs = now;
+		latestManualControlSource = source;
+	}
+}
+
+static bool manualInputFresh(uint32_t timestampMs, uint32_t nowMs) {
+	return timestampMs != 0 &&
+		(uint32_t)(nowMs - timestampMs) <= MANUAL_SOURCE_ARBITRATION_MS;
+}
+
+static ControlSource selectedManualControlSource() {
+#if WEB_RC_ENABLED
+	if (isUsingWebRC()) return CONTROL_SOURCE_WEB_RC;
+#endif
+	if (latestManualControlSource == CONTROL_SOURCE_MAVLINK_MANUAL && mavlinkManualInputMs != 0)
+		return CONTROL_SOURCE_MAVLINK_MANUAL;
+	if (latestManualControlSource == CONTROL_SOURCE_PHYSICAL_RC && physicalRCManualInputMs != 0)
+		return CONTROL_SOURCE_PHYSICAL_RC;
+	return CONTROL_SOURCE_NONE;
+}
+
+bool canAcceptMavlinkManualControl() {
+	if (mode == AUTO || isControlledLandingActive()) return false;
+#if WEB_RC_ENABLED
+	extern bool isLocalSequenceRunning();
+	if (isLocalSequenceRunning()) return false;
+	if (isUsingWebRC()) return false;
+#endif
+	const uint32_t now = millis();
+	if (manualInputFresh(physicalRCManualInputMs, now)) return false;
+	return true;
 }
 
 Vector constrainRatesToConfiguredLimits(const Vector& rates) {
@@ -461,9 +504,11 @@ void interpretControls() {
 	if (mode == AUTO || isControlledLandingActive()) return; // pilot sticks do not drive AUTO/landing targets
 
 #if WEB_RC_ENABLED
-	setCurrentControlSource(isUsingWebRC() ? CONTROL_SOURCE_WEB_RC : CONTROL_SOURCE_PHYSICAL_RC);
+	const ControlSource manualSource = selectedManualControlSource();
+	setCurrentControlSource(manualSource == CONTROL_SOURCE_NONE ? CONTROL_SOURCE_PHYSICAL_RC : manualSource);
 #else
-	setCurrentControlSource(CONTROL_SOURCE_PHYSICAL_RC);
+	const ControlSource manualSource = selectedManualControlSource();
+	setCurrentControlSource(manualSource == CONTROL_SOURCE_NONE ? CONTROL_SOURCE_PHYSICAL_RC : manualSource);
 #endif
 
 	if (abs(controlYaw) < 0.1) controlYaw = 0; // yaw dead zone
