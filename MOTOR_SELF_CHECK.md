@@ -42,3 +42,9 @@
 | RL | 0.016462 | 0.22801 | 497 | detected |
 
 四路均超过响应门槛，说明 IMU 在本次无桨固定台架测试中确认四个电机都产生了可测振动。结果只能确认响应，仍不能确认转速、旋向或带载推力。原始状态见 [自检结果](data/attitude/motor-selfcheck-5pct-500ms-20261003-012833.json) 与 [终态](data/attitude/motor-selfcheck-5pct-500ms-20261003-012833-status.json)。测试结束后网页与串口交叉确认：设备上锁、四路输出归零、蓝灯未快闪、IMU 与电机输出正常、电池 4.077 V、故障位 `0x00000000`。
+
+## 2026-10-03 网页手工启动复核
+
+网页手工启动无响应包含两个独立问题。首先，配置热点中的 STA 恢复逻辑会在前一次连接尚未结束时再次调用 `WiFi.begin()`，驱动拒绝更新配置，设备停留在禁用飞行接口的配置热点状态；提交 `5077015` 将重试改为先断开、等待 250 ms、再开始连接。其次，手工测试开始后，通用运行期路由策略会阻止读取 `/vibration-calibration/status`，页面轮询收到 HTTP 423；提交 `b000869` 允许该只读状态接口在电机测试期间继续工作。
+
+最终固件 [cf-drone-b000869-manual-selfcheck-final-20261003.bin](deliverables/cf-drone-b000869-manual-selfcheck-final-20261003.bin) 已写入并通过独立 `verify-flash`，SHA-256 为 `e14d9bdba050de83973a2ede0b59e15e3fc7938a1541293b4d31ffa4a44a6eb1`。设备连续保持连接 `608`，20 秒观察期没有再次出现 `sta is connecting, cannot set config`。网页等价请求立即返回 `queued`，连续轮询观察到 `baseline`、`running`、`queued` 和 `complete`，FR、FL、RR、RL 四路均为 `detected`。测试后确认上锁、四路输出归零、蓝灯未快闪、故障位 `0x00000000`，记录见 [手工测试结果](data/attitude/manual-motor-selfcheck-5pct-500ms-20261003-015701.json)。

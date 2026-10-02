@@ -1,0 +1,37 @@
+{
+  "captured_at": "2026-10-03T01:57:01+08:00",
+  "firmware_commit": "b000869",
+  "firmware_sha256": "e14d9bdba050de83973a2ede0b59e15e3fc7938a1541293b4d31ffa4a44a6eb1",
+  "request": {
+    "accepted": true,
+    "initial_state": "queued",
+    "observed_states": ["baseline", "running", "queued", "running", "complete"]
+  },
+  "result": {
+    "state": "complete",
+    "step": 4,
+    "reason": "complete",
+    "baseline": {
+      "gyro_rms": 0.003327,
+      "accel_rms": 0.04497,
+      "samples": 199
+    },
+    "motors": [
+      {"name": "FR", "gyro_rms": 0.021090, "accel_rms": 0.28097, "samples": 497, "response": "detected"},
+      {"name": "FL", "gyro_rms": 0.012725, "accel_rms": 0.15946, "samples": 496, "response": "detected"},
+      {"name": "RR", "gyro_rms": 0.012821, "accel_rms": 0.45917, "samples": 496, "response": "detected"},
+      {"name": "RL", "gyro_rms": 0.016369, "accel_rms": 0.41484, "samples": 497, "response": "detected"}
+    ]
+  },
+  "final_state": {
+    "armed": false,
+    "led_fast_blink": false,
+    "motor_outputs": [0, 0, 0, 0],
+    "imu_ok": true,
+    "motor_ok": true,
+    "battery_mv": 4077,
+    "faults": "0x00000000",
+    "wifi_connected": true,
+    "wifi_disconnects": 0
+  }
+}
