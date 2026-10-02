@@ -1,0 +1,3 @@
+sequence,uptime_ms,dt_us,loop_sequence,imu_wait_us,imu_process_us,rc_web_us,estimate_us,battery_adc_us,control_law_us,motor_out_us,serial_input_us,mavlink_us,flight_log_us,param_sync_us,led_us,diagnostics_us,wifi_service_us,loop_gap_us,unaccounted_us,imu_wait_start_us,imu_wait_end_us,imu_irq_count_delta,imu_last_irq_us,imu_sem_takes,imu_sem_timeouts,imu_read_attempts,imu_read_ready,imu_read_total_us,imu_read_max_us,imu_interrupt_source,imu_wait_result,imu_sem_wait_max_us
+0,25853,1648,24266,553,649,87,53,1,127,37,44,11,14,1,11,28,0,8,24,25851754,25852302,1,25852165,1,0,1,1,108,108,1,1,421
+1,25854,1698,24267,111,69,833,125,1,242,75,70,82,21,1,7,24,0,13,24,25854475,25854581,0,25854185,1,0,1,1,86,86,1,1,2
