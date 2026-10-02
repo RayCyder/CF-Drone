@@ -48,6 +48,7 @@ extern Vector levelGyroBias;             // Mahony 虚拟陀螺偏置，定义�
 Preferences storage;
 static bool parameterStorageReady = false;
 static bool levelRotationRecoveryRequired = false;
+static bool imuRotationNeedsRestart = false;
 static uint16_t dirtyParameterCount = 0;
 static portMUX_TYPE parameterMux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -505,8 +506,11 @@ bool setParameter(const char *name, const float value) {
 		if (parameterNameMatches(parameter.name, name)) {
 			if (!validParameterValue(parameter.name, parameter.integer, value)) return false;
 			portENTER_CRITICAL(&parameterMux);
+			const float previous = parameter.getValue();
 			parameter.setValue(value);
 			const float current = parameter.getValue();
+			if (previous != current && strncmp(parameter.name, "IMU_ROT_", 8) == 0)
+				imuRotationNeedsRestart = true;
 			const bool dirty = current != parameter.cache &&
 				!(isnan(current) && isnan(parameter.cache));
 			if (dirty != parameter.dirty) {
@@ -538,6 +542,13 @@ void syncParameters() {
 bool parameterPersistencePending() {
 	portENTER_CRITICAL(&parameterMux);
 	const bool pending = parameterStorageReady && dirtyParameterCount != 0;
+	portEXIT_CRITICAL(&parameterMux);
+	return pending;
+}
+
+bool imuRotationRestartPending() {
+	portENTER_CRITICAL(&parameterMux);
+	const bool pending = imuRotationNeedsRestart;
 	portEXIT_CRITICAL(&parameterMux);
 	return pending;
 }

@@ -46,8 +46,10 @@ bool batteryBlocksArming(){return false;}
 bool isAccelCalibrationActive(){return false;}
 LevelCalibrationState levelCalibrationState=LEVEL_EMPTY;
 bool parameterWritePending=false;
+bool rotationRestartPending=false;
 bool isLevelCalibrationActive(){return levelCalibrationBlocksArming(levelCalibrationState);}
 bool parameterPersistencePending(){return parameterWritePending;}
+bool imuRotationRestartPending(){return rotationRestartPending;}
 void sendMotors() {}
 bool motorsActive(){for(float m:motors)if(m!=0)return true;return false;}
 unsigned systemEventCount=0;
@@ -86,6 +88,9 @@ int main(){
     levelCalibrationState=LEVEL_APPLIED;
     assert(!requestArm()); // Writing the mounting angles requires a reboot before arming.
     levelCalibrationState=LEVEL_EMPTY;
+    rotationRestartPending=true;
+    assert(!requestArm()); // Direct parameter writes also require a reboot after persistence.
+    rotationRestartPending=false;
     parameterWritePending=true;
     assert(!requestArm());
     parameterWritePending=false;
