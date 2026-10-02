@@ -347,9 +347,10 @@ int main(){
     assert(!(getActiveDiagnosticFaults() & DIAG_LOOP_OVERRUN));
     const unsigned triggerCountBeforeJitter=flightLogTriggerCount;
     armed=true;
-    dt=.001501f; recordLoopTiming(dt); assert(getActiveDiagnosticFaults() & DIAG_LOOP_OVERRUN);
+    dt=.001501f; recordLoopTiming(dt); assert(!(getActiveDiagnosticFaults() & DIAG_LOOP_OVERRUN));
     assert(flightLogTriggerCount==triggerCountBeforeJitter); // near-budget jitter is reported but keeps the armed ring rolling
     dt=.005001f; recordLoopTiming(dt);
+    assert(getActiveDiagnosticFaults() & DIAG_LOOP_OVERRUN);
     assert(flightLogTriggerCount==triggerCountBeforeJitter+1); // a sustained-scale stall preserves the armed snapshot
     armed=false;
     assert(loopTiming.samples==2 && loopTiming.invalid==0 && loopTiming.maximumUs==5001);
@@ -357,7 +358,7 @@ int main(){
     for(int i=0;i<1000;i++) recordLoopStage(LOOP_STAGE_CONTROL_LAW,201);
     assert(systemEventCount==eventCount); // hot-path counters do not format/emit events
     assert(loopStages[LOOP_STAGE_CONTROL_LAW].overBudget==0);
-    nowMs=0; recordLoopTiming(.002f); nowMs=10001; updateDiagnostics();
+    nowMs=0; recordLoopTiming(.005001f); nowMs=10001; updateDiagnostics();
     assert(!(getActiveDiagnosticFaults() & DIAG_LOOP_OVERRUN));
 
     clearDiagnosticHistory();

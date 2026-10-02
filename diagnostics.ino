@@ -54,6 +54,7 @@ static uint32_t loopOverrunCount = 0;
 static float worstLoopDt = 0;
 static uint32_t lastLoopOverrunMs = 0;
 static bool haveLoopOverrun = false;
+static constexpr uint32_t LOOP_JITTER_TRACE_TRIGGER_US = 1500;
 // Keep counting/reporting >1.5 ms jitter, but do not freeze the short flight
 // log on a single near-budget cycle. A >5 ms cycle is a meaningful stall and
 // must retain an armed snapshot even if the warning bit was already active.
@@ -493,13 +494,16 @@ void recordLoopTiming(float dt) {
     const uint32_t us = loopTiming.observe(dt);
     worstLoopDt = loopTiming.maximumUs * .000001f;
 #if defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
-    const bool captureTrace = (armedLoopTraceCaptureStarted && !armedLoopTraceTriggered) || us >= 1500;
+    const bool captureTrace = (armedLoopTraceCaptureStarted && !armedLoopTraceTriggered) ||
+        us > LOOP_JITTER_TRACE_TRIGGER_US;
 #else
-    const bool captureTrace = us >= 1500;
+    const bool captureTrace = us > LOOP_JITTER_TRACE_TRIGGER_US;
 #endif
-    if (us > 1500) {
+    if (us > LOOP_JITTER_TRACE_TRIGGER_US) {
         if (loopOverrunCount < UINT32_MAX) ++loopOverrunCount;
         lastLoopOverrunMs = millis();
+    }
+    if (us >= LOOP_STALL_LOG_TRIGGER_US) {
         haveLoopOverrun = true;
         setDiagnosticFault(DIAG_LOOP_OVERRUN, true);
     }
@@ -539,7 +543,7 @@ void recordLoopTiming(float dt) {
         }
 #endif
         portEXIT_CRITICAL(&loopTraceMux);
-        if (armed && us >= 1500) {
+        if (armed && us > LOOP_JITTER_TRACE_TRIGGER_US) {
             const uint8_t action = slowLoopCaptureAction(trace);
             if (action) retainSlowLoopTrace(trace, action);
         }
