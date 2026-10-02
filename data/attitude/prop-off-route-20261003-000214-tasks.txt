@@ -1,0 +1,20 @@
+PREFLIGHT armed=0 imu_ok=1 motor_ok=1 battery_mv=4077 faults=0x00000000
+Chip: ESP32-D0WD-V3
+Temperature: 68.9 °C
+Free heap: 94304
+Num  Task                Handle      Stack  Prio  Core  CPU%
+8    loopTask            0x3ffb8188 5164   1     1     55
+5    IDLE0               0x3ffdf7e4 380    0     0     81
+6    IDLE1               0x3ffdfdec 500    0     1     43
+19   web_rc_http         0x3fff05e0 3488   1     0     5
+17   mavlink_rx          0x3ffeb6cc 2212   1     0     4
+15   telemetry_sse       0x3ffe8858 1528   1     0     0
+16   wifi_service        0x3ffe9ad0 3120   1     0     0
+10   tiT                 0x3ffb9258 2824   18    0     0
+20   nvs_maintenance     0x3fff2ad0 1552   1     0     0
+18   web_rc_stop         0x3ffee268 1912   2     0     6
+11   sys_evt             0x3ffb97c0 2820   20    0     0
+12   arduino_events      0x3ffb5c30 3072   19    1     0
+2    ipc1                0x3ffb7d60 408    24    1     0
+14   wifi_udp_tx         0x3ffe6c80 1824   1     0     0
+3    esp_timer           0x3ffdecb4 7740   22    0     0

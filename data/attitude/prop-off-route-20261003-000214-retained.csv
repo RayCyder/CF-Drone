@@ -1,0 +1,13 @@
+type,capture_index,capture_sequence,loop_sequence,uptime_ms,dt_us,stage0_us,stage1_us,stage2_us,stage3_us,stage4_us,stage5_us,stage6_us,stage7_us,stage8_us,stage9_us,stage10_us,stage11_us,stage12_us,stage13_us,stage14_us,stage15_us,detail
+capture,0,0,35510,37224,3896,178,80,85,43,122,170,61,73,2961,21,1,21,31,0,15,34,imu=37224082;37224252;0;37223289;1;0;1;1;137;137;1;1;4
+scheduler,0,0,35510,,,,,,,,,,,,,,,,,,,sequence=8;timestamp_us=37221022;capture_id=1;task_handle=0x3ffb8188;core=1;event=0;dropped=0
+scheduler,0,0,35510,,,,,,,,,,,,,,,,,,,sequence=9;timestamp_us=37221022;capture_id=1;task_handle=0x3ffdfdec;core=1;event=1;dropped=0
+scheduler,0,0,35510,,,,,,,,,,,,,,,,,,,sequence=10;timestamp_us=37221101;capture_id=1;task_handle=0x3ffdfdec;core=1;event=2;dropped=0
+scheduler,0,0,35510,,,,,,,,,,,,,,,,,,,sequence=11;timestamp_us=37221101;capture_id=1;task_handle=0x3ffdfdec;core=1;event=1;dropped=0
+scheduler,0,0,35510,,,,,,,,,,,,,,,,,,,sequence=12;timestamp_us=37222100;capture_id=1;task_handle=0x3ffdfdec;core=1;event=2;dropped=0
+scheduler,0,0,35510,,,,,,,,,,,,,,,,,,,sequence=13;timestamp_us=37222100;capture_id=1;task_handle=0x3ffdfdec;core=1;event=1;dropped=0
+scheduler,0,0,35510,,,,,,,,,,,,,,,,,,,sequence=14;timestamp_us=37223100;capture_id=1;task_handle=0x3ffdfdec;core=1;event=2;dropped=0
+scheduler,0,0,35510,,,,,,,,,,,,,,,,,,,sequence=15;timestamp_us=37223100;capture_id=1;task_handle=0x3ffdfdec;core=1;event=1;dropped=0
+scheduler,0,0,35510,,,,,,,,,,,,,,,,,,,sequence=16;timestamp_us=37223890;capture_id=1;task_handle=0x3ffdfdec;core=1;event=2;dropped=0
+scheduler,0,0,35510,,,,,,,,,,,,,,,,,,,sequence=17;timestamp_us=37223890;capture_id=1;task_handle=0x3ffb8188;core=1;event=3;dropped=0
+capture,1,1,35511,37226,1674,108,91,930,99,4,221,66,52,8,14,1,15,28,0,9,28,imu=37225816;37225917;0;37225309;1;0;1;1;81;81;1;1;3
