@@ -8,6 +8,13 @@ namespace WifiRecoveryPolicy {
 static constexpr uint32_t AP_START_TIMEOUT_MS = 3000;
 static constexpr uint32_t AP_NO_CLIENT_REFRESH_MS = 60000;
 static constexpr uint32_t STA_RETRY_INTERVAL_MS = 10000;
+static constexpr uint32_t STA_RETRY_RESET_DELAY_MS = 250;
+
+enum StaRetryAction : uint8_t {
+    STA_RETRY_WAIT = 0,
+    STA_RETRY_RESET,
+    STA_RETRY_BEGIN,
+};
 
 inline bool elapsed(uint32_t now, uint32_t startedAt, uint32_t interval) {
     return (uint32_t)(now - startedAt) >= interval;
@@ -32,6 +39,12 @@ inline bool apRefreshDue(bool active, bool hasClients, uint32_t now, uint32_t ac
 inline bool staRetryDue(bool staConfigured, bool connected, bool portalOpen,
     uint32_t now, uint32_t retryAt) {
     return staConfigured && !connected && portalOpen && deadlineReached(now, retryAt);
+}
+
+inline StaRetryAction staRetryAction(bool staConfigured, bool connected, bool portalOpen,
+    bool resetPending, uint32_t now, uint32_t retryAt) {
+    if (!staRetryDue(staConfigured, connected, portalOpen, now, retryAt)) return STA_RETRY_WAIT;
+    return resetPending ? STA_RETRY_BEGIN : STA_RETRY_RESET;
 }
 
 inline bool maintenanceAllowed(bool armed, bool motorsActive) {

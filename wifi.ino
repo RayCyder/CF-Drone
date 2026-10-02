@@ -276,6 +276,7 @@ static uint32_t wifiConnectStartedMs = 0;
 static uint32_t wifiRestartAtMs = 0;
 static uint32_t wifiAPRetryAtMs = 0;
 static uint32_t wifiSTAReconnectAtMs = 0;
+static bool wifiSTARetryResetPending = false;
 static bool wifiAPEventStarted = false;
 static const uint32_t TELEMETRY_SAMPLE_INTERVAL_MS = 500; // 遥测样本 2Hz，降低网络任务占用
 static const int TELEMETRY_LOG_COLUMNS_CAPACITY = 41;
@@ -405,6 +406,7 @@ static void stopWiFiConfigPortalForRetry(const char *reason) {
 	if (wifiMode == W_STA) {
 		WiFi.mode(WIFI_STA);
 		wifiSTAReconnectAtMs = millis();
+		wifiSTARetryResetPending = false;
 	} else {
 		WiFi.mode(WIFI_OFF);
 	}
@@ -604,6 +606,7 @@ void serviceWiFi() {
 	if (wifiMode != W_STA) return;
 
 	if (WiFi.isConnected()) {
+		wifiSTARetryResetPending = false;
 		if (!wifiWasConnected) {
 			wifiWasConnected = true;
 			// Avoid String allocation and network-stack queries in the 1 kHz
@@ -631,6 +634,7 @@ void serviceWiFi() {
 		__atomic_store_n(&wifiLastDisconnectMs, now, __ATOMIC_RELAXED);
 		wifiConnectStartedMs = millis();
 		wifiProfileAttempt = 0;
+		wifiSTARetryResetPending = false;
 		if (activeWifiProfileCount) {
 			char ssid[33], password[64];
 			wifiProfileStrings(activeWifiProfiles[0], ssid, sizeof(ssid), password, sizeof(password));
@@ -642,14 +646,27 @@ void serviceWiFi() {
 		recordSystemLogEvent("WIFI", "state=DISCONNECTED reconnect=profile_1");
 	}
 	const bool portalOpen = configPortalActive || configPortalStarting;
-	if (WifiRecoveryPolicy::staRetryDue(activeWifiProfileCount > 0, false, portalOpen,
-		now, wifiSTAReconnectAtMs)) {
+	const WifiRecoveryPolicy::StaRetryAction retryAction = WifiRecoveryPolicy::staRetryAction(
+		activeWifiProfileCount > 0, false, portalOpen, wifiSTARetryResetPending,
+		now, wifiSTAReconnectAtMs);
+	if (retryAction == WifiRecoveryPolicy::STA_RETRY_RESET) {
+		// ESP-IDF rejects a new station configuration while an earlier connection
+		// attempt is still active. Stop that attempt first and let the Wi-Fi task
+		// observe the disconnect before applying the next saved profile.
+		WiFi.setAutoReconnect(false);
+		WiFi.disconnect(false, false);
+		wifiSTARetryResetPending = true;
+		wifiSTAReconnectAtMs = now + WifiRecoveryPolicy::STA_RETRY_RESET_DELAY_MS;
+		print("WIFI_STATE state=PORTAL_STA_RESET\n");
+		recordSystemLogEvent("WIFI", "state=PORTAL_STA_RESET");
+	} else if (retryAction == WifiRecoveryPolicy::STA_RETRY_BEGIN) {
 		wifiProfileAttempt = (uint8_t)((wifiProfileAttempt + 1) % activeWifiProfileCount);
 		char ssid[33], password[64];
 		wifiProfileStrings(activeWifiProfiles[wifiProfileAttempt], ssid, sizeof(ssid), password, sizeof(password));
 		WiFi.mode(WIFI_AP_STA);
 		WiFi.setAutoReconnect(true);
 		WiFi.begin(ssid, password);
+		wifiSTARetryResetPending = false;
 		wifiSTAReconnectAtMs = now + WifiRecoveryPolicy::STA_RETRY_INTERVAL_MS;
 		print("WIFI_STATE state=PORTAL_STA_RETRY profile=%u/%u ssid=%s\n",
 			(unsigned)(wifiProfileAttempt + 1), (unsigned)activeWifiProfileCount, ssid);
@@ -676,6 +693,7 @@ void serviceWiFi() {
 		recordSystemLogEvent("WIFI", "state=CONNECT_TIMEOUT action=SWITCH_TO_CONFIG_AP");
 		WiFi.setAutoReconnect(true);
 		wifiSTAReconnectAtMs = millis();
+		wifiSTARetryResetPending = false;
 		startWiFiConfigPortal(true);
 	}
 }
