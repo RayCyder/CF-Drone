@@ -354,7 +354,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   <section id="vibration-calibration-page" class="vibration-calibration-page" aria-hidden="true">
     <div class="descent-calibration-shell">
       <div class="diagnostic-top"><h2>四电机低功率扰动检测</h2><div class="diagnostic-actions"><button onclick="closeVibrationCalibrationPage()">返回遥控器</button></div></div>
-      <div class="calibration-card"><strong>开始前：拆下全部桨叶并固定机体</strong><p>飞控保持上锁。系统先记录约 200 ms 静止基线，再按 FR、FL、RR、RL 顺序分别以 5% 输出短脉冲约 100 ms，并采集同步 IMU 数据。关闭页面不会中断流程，可用“停止检测”立即上锁并取消后续试转。</p><small>5% 短脉冲可能不足以起转或形成可测扰动；此时显示“转动未确认”，不会自动增加输出。请勿触碰机体或电机。</small></div>
+      <div class="calibration-card"><strong>开始前：拆下全部桨叶并固定机体</strong><p>飞控保持上锁。系统先记录约 200 ms 静止基线，再按 FR、FL、RR、RL 顺序分别以 5% 输出约 500 ms，并采集同步 IMU 数据。关闭页面不会中断流程，可用“停止检测”立即上锁并取消后续试转。</p><small>每路约 500 帧，足够执行自动响应判定；请同时人工观察是否起转和有无异响。请勿触碰机体或电机。</small></div>
       <div id="vibration-calibration-status" class="route-status" role="status">正在读取校准状态…</div>
       <div class="calibration-actions"><button id="vibration-calibration-start" class="primary" onclick="startVibrationCalibration()">开始四电机采集</button><button id="vibration-calibration-stop" onclick="stopMotorSelfCheck()" disabled>停止检测</button><button id="vibration-calibration-download" onclick="downloadVibrationCalibrationCsv()" disabled>下载行数表格 CSV</button></div>
       <div class="calibration-card"><strong>逐电机结果</strong><div id="vibration-calibration-results" class="calibration-points">尚无结果。</div><p id="vibration-calibration-analysis" class="route-status">比较四个电机的加速度振动 RMS；偏高只表示优先复核机械安装、紧固和电机，不直接判定损坏。</p></div>
@@ -952,7 +952,7 @@ async function refreshVibrationCalibrationStatus(){
 }
 async function startVibrationCalibration(){
   if(!connectionOk||currentArmed){showToast('请连接飞控并保持上锁');return;}
-  if(!window.confirm('请确认：全部桨叶已拆除、机体已固定，周围无人且电机测试区域安全。现在依次执行四路 5%、约 100 ms 短脉冲？'))return;
+  if(!window.confirm('请确认：全部桨叶已拆除、机体已固定，周围无人且电机测试区域安全。现在依次执行四路 5%、约 500 ms 测试？'))return;
   try{
     const response=await controlFetch('/vibration-calibration/start',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({confirm:'1'})});
     const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'无法开始采集');
