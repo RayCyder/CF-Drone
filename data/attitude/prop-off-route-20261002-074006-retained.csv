@@ -1,0 +1,2 @@
+type,capture_index,capture_sequence,loop_sequence,uptime_ms,dt_us,stage0_us,stage1_us,stage2_us,stage3_us,stage4_us,stage5_us,stage6_us,stage7_us,stage8_us,stage9_us,stage10_us,stage11_us,stage12_us,stage13_us,stage14_us,stage15_us,detail
+capture,0,0,142933,145715,1626,1034,53,72,82,1,154,49,58,8,15,1,8,19,0,8,64,imu=145713886;145714917;1;145714846;2;0;6;1;260;68;1;1;662

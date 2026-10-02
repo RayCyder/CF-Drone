@@ -86,4 +86,12 @@
 
 对本次 full trace ELF 的符号与段表检查发现：原始 `vTaskSwitchContext` 在 IRAM (`0x4008e34c`)，但诊断包装函数 `__wrap_vTaskSwitchContext` 在 `.flash.text` (`0x400ec54c`)，其调用的记录方法也在 Flash。任务切换钩子若在 Flash cache 停用期间运行，会面临取指风险；这是一项确定的链接布局缺陷，**尚不能据此认定它导致了 10 秒平台收尾重启**，因为当时没有 reset reason、panic 栈或电源轨记录。
 
-已将包装函数和它使用的记录方法放入 IRAM，并强制内联以避免 Xtensa 的 IRAM literal 重定位错误。修正后的 full trace ELF 中，包装函数在 `0x40081480`；反汇编列出的所有直接调用目标（FreeRTOS 原函数、`esp_timer_get_time`、任务句柄查询、原子操作、`memcpy`、`memset`）均在 `.iram0.text`。full、full-armed-loop、生产构建及主机 task-switch ring 回归均通过；full 镜像 SHA-256 `db2a0de0816a426f6f7bacce62acdd7f377b10eaa7cb5ec1366e36f4ca77cd84`。该镜像尚未刷入目标板，布局修正只消除一个已发现风险，不等于重启根因已证实或运行稳定性已验证。
+已将包装函数和它使用的记录方法放入 IRAM，并强制内联以避免 Xtensa 的 IRAM literal 重定位错误。修正后的 full trace ELF 中，包装函数在 `0x40081480`；反汇编列出的所有直接调用目标（FreeRTOS 原函数、`esp_timer_get_time`、任务句柄查询、原子操作、`memcpy`、`memset`）均在 `.iram0.text`。full、full-armed-loop、生产构建及主机 task-switch ring 回归均通过；full 镜像 SHA-256 `db2a0de0816a426f6f7bacce62acdd7f377b10eaa7cb5ec1366e36f4ca77cd84`。布局修正只消除一个已发现风险，不等于重启根因已证实或运行稳定性已验证。
+
+### 修正版板端复核
+
+上述修正版仅刷入 app0 并独立读回校验通过。启动后上锁、四路零、无故障，安装角和融合权重保持；约 25 秒锁定状态 uptime 连续增长，RTC 记录为空。无桨固定架的 [短时阶梯](data/attitude/prop-off-route-20261002-073913.jsonl)以及两次 [10 秒平台一](data/attitude/prop-off-route-20261002-074006.jsonl)、[10 秒平台二](data/attitude/prop-off-route-20261002-074427.jsonl)均完成三段、进入 `landing` 并由串口上锁；各轮四路输出非零，终态四路归零且未重启。两次长平台的最坏 armed loop 分别为 `1.670 ms` 和 `1.678 ms`，RTC 保存的 IMU 等待型记录分别为 `1.626 ms` 与 `1.678 ms`；已解锁日志均没有整帧漏采或 `5 ms` 主循环卡顿。第一轮累计 4 个漏采定位在上锁后，第二轮累计零。
+
+[第三次长平台](data/attitude/prop-off-route-20261002-074541.jsonl)在第 2 段出现一次 `/web_rc` 客户端响应 `462.3 ms`，随后控制请求未完成，脚本按异常路径上锁，航线终态 `complete` 但只执行到第 2 段。串口上锁与四路零输出核对通过，设备 uptime 持续增长；补存的 [冻结日志](data/attitude/prop-off-route-20261002-074541-flight-log.csv)中已解锁最大采样间隔 `1.079 ms`、故障零，最坏循环仍为前一轮保留的 `1.678 ms`。Wi-Fi 后续记录一次断线，HTTP 日志初次导出超时；这轮是通信/取证未完成的中止，不能当成主循环卡顿或完整航线通过。连续 [串口记录](data/attitude/prop-off-route-20261002-074541-serial.log)没有重启 banner。两次长平台成功只能降低该诊断镜像立即重启的担忧，不能证明上次重启一定由 IRAM 缺陷造成，也不覆盖带桨负载。
+
+采集后已恢复此前稳定 app 镜像 `18d1939b80b9a09387e93d69b7ec32171bc565ac182b66c46fa64b3fe431024e`，独立 Flash 校验匹配，串口复核上锁、四路零、无故障、安装角与 `EST_ACC_WEIGHT=0.0005` 保留。当前板端运行的是该稳定镜像，不是最新提交的诊断或参数事务修正。

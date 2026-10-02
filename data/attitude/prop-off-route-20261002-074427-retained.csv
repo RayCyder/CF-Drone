@@ -1,0 +1,3 @@
+type,capture_index,capture_sequence,loop_sequence,uptime_ms,dt_us,stage0_us,stage1_us,stage2_us,stage3_us,stage4_us,stage5_us,stage6_us,stage7_us,stage8_us,stage9_us,stage10_us,stage11_us,stage12_us,stage13_us,stage14_us,stage15_us,detail
+capture,0,0,142933,145715,1626,1034,53,72,82,1,154,49,58,8,15,1,8,19,0,8,64,imu=145713886;145714917;1;145714846;2;0;6;1;260;68;1;1;662
+capture,1,1,398479,403877,1678,1134,48,74,46,1,155,51,54,8,15,0,9,19,0,7,57,imu=403875890;403877020;2;403876955;2;0;6;1;242;71;1;1;716

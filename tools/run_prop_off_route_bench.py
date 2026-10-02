@@ -226,6 +226,7 @@ def main():
                 raise RuntimeError(f'not all three route steps observed: {sorted(seen_steps)}')
         except (OSError, TimeoutError, RuntimeError, ValueError) as error:
             route_error = error
+            record(stream, 'route_error', error=str(error))
         finally:
             signal.alarm(0)
             postflight_error = None
@@ -240,6 +241,11 @@ def main():
                             break
                 serial.send('stab')
                 time.sleep(0.1)
+                if token:
+                    try:
+                        stick_zero(stream)
+                    except (OSError, TimeoutError, RuntimeError, ValueError) as error:
+                        record(stream, 'postflight_neutral_unavailable', error=str(error))
                 serial.send('mot')
                 motors = serial.wait_for(r'^front-right ', 3, echo=False)
                 record(stream, 'motor_final', line=motors)
@@ -265,6 +271,7 @@ def main():
                     record(stream, 'web_final_retry', attempt=attempt + 1, error=str(error))
                     time.sleep(0.5)
             if (not state or state.get('armed') is not False or state.get('throttle') != 0 or
+                state.get('thrust_target', 1) > 0.001 or
                 not route or route.get('arm') != 0 or route.get('mode') != 2):
                 postflight_error = postflight_error or RuntimeError('final Web safe state not verified')
             else:
@@ -290,37 +297,54 @@ def main():
                 time.sleep(0.1)
             record(stream, 'log_final', state=status)
             if status and status.get('state') == 'FROZEN':
-                for path, suffix in (('/logs.csv', 'flight-log.csv'), ('/diag/trace.csv', 'loop-trace.csv')):
-                    download_csv_export(host, port, path, output.with_name(output.stem + '-' + suffix))
-                download(host, port, '/diag/trace/worst', output.with_name(output.stem + '-loop-worst.json'))
-                rows = list(csv.DictReader(output.with_name(output.stem + '-flight-log.csv').open()))
-                worst = json.loads(output.with_name(output.stem + '-loop-worst.json').read_text())
-                sequence_rows = [row for row in rows if row['control_source'] == '3' and row['armed'] == '1']
-                armed_rows = [row for row in rows if row['armed'] == '1']
-                powered_rows = {motor: sum(float(row[motor]) > 0.05 for row in sequence_rows)
-                                for motor in MOTORS}
-                mapped_rows = sum(float(row['rc_throttle']) >= 0.15 and
-                                  float(row['thrustTarget']) >= 0.13 and
-                                  all(float(row[motor]) > 0.05 for motor in MOTORS)
-                                  for row in sequence_rows)
-                gaps = classify_log_gaps(rows)
-                record(stream, 'flight_log_summary', rows=len(rows), sequence_rows=len(sequence_rows),
-                       powered_rows=powered_rows, mapped_rows=mapped_rows,
-                       loop_warning_seen=loop_warning_seen, worst_loop_dt_us=worst.get('dt_us'),
-                       max_armed_dt_ms=max((float(row['dt_s']) * 1000 for row in armed_rows), default=0),
-                       missed_samples=status.get('missedSamples'), gaps=gaps)
-                total_min = sum(bounds[0] for bounds in gaps.values())
-                total_max = sum(bounds[1] for bounds in gaps.values())
-                if not route_error and (
-                    not landing_seen or route.get('state') != 'complete' or len(sequence_rows) < 100 or
-                    any(count < 20 for count in powered_rows.values()) or mapped_rows < 40 or
-                    (loop_warning_seen and not worst.get('available')) or
-                    (worst.get('available') and worst.get('dt_us', 0) >= 5000) or
-                    any(int(row['fault_mask']) & ~0x80 or float(row['dt_s']) > 0.005 or
-                        float(row['battery_v']) < 3.5 for row in armed_rows) or
-                    gaps['armed'][1] or gaps['transition'][1] or
-                    not total_min <= status.get('missedSamples', -1) <= total_max):
-                    route_error = RuntimeError('route evidence failed armed-loop or phase-localized log acceptance')
+                rows = worst = None
+                for path, suffix in (('/logs.csv', 'flight-log.csv'),
+                                     ('/diag/trace.csv', 'loop-trace.csv'),
+                                     ('/diag/trace/worst', 'loop-worst.json')):
+                    destination = output.with_name(output.stem + '-' + suffix)
+                    for attempt in range(3):
+                        try:
+                            if path.endswith('.csv'):
+                                result = download_csv_export(host, port, path, destination)
+                                if path == '/logs.csv':
+                                    rows = result
+                            else:
+                                download(host, port, path, destination)
+                                worst = json.loads(destination.read_text())
+                            break
+                        except (OSError, TimeoutError, RuntimeError, ValueError) as error:
+                            record(stream, 'evidence_download_retry', path=path,
+                                   attempt=attempt + 1, error=str(error))
+                            time.sleep(0.5)
+                if rows is None or worst is None:
+                    route_error = route_error or RuntimeError('required postflight evidence unavailable')
+                else:
+                    sequence_rows = [row for row in rows if row['control_source'] == '3' and row['armed'] == '1']
+                    armed_rows = [row for row in rows if row['armed'] == '1']
+                    powered_rows = {motor: sum(float(row[motor]) > 0.05 for row in sequence_rows)
+                                    for motor in MOTORS}
+                    mapped_rows = sum(float(row['rc_throttle']) >= 0.15 and
+                                      float(row['thrustTarget']) >= 0.13 and
+                                      all(float(row[motor]) > 0.05 for motor in MOTORS)
+                                      for row in sequence_rows)
+                    gaps = classify_log_gaps(rows)
+                    record(stream, 'flight_log_summary', rows=len(rows), sequence_rows=len(sequence_rows),
+                           powered_rows=powered_rows, mapped_rows=mapped_rows,
+                           loop_warning_seen=loop_warning_seen, worst_loop_dt_us=worst.get('dt_us'),
+                           max_armed_dt_ms=max((float(row['dt_s']) * 1000 for row in armed_rows), default=0),
+                           missed_samples=status.get('missedSamples'), gaps=gaps)
+                    total_min = sum(bounds[0] for bounds in gaps.values())
+                    total_max = sum(bounds[1] for bounds in gaps.values())
+                    if not route_error and (
+                        not landing_seen or route.get('state') != 'complete' or len(sequence_rows) < 100 or
+                        any(count < 20 for count in powered_rows.values()) or mapped_rows < 40 or
+                        (loop_warning_seen and not worst.get('available')) or
+                        (worst.get('available') and worst.get('dt_us', 0) >= 5000) or
+                        any(int(row['fault_mask']) & ~0x80 or float(row['dt_s']) > 0.005 or
+                            float(row['battery_v']) < 3.5 for row in armed_rows) or
+                        gaps['armed'][1] or gaps['transition'][1] or
+                        not total_min <= status.get('missedSamples', -1) <= total_max):
+                        route_error = RuntimeError('route evidence failed armed-loop or phase-localized log acceptance')
             elif not route_error:
                 route_error = RuntimeError('flight log did not freeze')
     print(output)
