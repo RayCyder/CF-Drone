@@ -523,6 +523,23 @@ static VibrationMotorResult measureVibrationCapture() {
         (float)sqrt(accelVariance > 0 ? accelVariance : 0), valid};
 }
 
+static VibrationMotorResult saveCurrentVibrationMotorCapture() {
+    const VibrationMotorResult result = measureVibrationCapture();
+    portENTER_CRITICAL(&vibrationCalibrationMux);
+    if (vibrationCalibrationIndex < 4)
+        vibrationCalibrationResults[vibrationCalibrationIndex] = result;
+    portEXIT_CRITICAL(&vibrationCalibrationMux);
+    return result;
+}
+
+static VibrationMotorResult saveVibrationBaselineCapture() {
+    const VibrationMotorResult baseline = measureVibrationCapture();
+    portENTER_CRITICAL(&vibrationCalibrationMux);
+    vibrationBaseline = baseline;
+    portEXIT_CRITICAL(&vibrationCalibrationMux);
+    return baseline;
+}
+
 static const char *motorResponseName(const VibrationMotorResult &result,
                                      const VibrationMotorResult &baseline) {
     return vibrationMotorResponseDetected(result, baseline) ? "detected" : "inconclusive";
@@ -591,7 +608,7 @@ static void serviceVibrationCalibration() {
         if (imuCapture.state() == IMU_CAPTURE_RUNNING &&
             (uint32_t)(millis() - vibrationPhaseStartedMs) < VIBRATION_BASELINE_MS) return;
         if (imuCapture.state() == IMU_CAPTURE_RUNNING) imuCapture.stop();
-        const VibrationMotorResult baseline = measureVibrationCapture();
+        const VibrationMotorResult baseline = saveVibrationBaselineCapture();
         imuCapture.release();
         if (baseline.samples < VIBRATION_RESPONSE_MIN_BASELINE_SAMPLES ||
             baseline.accelRms > 0.25f || baseline.gyroRms > 0.05f) {
@@ -599,7 +616,6 @@ static void serviceVibrationCalibration() {
             return;
         }
         portENTER_CRITICAL(&vibrationCalibrationMux);
-        vibrationBaseline = baseline;
         vibrationBaselineComplete = true;
         vibrationCalibrationStartRequested = true;
         vibrationCalibrationState = VIBRATION_QUEUED;
@@ -610,6 +626,7 @@ static void serviceVibrationCalibration() {
     if (vibrationCalibrationState != VIBRATION_RUNNING) return;
     if (armed || batteryBlocksArming() || hasBlockingDiagnosticFault()) {
         imuCapture.stop();
+        saveCurrentVibrationMotorCapture();
         imuCapture.release();
         cancelMotorTest();
         setVibrationCalibrationState(VIBRATION_ABORTED, "safety_state_changed");
@@ -618,6 +635,7 @@ static void serviceVibrationCalibration() {
     if (motorTestActive) {
         if ((uint32_t)(millis() - vibrationPhaseStartedMs) > VIBRATION_TEST_MS + 150U) {
             imuCapture.stop();
+            saveCurrentVibrationMotorCapture();
             imuCapture.release();
             cancelMotorTest();
             setVibrationCalibrationState(VIBRATION_ABORTED, "motor_test_timeout");
@@ -625,12 +643,12 @@ static void serviceVibrationCalibration() {
         return;
     }
     if (imuCapture.state() == IMU_CAPTURE_RUNNING) imuCapture.stop();
+    const VibrationMotorResult result = saveCurrentVibrationMotorCapture();
     if (imuCapture.size() < VIBRATION_RESPONSE_MIN_MOTOR_SAMPLES) {
         imuCapture.release();
         setVibrationCalibrationState(VIBRATION_ABORTED, "insufficient_imu_samples");
         return;
     }
-    const VibrationMotorResult result = measureVibrationCapture();
     imuCapture.release();
     vibrationPhaseStartedMs = millis();
     portENTER_CRITICAL(&vibrationCalibrationMux);
@@ -673,7 +691,10 @@ void runBootMotorSelfCheckBeforeWiFi() {
         // UART queue here to preserve boot/self-check logs without overflow.
         serviceSerialConsoleOutput();
         if ((uint32_t)(millis() - startedMs) > timeoutMs) {
+            const uint8_t timedOutState = vibrationCalibrationState;
             if (imuCapture.state() == IMU_CAPTURE_RUNNING) imuCapture.stop();
+            if (timedOutState == VIBRATION_BASELINE) saveVibrationBaselineCapture();
+            else if (timedOutState == VIBRATION_RUNNING) saveCurrentVibrationMotorCapture();
             imuCapture.release();
             cancelMotorTest();
             setVibrationCalibrationState(VIBRATION_ABORTED, "boot_timeout");

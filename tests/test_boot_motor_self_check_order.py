@@ -33,6 +33,20 @@ for required in (
 ):
     assert required in runner, f"boot self-check runner lost required behavior: {required}"
 
+baseline_save = web.index("const VibrationMotorResult baseline = saveVibrationBaselineCapture()")
+baseline_reject = web.index("baseline.samples < VIBRATION_RESPONSE_MIN_BASELINE_SAMPLES", baseline_save)
+assert baseline_save < baseline_reject, "captured baseline must be saved before an unstable-baseline abort"
+assert "saveCurrentVibrationMotorCapture();" in web, (
+    "partial motor capture must remain available to Web after an aborted test"
+)
+
+timeout_start = runner.index("const uint8_t timedOutState = vibrationCalibrationState")
+timeout_release = runner.index("imuCapture.release();", timeout_start)
+for saved_call in ("saveVibrationBaselineCapture();", "saveCurrentVibrationMotorCapture();"):
+    assert timeout_start < runner.index(saved_call, timeout_start) < timeout_release, (
+        f"boot timeout must preserve partial capture before release: {saved_call}"
+    )
+
 web_setup_start = web.index("void setupWebRC()")
 web_loop_start = web.index("void readWebRC()", web_setup_start)
 web_setup = web[web_setup_start:web_loop_start]
