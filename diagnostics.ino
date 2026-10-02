@@ -178,8 +178,16 @@ static uint8_t slowLoopCaptureAction(const LoopOverrunTrace &trace) {
         }
         return 0;
     }
-    if (slowLoopRetentionPeakCaptured ||
-        slowLoopRetentionRegularCount >= SLOW_LOOP_RETENTION_CAPACITY - 2) return 0;
+    if (slowLoopRetentionPeakCaptured) return 0;
+    // Keep two slots available for >=5 ms stalls, but let a later, clearly
+    // slower sub-5 ms loop replace the second ordinary capture.
+    if (slowLoopRetentionRegularCount >= SLOW_LOOP_RETENTION_CAPACITY - 2) {
+        if (trace.dtUs < slowLoopRetentionBestDtUs +
+                SLOW_LOOP_RETENTION_NEW_WORST_MARGIN_US) return 0;
+        slowLoopRetentionBestDtUs = trace.dtUs;
+        ++slowLoopRetentionSessionCount;
+        return 2;
+    }
     uint16_t stageMask = 0;
     uint32_t dominantStageUs = 0;
     for (uint8_t stage = 0; stage < LOOP_TRACE_UNACCOUNTED; ++stage) {

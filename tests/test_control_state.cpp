@@ -324,6 +324,20 @@ int main(){
     assert(trace.stageUs[LOOP_TRACE_IMU_WAIT]==800);
     assert(trace.stageUs[LOOP_TRACE_IMU_PROCESS]==100);
     assert(trace.stageUs[LOOP_TRACE_UNACCOUNTED]==640);
+    // Preserve the newest sub-5 ms peak instead of spending both regular
+    // retention slots on the first two minor overruns of an armed session.
+    slowLoopRetentionArmedSession=false;
+    LoopOverrunTrace firstJitter{}; firstJitter.dtUs=1581;
+    firstJitter.stageUs[LOOP_TRACE_MAVLINK]=744;
+    LoopOverrunTrace secondJitter{}; secondJitter.dtUs=1574;
+    secondJitter.stageUs[LOOP_TRACE_RC_WEB]=779;
+    LoopOverrunTrace laterPeak{}; laterPeak.dtUs=3471;
+    laterPeak.stageUs[LOOP_TRACE_IMU_PROCESS]=2540;
+    assert(slowLoopCaptureAction(firstJitter)==1);
+    assert(slowLoopCaptureAction(secondJitter)==1);
+    assert(slowLoopCaptureAction(laterPeak)==2);
+    LoopOverrunTrace stall{}; stall.dtUs=5431;
+    assert(slowLoopCaptureAction(stall)==1); // two stall slots remain reserved
 #else
     assert(trace.stageUs[LOOP_TRACE_UNACCOUNTED]==2000);
 #endif
