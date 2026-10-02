@@ -566,9 +566,15 @@ void updateDiagnostics() {
 	setDiagnosticFault(DIAG_RC_LOSS, rcInputLost);
 	bool autoTimeoutFault = false;
 	if (armed && mode == AUTO) {
+		bool localAutoActive = false;
+#if WEB_RC_ENABLED
+		extern bool isLocalSequenceRunning();
+		extern bool isLocalSequenceReadyForAuto();
+		localAutoActive = isLocalSequenceRunning() || isLocalSequenceReadyForAuto();
+#endif
 		autoTimeoutFault = isControlledLandingActive() ?
 			((getActiveDiagnosticFaults() & DIAG_AUTO_TARGET_TIMEOUT) != 0) :
-			autoTargetTimedOut();
+			(!localAutoActive && autoTargetTimedOut());
 	}
 	setDiagnosticFault(DIAG_AUTO_TARGET_TIMEOUT, autoTimeoutFault);
 	setDiagnosticFault(DIAG_INVERTED, armed && isInverted);

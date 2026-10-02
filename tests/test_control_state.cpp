@@ -180,6 +180,8 @@ int main(){
     attitudeTarget=Quaternion::fromEuler(Vector(0,0,.6f)); ratesExtra.z=.2f;
     controlAttitude(); assert(fabsf(ratesTarget.z-.2f)<1e-6f);
     autoFailsafe(); assert(!isControlledLandingActive());
+    updateDiagnostics();
+    assert(!(getActiveDiagnosticFaults() & DIAG_AUTO_TARGET_TIMEOUT));
     nowMs+=9001;
     webRCLastUpdate=webRCLastStickUpdate=nowMs-9000;
     webRCLossFailsafe(); assert(isControlledLandingActive());
