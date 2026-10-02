@@ -1,0 +1,72 @@
+event: schema
+data: t,dt_s,gyro_x,gyro_y,gyro_z,acc_x,acc_y,acc_z,rates.x,rates.y,rates.z,ratesTarget.x,ratesTarget.y,ratesTarget.z,attitude.x,attitude.y,attitude.z,attitudeTarget.x,attitudeTarget.y,attitudeTarget.z,thrustTarget,battery_v,rc_roll,rc_pitch,rc_yaw,rc_throttle,rc_mode,flight_mode,rc_age_s,armed,fault_mask,motor_rl,motor_rr,motor_fr,motor_fl,rate_i_x,rate_i_y,rate_i_z,mix_scale,control_source,accel_correction_confidence
+
+id: e3cb984a-129150
+event: system-log
+data: 798866|DIAG|ACTIVE LOOP dt=0.0016 max=0.0035 n=14
+
+id: e3cb984a-129159
+event: system-log
+data: 835347|DIAG|ACTIVE LOOP dt=0.0026 max=0.0035 n=20
+
+id: e3cb984a-129181
+event: system-log
+data: 869864|DIAG|ACTIVE LOOP dt=0.0015 max=0.0035 n=25
+
+id: e3cb984a-129199
+event: system-log
+data: 903996|DIAG|ACTIVE LOOP dt=0.0015 max=0.0035 n=30
+
+id: e3cb984a-129205
+event: system-log
+data: 919032|DIAG|ACTIVE LOOP dt=0.0021 max=0.0035 n=36
+
+id: e3cb984a-129212
+event: system-log
+data: 930221|DIAG|ACTIVE LOOP dt=0.0017 max=0.0035 n=37
+
+id: e3cb984a-129238
+event: system-log
+data: 1032512|WIFI_AP|result=READY ssid=Drone_WiFi ip=192.168.4.1
+
+id: e3cb984a-129239
+event: system-log
+data: 1032515|WIFI|state=PORTAL_STA_RETRY
+
+id: e3cb984a-129240
+event: system-log
+data: 1034178|WIFI|state=CONNECTED
+
+id: e3cb984a-129241
+event: system-log
+data: 1034182|WIFI_CONFIG|state=CLOSED reason=station_connected
+
+id: e3cb984a-129242
+event: system-log
+data: 1042207|WIFI|state=DISCONNECTED reconnect=profile_1
+
+id: e3cb984a-129243
+event: system-log
+data: 1055199|WIFI|state=CONNECTED
+
+id: 115626
+event: sample
+data: 1157.594,0.001016,0,-0.001953125,0.001953125,-0.0234375,0.0546875,9.8125,0,0,0,-6.283203,6.283203,0,0.004638672,0.004150391,0.1055908,0,0,-0.4248047,0,4.077,0,0,0,0,nan,4,inf,0,0,0,0,0,0,0,0,0,1,6,1
+
+id: 115676
+event: sample
+data: 1158.093,0.001011,0,0,0.001953125,0.0078125,0.0546875,9.875,0,0,0.001953125,-6.283203,6.283203,0,0.004638672,0.004150391,0.1055908,0,0,-0.4248047,0,4.077,0,0,0,0,nan,4,inf,0,0,0,0,0,0,0,0,0,1,6,1
+
+id: 115726
+event: sample
+data: 1158.594,0.001009,0.001953125,-0.001953125,0.001953125,-0.0625,0.0703125,9.851562,0,0,0.001953125,-6.283203,6.283203,0,0.004516602,0.004150391,0.1057129,0,0,-0.4248047,0,4.077,0,0,0,0,nan,4,inf,0,0,0,0,0,0,0,0,0,1,6,1
+
+id: 115777
+event: sample
+data: 1159.103,0.001011,0,-0.00390625,0,-0.0625,0.03125,9.828125,0,-0.001953125,0,-6.283203,6.283203,0,0.004638672,0.004150391,0.1057129,0,0,-0.4248047,0,4.077,0,0,0,0,nan,4,inf,0,0,0,0,0,0,0,0,0,1,6,1
+
+id: 115827
+event: sample
+data: 1159.603,0.000945,-0.00390625,0.001953125,0.001953125,-0.0703125,0.046875,9.796875,-0.001953125,0,0,-6.283203,6.283203,0,0.004516602,0.004150391,0.1057129,0,0,-0.4248047,0,4.077,0,0,0,0,nan,4,inf,0,0,0,0,0,0,0,0,0,1,6,1
+
+id: 115877
