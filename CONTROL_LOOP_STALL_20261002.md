@@ -64,8 +64,10 @@
 
 提交 `f839f1e` 将主循环诊断分为两级：`>1.5 ms` 仍写入 trace/RTC 留存用于取证，只有 `>=5 ms` 才置位 `DIAG_LOOP_OVERRUN` 并触发蓝灯快闪。对应宿主回归修改为：1.501 ms 不再激活故障，5.001 ms 仍激活故障并触发飞行日志快照。当前 `main` 包含该提交，完整宿主回归通过。
 
-当前刷入设备的镜像为 `deliverables/cf-drone-97c43fb-loop-threshold-selfcheck-20261003.bin`，SHA-256 `a761ae9b198b2e977da4cc7053a38eb6ad3450b058af5f5d82634ab51f48a4ec`。该镜像还包含 `97c43fb` 的启动后低功率电机自检和 `7878761` 的默认关闭 MAVLink 构建开关；它是台架诊断镜像，不应作为装桨飞行镜像使用。刷写时 921600 波特率在 stub 后读 flash ID 失败，降至 460800 后写入完成并通过 esptool hash 校验。
+设备随后由主任务重新刷入提交 `f839f1e` 的干净镜像 `deliverables/cf-drone-f839f1e-clean-20261003.bin`，SHA-256 `027a30b44a352bf873d361ba3de363b643908af79fc620a2a7f0ae871ff68b31`。该镜像不含后来提交的上电自动电机检测。只写入 app0 `0x10000`；写入校验与独立 `verify-flash` 均成功。
 
-刷写后串口预检确认 `PREFLIGHT armed=0 imu_ok=1 motor_ok=1 battery_mv=4077 faults=0x00000000`。由于设备当前未连上 Web 地址 `192.168.31.189` 或 `192.168.4.1`，短路线复验在未解锁前停止，记录于 `data/attitude/prop-off-route-20261003-005523.jsonl`。随后串口确认仍为上锁、无故障、四路电机输出 0。
+刷写后串口预检确认 `PREFLIGHT armed=0 imu_ok=1 motor_ok=1 battery_mv=4077 faults=0x00000000`，四路电机输出均为 0。设备当前进入 `Drone_WiFi` 配置热点且没有 STA 凭据，因此原地址 `192.168.31.189` 不可达；恢复 Web 复验需要重新提供目标网络凭据。串口安全状态不受此限制。
 
 右前/左后满油 1 分钟卡顿发热仍需单独短时复验。现有历史满油记录能证明软件会在无桨 STAB 台架上把部分电机长期推到高输出，原因链是：无桨固定台架没有气动姿态响应，振动/加速度门控削弱重力修正，姿态环持续请求力矩，`control.ino` 的混控再把该力矩分配到具体电机。该现象不能再用 1 分钟满油复现；下一步应使用短时、分档、带上锁自动保护的台架程序，并同步导出飞行日志、电机命令和必要时的外部电流/温度记录。
+
+MAVLink 隔离保留为构建选项，不改变普通固件功能默认值。普通构建使用 `CF_DRONE_ENABLE_MAVLINK=1`；只在诊断未连接 MAVLink 的循环抖动时，用 `CF_DRONE_ENABLE_MAVLINK=0 tools/build_esp32d.sh ...` 构建 A/B 镜像。普通固件的上电与网页手动电机自检统一使用 5%/100 ms。

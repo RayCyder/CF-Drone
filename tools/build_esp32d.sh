@@ -6,7 +6,7 @@ arduino_cli="${ARDUINO_CLI:-/Applications/Arduino IDE.app/Contents/Resources/app
 build_path="${1:-${TMPDIR:-/tmp}/cf-drone-esp32d-min-spiffs}"
 
 build_flags=()
-for setting in CF_DRONE_ENABLE_LOOP_STAGE_MONITOR CF_DRONE_ENABLE_FLIGHT_LOG CF_DRONE_ENABLE_WEB_INPUT_EVENT_LOG CF_DRONE_ENABLE_FAST_STOP_SERVER CF_DRONE_ENABLE_BOOT_MOTOR_SELF_CHECK; do
+for setting in CF_DRONE_ENABLE_LOOP_STAGE_MONITOR CF_DRONE_ENABLE_FLIGHT_LOG CF_DRONE_ENABLE_WEB_INPUT_EVENT_LOG CF_DRONE_ENABLE_FAST_STOP_SERVER CF_DRONE_ENABLE_MAVLINK CF_DRONE_ENABLE_BOOT_MOTOR_SELF_CHECK; do
 	value="${!setting-}"
 	if [[ -n "$value" ]]; then
 		if [[ "$value" != 0 && "$value" != 1 ]]; then

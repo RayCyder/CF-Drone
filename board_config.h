@@ -158,7 +158,7 @@
 #endif
 // Keep Wi-Fi/Web RC available when isolating MAVLink during loop diagnostics.
 #ifndef CF_DRONE_ENABLE_MAVLINK
-#define CF_DRONE_ENABLE_MAVLINK 0
+#define CF_DRONE_ENABLE_MAVLINK 1
 #endif
 // Automatically run the low-power motor response check after boot. The flight
 // controller can enforce electrical/software gates but cannot detect installed
