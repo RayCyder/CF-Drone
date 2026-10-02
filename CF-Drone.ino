@@ -52,6 +52,7 @@ void testMotor(int n);
 void serviceSerialConsoleOutput();
 void serviceMotorTest();
 extern bool motorTestActive;
+void runBootMotorSelfCheckBeforeWiFi();
 void descend();
 void updateAccelCalibration();
 void recordDescentCalibrationSample();
@@ -101,6 +102,9 @@ void setup() {
 	setupLED(); // 初始化状态指示灯
 	setupMotors(); // 初始化电机输出（PWM/DShot）
 	setLED(true); // 点亮LED，提示正在初始化
+	setupIMU(); // 电机加电自检依赖IMU采样，必须先于WiFi初始化
+	initializeDiagnostics();
+	runBootMotorSelfCheckBeforeWiFi(); // 保存结果供稍后启动的Web只读展示
 #if WIFI_ENABLED
 	setupWiFi(); // 初始化WiFi（用于Web遥控/MAVLink等）
 #if CF_DRONE_ENABLE_MAVLINK
@@ -110,9 +114,7 @@ void setup() {
 #if WEB_RC_ENABLED
 	setupWebRC();  // 初始化Web遥控器
 #endif
-	setupIMU(); // 初始化IMU（陀螺仪/加速度计）
 	setupRC(); // 初始化遥控接收机（SBUS/ELRS等协议）
-	initializeDiagnostics();
 	startPersistentWriteTaskBeforeLoop(); // 启动期 NVS 刷写在首个控制循环之前完成
 	setLED(false); // 熄灭LED，提示初始化完成
 	print("程序初始化完成！\n");

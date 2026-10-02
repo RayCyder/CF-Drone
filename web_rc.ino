@@ -643,6 +643,52 @@ static void serviceVibrationCalibration() {
     portEXIT_CRITICAL(&vibrationCalibrationMux);
 }
 
+void runBootMotorSelfCheckBeforeWiFi() {
+#if CF_DRONE_ENABLE_BOOT_MOTOR_SELF_CHECK
+    portENTER_CRITICAL(&vibrationCalibrationMux);
+    vibrationCalibrationIndex = 0;
+    vibrationBaselineComplete = false;
+    vibrationBaseline = {};
+    memset(vibrationCalibrationResults, 0, sizeof(vibrationCalibrationResults));
+    vibrationCalibrationStartRequested = false;
+    vibrationPhaseStartedMs = millis();
+    vibrationCalibrationState = VIBRATION_BOOT_WAIT;
+    vibrationCalibrationReason = "boot_wait";
+    portEXIT_CRITICAL(&vibrationCalibrationMux);
+
+    print("MOTOR_SELF_CHECK state=BOOT_WAIT delay_ms=%lu output=5%% pulse_ms=500 auto_boot=1 phase=pre_wifi\n",
+        (unsigned long)VIBRATION_BOOT_DELAY_MS);
+    const uint32_t startedMs = millis();
+    const uint32_t timeoutMs = VIBRATION_BOOT_DELAY_MS + VIBRATION_BASELINE_MS +
+        4U * VIBRATION_TEST_MS + 3U * VIBRATION_SETTLE_MS + 2500U;
+    while (vibrationCalibrationState == VIBRATION_BOOT_WAIT ||
+           vibrationCalibrationState == VIBRATION_QUEUED ||
+           vibrationCalibrationState == VIBRATION_BASELINE ||
+           vibrationCalibrationState == VIBRATION_RUNNING) {
+        readIMU();
+        updateBatteryVoltage();
+        serviceMotorTest();
+        serviceVibrationCalibration();
+        if ((uint32_t)(millis() - startedMs) > timeoutMs) {
+            if (imuCapture.state() == IMU_CAPTURE_RUNNING) imuCapture.stop();
+            imuCapture.release();
+            cancelMotorTest();
+            setVibrationCalibrationState(VIBRATION_ABORTED, "boot_timeout");
+            recordSystemLogEvent("MOTOR_SELF_CHECK", "boot_timeout");
+            break;
+        }
+        delay(0);
+    }
+    if (motorTestActive) cancelMotorTest();
+    const bool complete = vibrationCalibrationState == VIBRATION_COMPLETE;
+    print("MOTOR_SELF_CHECK state=%s phase=pre_wifi step=%u reason=%s\n",
+        complete ? "COMPLETE" : "ABORTED", (unsigned)vibrationCalibrationIndex,
+        (const char *)vibrationCalibrationReason);
+    recordSystemLogEvent("MOTOR_SELF_CHECK", complete ? "boot_complete_pre_wifi" :
+        (const char *)vibrationCalibrationReason);
+#endif
+}
+
 static void enterOpenLoopLandingLocked(const char *reason) {
     openLoopState = OPEN_LOOP_STATE_LANDING;
     openLoopTakeoverRequested = false;
@@ -2703,23 +2749,6 @@ void setupWebRC() {
 #endif
     // ------旧PCB印刷地址访问 :8080 → 301跳转到80端口；旧地址全部淘汰后可删除------------
 
-#if CF_DRONE_ENABLE_BOOT_MOTOR_SELF_CHECK
-    portENTER_CRITICAL(&vibrationCalibrationMux);
-    vibrationCalibrationIndex = 0;
-    vibrationBaselineComplete = false;
-    vibrationBaseline = {};
-    memset(vibrationCalibrationResults, 0, sizeof(vibrationCalibrationResults));
-    vibrationCalibrationStartRequested = false;
-    // Use MCU uptime as the reference so Web/Wi-Fi initialization does not add
-    // another delay after the requested two-second boot window.
-    vibrationPhaseStartedMs = 0;
-    vibrationCalibrationState = VIBRATION_BOOT_WAIT;
-    vibrationCalibrationReason = "boot_wait";
-    portEXIT_CRITICAL(&vibrationCalibrationMux);
-    print("MOTOR_SELF_CHECK state=BOOT_WAIT delay_ms=%lu output=5%% pulse_ms=500 auto_boot=1\n",
-        (unsigned long)VIBRATION_BOOT_DELAY_MS);
-#endif
-
 #if WIFI_ENABLED
     if (isWiFiConfigPortalActive()) {
         print("✓ Web RC / Wi-Fi 配置: http://%s/wifi\n", WiFi.softAPIP().toString().c_str());
@@ -2753,6 +2782,7 @@ void readWebRC() {
 #else
 void setupWebRC() { print("Web RC已禁用\n"); }
 void readWebRC()  {}
+void runBootMotorSelfCheckBeforeWiFi() {}
 void abortVibrationCalibrationForDisarm() {}
 WebRCFastStopAction consumeWebRCFastStop() { return WEB_RC_FAST_STOP_NONE; }
 void processConsoleCommandQueue() {}
