@@ -3,6 +3,7 @@
 
 #include "diagnostics.h"
 #include "control.h"
+#include "system_log.h"
 
 bool isInverted = false;  // 当前机身是否处于倒置（Z轴cos < INVERTED_COS_THRESHOLD）
 
@@ -11,6 +12,10 @@ float descendTime = 3;          // 过渡到目标下降推力的时间（秒）
 float descendThrust = 0.35f;     // 自动下降目标推力（归一化指令，需按机体实测调整）
 static bool controlledLandingActive = false;
 static double lastDescendUpdateTime = NAN;
+static float recentPoweredThrust = NAN;
+static uint32_t recentPoweredAtMs = 0;
+static constexpr uint32_t LANDING_THRUST_HANDOFF_MAX_AGE_MS = 200;
+static constexpr float LANDING_THRUST_HANDOFF_MIN = 0.15f;
 #define WEB_RC_LOSS_TIMEOUT_MS 8000UL  // Web遥控器失联阈值(ms)，必须大于心跳间隔2000ms
 
 // 倒置保护参数
@@ -43,6 +48,13 @@ extern PID rollPID, pitchPID, yawPID;              // control.ino
 extern float motThrMin;        // control.ino
 
 void failsafe() {
+	// Keep the last powered command briefly so releasing the Web throttle to
+	// press Land cannot make the landing ramp start from zero.
+	if (armed && !controlledLandingActive && isfinite(thrustTarget) &&
+		thrustTarget >= LANDING_THRUST_HANDOFF_MIN) {
+		recentPoweredThrust = thrustTarget;
+		recentPoweredAtMs = millis();
+	}
 	updateDiagnostics();
 	if (armed && (getActiveDiagnosticFaults() &
 		(DIAG_IMU_INIT | DIAG_IMU_TIMEOUT | DIAG_IMU_INVALID | DIAG_MOTOR_INIT))) {
@@ -87,6 +99,22 @@ void descend() {
 	controlledLandingActive = true;
 	setCurrentControlSource(CONTROL_SOURCE_LANDING);
 	if (firstLandingFrame) {
+		const float entryThrust = thrustTarget;
+		const uint32_t handoffAgeMs = millis() - recentPoweredAtMs;
+		bool restored = false;
+		if (armed && isfinite(entryThrust) && entryThrust < LANDING_THRUST_HANDOFF_MIN &&
+			isfinite(recentPoweredThrust) &&
+			handoffAgeMs <= LANDING_THRUST_HANDOFF_MAX_AGE_MS) {
+			thrustTarget = min(recentPoweredThrust, ALTHOLD_HOVER_THRUST);
+			restored = true;
+		}
+		char event[96];
+		snprintf(event, sizeof(event), "entry_milli=%d start_milli=%d restored=%u age_ms=%lu",
+			isfinite(entryThrust) ? (int)(entryThrust * 1000.0f) : -1,
+			isfinite(thrustTarget) ? (int)(thrustTarget * 1000.0f) : -1,
+			restored ? 1U : 0U,
+			(unsigned long)(restored ? handoffAgeMs : 0));
+		recordSystemLogEvent("LANDING", event);
 		// 首次进入：保持当前偏航（仅强制机体水平），清零速率前馈，重置PID积分
 		float currentYaw = attitude.getYaw();
 		attitudeTarget = Quaternion::fromEuler(Vector(0, 0, currentYaw));
@@ -118,6 +146,8 @@ bool isControlledLandingActive() {
 void clearControlledLanding() {
 	controlledLandingActive = false;
 	lastDescendUpdateTime = NAN;
+	recentPoweredThrust = NAN;
+	recentPoweredAtMs = 0;
 }
 
 // Allow pilot to interrupt automatic flight
@@ -129,6 +159,14 @@ void autoFailsafe() {
 	if (controlledLandingActive) {
 		return;
 	}
+	#if WEB_RC_ENABLED
+	extern bool isLocalSequenceRunning();
+	extern bool isLocalSequenceReadyForAuto();
+	if (isLocalSequenceRunning() || isLocalSequenceReadyForAuto()) {
+		setDiagnosticFault(DIAG_AUTO_TARGET_TIMEOUT, false);
+		return;
+	}
+	#endif
 	if (autoTargetTimedOut()) {
 		setDiagnosticFault(DIAG_AUTO_TARGET_TIMEOUT, true);
 		descend();
@@ -158,7 +196,10 @@ void webRCLossFailsafe() {
 	if (timeoutHandled) return;
 	timeoutHandled = true;
 	setDiagnosticFault(DIAG_WEB_RC_LOSS, true);
-	if (mode == AUTO && autoTargetReady()) {
+	extern bool isLocalSequenceRunning();
+	extern bool isLocalSequenceReadyForAuto();
+	if (mode == AUTO && !isLocalSequenceRunning() &&
+		!isLocalSequenceReadyForAuto() && autoTargetReady()) {
 		print("Web RC连接丢失，外部AUTO目标有效，保持AUTO控制\n");
 		webRCEnabled = false;
 		useWebRC = false;

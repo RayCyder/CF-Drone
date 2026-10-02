@@ -26,7 +26,7 @@ extern bool imuRotationRestartPending();
 #define YAWRATE_P 0.3 // 偏航需要更高的P值（惯性较小）
 #define YAWRATE_I 0.01 // 中等I值补偿
 #define YAWRATE_D 0.01 // 小D值
-#define YAWRATE_I_LIM 0.3
+#define YAWRATE_I_LIM 0.05 // 偏航持续偏差的积分输出最多占电机归一化指令的 5%
 // ============== 角度环（外环）参数 ==============
 #define ROLL_P 6 // 较高的P值快速响应
 #define ROLL_I 0 // 外环 I 项
@@ -86,7 +86,7 @@ extern uint16_t takeWebRCButtonPressEdges(uint16_t *buttons);
 
 PID rollRatePID(ROLLRATE_P, ROLLRATE_I, ROLLRATE_D, ROLLRATE_I_LIM, RATES_D_LPF_ALPHA);
 PID pitchRatePID(PITCHRATE_P, PITCHRATE_I, PITCHRATE_D, PITCHRATE_I_LIM, RATES_D_LPF_ALPHA);
-PID yawRatePID(YAWRATE_P, YAWRATE_I, YAWRATE_D, 0, RATES_D_LPF_ALPHA);
+PID yawRatePID(YAWRATE_P, YAWRATE_I, YAWRATE_D, YAWRATE_I_LIM, RATES_D_LPF_ALPHA);
 PID rollPID(ROLL_P, ROLL_I, ROLL_D, ROLL_I_LIM);
 PID pitchPID(PITCH_P, PITCH_I, PITCH_D, PITCH_I_LIM);
 PID yawPID(YAW_P, 0, 0);
@@ -298,7 +298,13 @@ static bool applyAutoTarget() {
 
 bool setFlightMode(int requestedMode) {
 	if (!isSupportedFlightMode(requestedMode)) return false;
-	if (requestedMode == AUTO && !autoTargetReady()) return false;
+	#if WEB_RC_ENABLED
+	extern bool isLocalSequenceReadyForAuto();
+	const bool localAutoReady = requestedMode == AUTO && isLocalSequenceReadyForAuto();
+	#else
+	const bool localAutoReady = false;
+	#endif
+	if (requestedMode == AUTO && !localAutoReady && !autoTargetReady()) return false;
 	#if WEB_RC_ENABLED
 	if (requestedMode == STAB || requestedMode == ACRO) {
 		extern bool isLocalSequenceRunning();
@@ -321,7 +327,7 @@ bool setFlightMode(int requestedMode) {
 	resetAllPids();
 	resetControlTargets();
 	if (mode != AUTO) setDiagnosticFault(DIAG_AUTO_TARGET_TIMEOUT, false);
-	if (mode == AUTO) applyAutoTarget();
+	if (mode == AUTO && !localAutoReady) applyAutoTarget();
 	return true;
 }
 
@@ -349,7 +355,14 @@ bool submitAutoAttitudeTarget(const AutoAttitudeCommand& target) {
 
 	autoAttitudeCommand = normalized;
 	markAutoTargetValid(AUTO_TARGET_ATTITUDE);
+	#if WEB_RC_ENABLED
+	extern bool isLocalSequenceRunning();
+	extern bool isLocalSequenceReadyForAuto();
+	if (mode == AUTO && !isControlledLandingActive() &&
+		!isLocalSequenceRunning() && !isLocalSequenceReadyForAuto()) applyAutoTarget();
+	#else
 	if (mode == AUTO && !isControlledLandingActive()) applyAutoTarget();
+	#endif
 	return true;
 }
 
@@ -362,7 +375,14 @@ bool submitAutoActuatorTarget(const AutoActuatorCommand& target) {
 	}
 	autoActuatorCommand = normalized;
 	markAutoTargetValid(AUTO_TARGET_ACTUATOR);
+	#if WEB_RC_ENABLED
+	extern bool isLocalSequenceRunning();
+	extern bool isLocalSequenceReadyForAuto();
+	if (mode == AUTO && !isControlledLandingActive() &&
+		!isLocalSequenceRunning() && !isLocalSequenceReadyForAuto()) applyAutoTarget();
+	#else
 	if (mode == AUTO && !isControlledLandingActive()) applyAutoTarget();
+	#endif
 	return true;
 }
 
@@ -386,7 +406,13 @@ bool autoTargetTimedOut() {
 const char* armBlockReason() {
 	if (armed) return "";
 	if (motorTestArmInhibit) return "电机测试后请先释放解锁输入";
-	if (mode == AUTO && !autoTargetReady()) return "AUTO 模式尚无有效目标，请切回 STAB 或等待目标就绪";
+	#if WEB_RC_ENABLED
+	extern bool isLocalSequenceReadyForAuto();
+	const bool localAutoReady = isLocalSequenceReadyForAuto();
+	#else
+	const bool localAutoReady = false;
+	#endif
+	if (mode == AUTO && !localAutoReady && !autoTargetReady()) return "AUTO 模式尚无有效目标，请切回 STAB 或等待目标就绪";
 	if (motorTestActive) return "电机测试正在运行";
 	if (isAccelCalibrationActive()) return "加速度计校准正在运行";
 	if (isLevelCalibrationActive()) return "水平校准进行中或已保存安装角，重启飞控后才可解锁";
@@ -444,6 +470,8 @@ void interpretControls() {
 	extern bool isLocalSequenceRunning();
 	const bool localSequenceRunning = isLocalSequenceRunning();
 	if (!localSequenceRunning) {
+#else
+	const bool localSequenceRunning = false;
 #endif
 	if (motorTestArmInhibit && (controlThrottle >= 0.05f || controlYaw <= 0.95f))
 		motorTestArmInhibit = false;
@@ -510,7 +538,7 @@ void interpretControls() {
 	} // Local sequence values must not trigger RC mode changes or arm gestures.
 #endif
 
-	if (mode == AUTO || isControlledLandingActive()) return; // pilot sticks do not drive AUTO/landing targets
+	if ((mode == AUTO && !localSequenceRunning) || isControlledLandingActive()) return;
 
 #if WEB_RC_ENABLED
 	if (!localSequenceRunning) {
@@ -529,7 +557,7 @@ void interpretControls() {
 		thrustTarget = mapf(controlThrottle, 0.05f, 1.0f, motThrMin, motThrMax);
 	}
 
-	if (mode == STAB) {
+	if (mode == STAB || (mode == AUTO && localSequenceRunning)) {
 		float yawTarget = attitudeTarget.getYaw();
 		if (!armed || invalid(yawTarget) || controlYaw != 0) yawTarget = attitude.getYaw(); // reset yaw target
 		// trimRoll/trimPitch 叠加到摇杆指令上，补偿机械不对称引起的固定漂移
@@ -567,7 +595,13 @@ void controlAttitude() {
 	ratesTarget.x = rollPID.update(error.x) + ratesExtra.x;
 	ratesTarget.y = pitchPID.update(error.y) + ratesExtra.y;
 
-	if (mode == STAB) {
+	#if WEB_RC_ENABLED
+	extern bool isLocalSequenceRunning();
+	const bool localSequenceRunning = isLocalSequenceRunning();
+	#else
+	const bool localSequenceRunning = false;
+	#endif
+	if (mode == STAB || (mode == AUTO && localSequenceRunning)) {
 		// There is no magnetometer heading correction in this estimator, so
 		// STAB's integrated yaw drifts under gyro bias/vibration. Command yaw
 		// rate from the pilot; do not turn that unobservable drift into torque.
@@ -737,6 +771,11 @@ void interpretWebRC() {
 	// 按钮8保留给ALTHOLD；当前六轴硬件不支持，入口只告警，不切模式。
 	if (risingEdge & 0x0100) {
 		setWebRCWarn("定高模式暂不支持");
+	}
+
+	// 按钮9：已上传的单条序列进入 AUTO 后自动启动。
+	if (risingEdge & 0x0200) {
+		if (!setFlightMode(AUTO)) setWebRCWarn("AUTO 序列未就绪或连接无效");
 	}
 
 	// 模式切换日志

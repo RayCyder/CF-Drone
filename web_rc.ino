@@ -31,6 +31,7 @@ extern double controlTime;
 extern float controlRoll, controlPitch, controlYaw, controlThrottle, controlMode;
 extern float batteryVoltage;
 extern const char* armBlockReason();
+bool isWebRCEnabled();
 extern float thrustTarget;
 extern bool ledFastBlinkActive();
 extern const char* motd;
@@ -69,6 +70,7 @@ static OpenLoopPackedStep openLoopBuffers[2][OPEN_LOOP_MAX_STEPS];
 static portMUX_TYPE openLoopMux = portMUX_INITIALIZER_UNLOCKED;
 static uint8_t openLoopActiveBuffer = 0;
 static uint16_t openLoopCount = 0;
+static char *openLoopUploadedText = nullptr;
 static uint16_t openLoopIndex = 0;
 static uint32_t openLoopTotalMs = 0;
 static uint32_t openLoopRevision = 0;
@@ -412,6 +414,14 @@ bool isLocalSequenceRunning() {
     return running;
 }
 
+bool isLocalSequenceReadyForAuto() {
+    portENTER_CRITICAL(&openLoopMux);
+    const bool ready = openLoopState == OPEN_LOOP_STATE_READY && openLoopCount > 0 &&
+        !openLoopUploadInProgress;
+    portEXIT_CRITICAL(&openLoopMux);
+    return ready && !isControlledLandingActive() && isWebRCEnabled();
+}
+
 static void setOpenLoopReason(const char *reason) {
     openLoopReason = reason ? reason : "unknown";
 }
@@ -573,6 +583,14 @@ static void stepOpenLoopSequence() {
         }
     }
 
+    // An uploaded plan is the single local AUTO program. Start on the next
+    // armed AUTO flight-loop tick; the browser does not stream replay inputs.
+    if (openLoopState == OPEN_LOOP_STATE_READY && openLoopCount > 0 &&
+        !openLoopUploadInProgress && armed && mode == AUTO &&
+        !isControlledLandingActive() && isWebRCEnabled()) {
+        startOpenLoopNow(now);
+    }
+
     if (openLoopStartRequested && openLoopState == OPEN_LOOP_STATE_START_PENDING) {
         if (openLoopRequestedRevision != openLoopRevision) {
             openLoopState = OPEN_LOOP_STATE_READY;
@@ -612,7 +630,7 @@ static void stepOpenLoopSequence() {
         if (!armed) {
             openLoopState = OPEN_LOOP_STATE_COMPLETE;
             setOpenLoopReason("disarmed");
-        } else if (mode != STAB) {
+        } else if (mode != STAB && mode != AUTO) {
             openLoopState = OPEN_LOOP_STATE_ABORTED;
             setOpenLoopReason("mode_changed");
         } else if (dtMs > OPEN_LOOP_SCHEDULER_GAP_MS) {
@@ -1491,10 +1509,22 @@ void setupWebRC() {
             webRCServer.send(status, "application/json", response);
             return;
         }
+        char *uploadedText = (char *)malloc(body.length() + 1);
+        if (!uploadedText) {
+            portENTER_CRITICAL(&openLoopMux);
+            openLoopUploadInProgress = false;
+            portEXIT_CRITICAL(&openLoopMux);
+            webRCServer.send(503, "application/json", "{\"ok\":0,\"error\":\"insufficient_memory\"}");
+            return;
+        }
+        memcpy(uploadedText, body.c_str(), body.length() + 1);
         uint32_t revision;
+        char *previousText;
         portENTER_CRITICAL(&openLoopMux);
         openLoopActiveBuffer = stagingIndex;
         openLoopCount = parsed.count;
+        previousText = openLoopUploadedText;
+        openLoopUploadedText = uploadedText;
         openLoopTotalMs = parsed.totalMs;
         openLoopIndex = 0;
         openLoopRevision++;
@@ -1507,9 +1537,33 @@ void setupWebRC() {
         openLoopUploadInProgress = false;
         setOpenLoopReason("uploaded");
         portEXIT_CRITICAL(&openLoopMux);
+        free(previousText);
         char response[96];
         snprintf(response, sizeof(response), "{\"ok\":1,\"state\":\"ready\",\"plan_revision\":%lu}", (unsigned long)revision);
         webRCServer.send(200, "application/json", response);
+    });
+    webRCServer.on("/route/plan", HTTP_GET, []() {
+        if (rejectFlightApiInConfigPortal()) return;
+        if (armed) {
+            webRCServer.send(409, "text/plain", "disarm_required");
+            return;
+        }
+        uint32_t revision;
+        bool available, busy;
+        portENTER_CRITICAL(&openLoopMux);
+        revision = openLoopRevision;
+        busy = openLoopUploadInProgress;
+        available = !busy && openLoopCount > 0 && openLoopUploadedText;
+        portEXIT_CRITICAL(&openLoopMux);
+        if (!available) {
+            webRCServer.send(busy ? 409 : 204, "text/plain", "");
+            return;
+        }
+        // Uploads and reads share the WebServer task; the flight loop never edits this text.
+        const String text = String(openLoopUploadedText);
+        webRCServer.sendHeader("Cache-Control", "no-store");
+        webRCServer.sendHeader("X-Plan-Revision", String(revision));
+        webRCServer.send(200, "text/plain; charset=utf-8", text);
     });
     webRCServer.on("/route/start", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;

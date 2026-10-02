@@ -205,6 +205,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
 .route-shell{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
 .route-editor{width:100%;min-height:48vh;padding:12px;border:1px solid #777;border-radius:9px;background:#17191c;color:#e9f1ff;font: .9rem/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre;overflow:auto;touch-action:auto;user-select:text;-webkit-user-select:text}
 .route-help{color:#c4cbd3;font-size:.85rem;line-height:1.5}.route-page-actions{display:flex;gap:8px;flex-wrap:wrap}.route-page-actions button{border:0;border-radius:8px;padding:10px 14px;background:#444;color:#fff;font-size:.9rem;touch-action:manipulation}.route-page-actions .run{background:#167c3a}.route-page-actions .stop{background:#a33}
+.route-recorder{border:1px solid rgba(255,255,255,.14);border-radius:10px;padding:10px;background:rgba(0,0,0,.22);display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.route-recorder-actions{display:flex;gap:8px;flex-wrap:wrap}.route-recorder-actions button{border:0;border-radius:8px;padding:9px 12px;background:#555;color:#fff;font-size:.88rem;touch-action:manipulation}.route-recorder-actions .record{background:#a33}.route-recorder-actions .stop{background:#167c3a}.route-recorder-actions button:disabled{opacity:.45}.route-recorder-status{color:#ffd27a;font-size:.85rem;line-height:1.4;flex:1;min-width:220px}
 .route-status{font-size:.9rem;color:#9fc7ff;margin-top:6px}
 .buttons-grid{display:grid;grid-template-columns:repeat(6,1fr);grid-template-rows:repeat(2,1fr);gap:8px;flex:1}
 .buttons-grid>button{grid-column:span 2}
@@ -284,6 +285,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <div class="status-item" id="armed-status-item" style="background:rgba(255,51,51,0.15)"><span id="armed-status" style="color:#ff6666">已上锁</span></div>
       <div class="status-item"><span>飞行模式</span><span id="flight-mode">自稳</span></div>
       <button id="route-takeover-main" class="status-item" style="display:none;background:#167c3a;color:white;border:0" onclick="takeManualControl()">接管摇杆</button>
+      <button id="route-record-main" class="status-item" style="background:#555;color:white;border:0" onclick="toggleRouteRecordingMain()">录制序列</button>
       <div class="status-item"><span>电池电压</span><span id="battery">-</span></div>
       <div class="status-item"><span>遥控延迟</span><span id="latency">-</span></div>
       <div class="status-item"><span>丢包率</span><span id="packet-loss">0%</span></div>
@@ -361,9 +363,10 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <div class="diagnostic-top"><h2>相对航线（遥控输出序列）</h2><div class="diagnostic-actions"><button onclick="closeRoutePage()">返回遥控器</button></div></div>
       <p class="route-help">航线定义为按时间排列的遥控输出：每段设置油门、横滚、俯仰和偏航输入，可表达平移、转向及升降趋势。每段数值是该段持续使用的输入，不是相对上一段的增量。飞控没有位置或高度反馈，实际轨迹会受风、推力和机体响应影响。连接断开、执行周期中断、完成或停止时会转入定推力下降；若末段油门低于设定的下降推力，进入下降时油门可能上升。下降推力需先用带桨实测标定，着陆后由操作者确认并上锁。</p>
       <p class="route-help">每行：持续秒数（0.1–600） 油门百分比（0–100） 横滚/俯仰/偏航遥控输入（各 -100–100，不是角度）。最多 128 段、合计 30 分钟、正文 4096 字节；空行和 # 注释不执行。当前序列正常结束也会进入定推力下降。若后续增加“结束后近似悬停”，其控制方式应为保持末段油门、横滚/俯仰/偏航回中以尝试保持垂直加速度接近 0；这不具备高度/位置保持能力。</p>
+      <div class="route-recorder"><div id="route-record-status" class="route-recorder-status">录制关闭；只在浏览器本地采样当前摇杆输出。</div><div class="route-recorder-actions"><button id="route-record-start" class="record" onclick="startRouteRecording()">开始录制</button><button id="route-record-stop" class="stop" onclick="stopRouteRecording('手动停止录制。')" disabled>停止录制</button></div></div>
       <textarea id="route-editor" class="route-editor" spellcheck="false" aria-label="开环控制序列"></textarea>
-      <div class="route-page-actions"><button onclick="saveRoute()">保存到浏览器</button><button id="route-upload" onclick="uploadRoute()">上传并校验</button><button id="route-start" class="run" onclick="startRoute()">启动已上传序列</button><button id="route-stop" class="stop" onclick="stopRoute()">停止并下降</button><button id="route-takeover" onclick="takeManualControl()">接管摇杆</button></div>
-      <p class="route-help">先在上锁且电机停止时上传；启动需要由操作者解锁并选择自稳模式。“停止并下降”保留下降控制，“接管摇杆”明确退出序列并切回手动自稳。</p>
+      <div class="route-page-actions"><button onclick="saveRoute()">保存到浏览器</button><button id="route-device-load" onclick="loadDeviceRoute(false)">从设备加载（覆盖编辑框）</button><button id="route-upload" onclick="uploadRoute()">上传并校验</button><button id="route-auto" onclick="setAutoModeForRoute()">进入 AUTO 模式</button><button id="route-start" class="run" onclick="startRoute()">自稳手动启动</button><button id="route-stop" class="stop" onclick="stopRoute()">停止并下降</button><button id="route-takeover" onclick="takeManualControl()">接管摇杆</button></div>
+      <p class="route-help">上锁时可在浏览器本地录制，飞行中录制须处于自稳且拥有当前页面的遥控控制权；录制只读取摇杆值，不增加设备请求。停止后结果写入编辑器并保存到浏览器。刷新页面会从设备恢复已上传序列；若浏览器草稿不同，将保留草稿，可点“从设备加载”覆盖编辑框。修改后先保存到浏览器，再在上锁、电机停止时上传，读回确认后方可执行。设备序列只保存在运行内存，飞控重启后需重新上传。进入 AUTO 并由操作者解锁会自动执行，也可在自稳模式由操作者手动启动。“停止并下降”会进入下降控制，“接管摇杆”切回手动自稳。</p>
       <div class="route-status" id="route-message" role="status">当前内容尚未上传；上传不会解锁或启动。</div>
       <div class="route-status" id="route-status">正在读取飞控状态…</div>
     </div>
@@ -467,6 +470,9 @@ function setArmedState(armed) {
   currentArmed = !!armed;
   armedStatusKnown = true;
   if (currentArmed && !wasArmed && consolePanelOpen) toggleConsole();
+  if (routeRecording && routeRecordStartedArmed && !currentArmed && wasArmed) stopRouteRecording('飞控已上锁，录制已安全停止。', true);
+  if (routeRecording && !routeRecordStartedArmed && currentArmed && !wasArmed) stopRouteRecording('飞控已解锁，本地录制已停止。', true);
+  updateRouteControls();
 }
 let selfCheckOpen = false;
 let selfCheckRequestSequence = 0;
@@ -481,6 +487,11 @@ let flightRouteRunning = false;
 let routeStarting = false;
 let routeHold = false;
 let routePending='',routeUploadedText=null,routeUploadedRevision=0,routeServerState='empty',routeStatusBusy=false;
+let routeRecording=false,routeRecordStartedArmed=false,routeRecordTimer=null,routeRecordStartMs=0,routeRecordSegmentStartMs=0,routeRecordLast=null,routeRecordSegments=[];
+const ROUTE_RECORD_SAMPLE_MS=100;
+const ROUTE_RECORD_MAX_SEGMENTS=128;
+const ROUTE_RECORD_MAX_BYTES=4096;
+const ROUTE_RECORD_MAX_DURATION_MS=1800000;
 const CONSOLE_BASE_POLL_MS = 500;
 const CONSOLE_CATCHUP_POLL_MS = 80;
 const CONSOLE_PAGE_LIMIT = 20;
@@ -503,7 +514,7 @@ function init() {
   initPointerEvents();
   initConsoleTouchScrolling();
   loadRoute();
-  refreshRouteStatus();
+  refreshRouteStatus().then(()=>loadDeviceRoute(true));
   refreshDescentCalibrationStatus();
   requestAnimationFrame(animationLoop);
   requestAnimationFrame(initKnobPositions);
@@ -534,27 +545,180 @@ function updateRouteControls(){
   const busy=routeStarting||!!routePending;
   const active=flightRouteRunning||routeHold||routeServerState==='start_pending';
   const editor=document.getElementById('route-editor');
-  editor.disabled=busy||active;
-  document.getElementById('route-upload').disabled=busy||active||currentArmed||!connectionOk;
+  editor.disabled=busy||active||routeRecording;
+  document.getElementById('route-device-load').disabled=busy||active||routeRecording||currentArmed||!connectionOk;
+  document.getElementById('route-upload').disabled=busy||active||routeRecording||currentArmed||!connectionOk;
+  document.getElementById('route-auto').disabled=busy||active||routeRecording||currentArmed||!connectionOk||routeUploadedText!==editor.value||!routeUploadedRevision||routeServerState!=='ready'||currentFlightMode===4;
   document.getElementById('route-start').disabled=busy||active||!currentArmed||!connectionOk||currentFlightMode!==2||routeUploadedText!==editor.value||!routeUploadedRevision||routeServerState!=='ready';
   document.getElementById('route-stop').disabled=busy||!active;
   document.getElementById('route-takeover').disabled=busy||!active||!connectionOk;
   document.getElementById('route-takeover-main').style.display=active?'':'none';
   document.getElementById('route-takeover-main').disabled=busy||!connectionOk;
+  const canRecord=!busy&&!active&&!routeRecording&&(!currentArmed||(connectionOk&&currentFlightMode===2&&!!webRCLeaseToken&&!webRCLeaseBlocked));
+  const recordStart=document.getElementById('route-record-start'),recordStop=document.getElementById('route-record-stop');
+  if(recordStart)recordStart.disabled=!canRecord;
+  if(recordStop)recordStop.disabled=!routeRecording;
+  const recordMain=document.getElementById('route-record-main');
+  if(recordMain){
+    recordMain.textContent=routeRecording?'停止录制':'录制序列';
+    recordMain.disabled=routeRecording?false:!canRecord;
+    recordMain.style.background=routeRecording?'#a33':'#555';
+  }
 }
 function saveRoute(){
   try{localStorage.setItem('cfDroneOpenLoopSequence',document.getElementById('route-editor').value);routeMessage('已保存到此浏览器；尚未上传到飞控。');}
   catch(_){routeMessage('浏览器未允许本地保存，编辑内容仍保留在页面。');}
 }
+async function loadDeviceRoute(automatic){
+  if(currentArmed||routeRecording||flightRouteRunning||routeHold)return;
+  const editor=document.getElementById('route-editor');
+  const original=editor.value;
+  try{
+    const response=await fetch('/route/plan',{cache:'no-store'});
+    if(response.status===204){routeUploadedText=null;routeUploadedRevision=0;updateRouteControls();if(!automatic)routeMessage('设备尚无已上传序列；浏览器草稿保持不变。');return;}
+    if(!response.ok)throw new Error('设备序列读取失败：HTTP '+response.status);
+    const revision=Number(response.headers.get('X-Plan-Revision'));
+    const text=await response.text();
+    if(!Number.isSafeInteger(revision)||revision<=0||!text)throw new Error('设备返回的序列不完整');
+    // An automatic refresh must preserve a saved browser draft that differs from the device.
+    let synced='';try{synced=localStorage.getItem('cfDroneOpenLoopSyncedText')||'';}catch(_){}
+    if(automatic&&original!==defaultRouteText&&original!==text&&original!==synced){
+      routeMessage('设备已有序列；浏览器草稿不同，已保留草稿。点击“从设备加载”可覆盖编辑框。');
+      return;
+    }
+    if(!automatic&&original!==defaultRouteText&&original!==text&&
+       !window.confirm('从设备加载会覆盖编辑框中的本地内容。继续？'))return;
+    // Do not replace edits made while the request was in flight.
+    if(editor.value!==original){routeMessage('编辑框已改变，请重新从设备加载。');return;}
+    const status=await fetch('/route/status',{cache:'no-store'}).then(r=>r.json());
+    if(status.plan_revision!==revision||status.count===0||status.arm){routeMessage('设备序列或解锁状态已变化，请重新加载。');return;}
+    editor.value=text;
+    routeUploadedText=text;routeUploadedRevision=revision;
+    try{localStorage.setItem('cfDroneOpenLoopSequence',text);localStorage.setItem('cfDroneOpenLoopSyncedText',text);}catch(_){}
+    routeMessage('已从设备加载 '+status.count+' 段、'+Number(status.duration_s).toFixed(1)+' 秒；修改后请保存到浏览器并重新上传。');
+    updateRouteControls();
+  }catch(error){if(!automatic)routeMessage(error.message||'无法从设备加载序列');}
+}
 function loadRoute(){
   let value='';try{value=localStorage.getItem('cfDroneOpenLoopSequence')||'';}catch(_){}
   if(!value){try{const old=JSON.parse(localStorage.getItem('cfDroneOpenLoopRoute')||'[]');if(Array.isArray(old)&&old.length)value=old.map(p=>[p.duration,p.throttle,p.roll,p.pitch,p.yaw].join(' ')).join('\n');}catch(_){}}
   const editor=document.getElementById('route-editor');editor.value=value||defaultRouteText;
-  editor.addEventListener('input',()=>{routeUploadedText=null;routeUploadedRevision=0;routeMessage('内容已修改，请在上锁状态重新上传校验。');updateRouteControls();});
+  editor.addEventListener('input',()=>{if(routeRecording)return;routeUploadedText=null;routeUploadedRevision=0;routeMessage('内容已修改，请在上锁状态重新上传校验。');updateRouteControls();});
   updateRouteControls();
 }
 function openRoutePage(){document.getElementById('route-page').style.display='block';document.getElementById('route-page').setAttribute('aria-hidden','false');refreshRouteStatus();startRouteMonitor();}
 function closeRoutePage(){document.getElementById('route-page').style.display='none';document.getElementById('route-page').setAttribute('aria-hidden','true');}
+
+function routeRecordStatus(message){const el=document.getElementById('route-record-status');if(el)el.textContent=message;}
+function clampRouteValue(value,min,max){return Math.max(min,Math.min(max,value));}
+function routeRecordSnapshot(){
+  return {
+    throttle:clampRouteValue(Math.round((currentValues.throttle+100)/2),0,100),
+    roll:clampRouteValue(Math.round(currentValues.roll),-100,100),
+    pitch:clampRouteValue(Math.round(currentValues.pitch),-100,100),
+    yaw:clampRouteValue(Math.round(currentValues.yaw),-100,100)
+  };
+}
+function sameRouteRecordValue(a,b){return a&&b&&a.throttle===b.throttle&&a.roll===b.roll&&a.pitch===b.pitch&&a.yaw===b.yaw;}
+function formatRouteRecordLine(segment){
+  return (segment.durationMs/1000).toFixed(1)+' '+segment.throttle+' '+segment.roll+' '+segment.pitch+' '+segment.yaw;
+}
+function routeRecordText(segments){return segments.map(formatRouteRecordLine).join('\n');}
+function appendRouteRecordSegment(durationMs,value){
+  const roundedMs=Math.max(ROUTE_RECORD_SAMPLE_MS,Math.round(durationMs/ROUTE_RECORD_SAMPLE_MS)*ROUTE_RECORD_SAMPLE_MS);
+  const segment={durationMs:roundedMs,throttle:value.throttle,roll:value.roll,pitch:value.pitch,yaw:value.yaw};
+  const candidate=routeRecordSegments.concat([segment]);
+  if(candidate.length>ROUTE_RECORD_MAX_SEGMENTS)return '超过 128 段上限，录制已停止；新片段未写入。';
+  const totalMs=candidate.reduce((sum,item)=>sum+item.durationMs,0);
+  if(totalMs>ROUTE_RECORD_MAX_DURATION_MS)return '超过 30 分钟上限，录制已停止；新片段未写入。';
+  if(new TextEncoder().encode(routeRecordText(candidate)).length>ROUTE_RECORD_MAX_BYTES)return '超过 4096 字节上限，录制已停止；新片段未写入。';
+  routeRecordSegments=candidate;
+  return '';
+}
+function routeRecordElapsedText(){
+  const now=performance.now();
+  const elapsed=Math.max(0,now-routeRecordStartMs);
+  return (elapsed/1000).toFixed(1)+' 秒，'+routeRecordSegments.length+' 段';
+}
+function toggleRouteRecordingMain(){
+  if(routeRecording)stopRouteRecording('手动停止录制。',true);
+  else startRouteRecording();
+}
+function startRouteRecording(){
+  if(routeRecording)return;
+  if(flightRouteRunning||routeHold||routeServerState==='start_pending'){routeRecordStatus('序列执行中，不能录制。');return;}
+  if(currentArmed){
+    if(!connectionOk){routeRecordStatus('连接断开，不能开始录制。');return;}
+    if(currentFlightMode!==2){routeRecordStatus('录制需要自稳模式。');return;}
+    if(!webRCLeaseToken||webRCLeaseBlocked){routeRecordStatus('当前页面没有遥控控制权；先操作一次摇杆或刷新页面取得控制权。');return;}
+  }
+  processJoystickInput();
+  routeRecordStartedArmed=currentArmed;
+  routeRecording=true;
+  if(routeTimer){clearInterval(routeTimer);routeTimer=null;}
+  routeRecordSegments=[];
+  routeRecordLast=routeRecordSnapshot();
+  routeRecordStartMs=performance.now();
+  routeRecordSegmentStartMs=routeRecordStartMs;
+  routeRecordTimer=setInterval(sampleRouteRecording,ROUTE_RECORD_SAMPLE_MS);
+  routeUploadedText=null;routeUploadedRevision=0;
+  routeRecordStatus((routeRecordStartedArmed?'正在录制手动操作：':'正在本地录制：')+'0.0 秒，0 段。录制期间不发送额外设备消息。');
+  routeMessage('正在录制当前摇杆输出；停止后会写入编辑器并保存到浏览器。');
+  if(document.getElementById('route-page').getAttribute('aria-hidden')==='false')closeRoutePage();
+  showToast('开始录制摇杆序列');
+  updateRouteControls();
+}
+function sampleRouteRecording(){
+  if(!routeRecording)return;
+  if(routeRecordStartedArmed){
+    if(!connectionOk){stopRouteRecording('连接断开，录制已安全停止。',true);return;}
+    if(!currentArmed){stopRouteRecording('飞控已上锁，录制已安全停止。',true);return;}
+    if(currentFlightMode!==2){stopRouteRecording('飞行模式已切换，录制已安全停止。',true);return;}
+    if(!webRCLeaseToken||webRCLeaseBlocked){stopRouteRecording('页面失去遥控控制权，录制已安全停止。',true);return;}
+  }else if(currentArmed){stopRouteRecording('飞控已解锁，本地录制已停止。',true);return;}
+  processJoystickInput();
+  const now=performance.now();
+  if(now-routeRecordStartMs>=ROUTE_RECORD_MAX_DURATION_MS-ROUTE_RECORD_SAMPLE_MS){
+    stopRouteRecording('接近 30 分钟上限，录制已停止并保存已完成片段。',true);
+    return;
+  }
+  const value=routeRecordSnapshot();
+  const segmentMs=now-routeRecordSegmentStartMs;
+  if(sameRouteRecordValue(value,routeRecordLast)&&segmentMs<600000){
+    routeRecordStatus('正在录制：'+routeRecordElapsedText()+'。');
+    return;
+  }
+  const error=appendRouteRecordSegment(segmentMs,routeRecordLast);
+  if(error){stopRouteRecording(error,true,true);return;}
+  routeRecordLast=value;
+  routeRecordSegmentStartMs=now;
+  routeRecordStatus('正在录制：'+routeRecordElapsedText()+'。');
+}
+function stopRouteRecording(reason,automatic=false,skipOpenSegment=false){
+  if(!routeRecording)return;
+  const now=performance.now();
+  if(routeRecordTimer){clearInterval(routeRecordTimer);routeRecordTimer=null;}
+  routeRecording=false;
+  routeRecordStartedArmed=false;
+  if(!skipOpenSegment&&routeRecordLast){
+    const error=appendRouteRecordSegment(now-routeRecordSegmentStartMs,routeRecordLast);
+    if(error)reason=error;
+  }
+  const text=routeRecordText(routeRecordSegments);
+  if(text){
+    const editor=document.getElementById('route-editor');
+    editor.value=text;
+    try{parseRouteText();try{localStorage.setItem('cfDroneOpenLoopSequence',text);routeRecordStatus((reason||'录制已停止。')+' 已写入 '+routeRecordSegments.length+' 段并保存到浏览器。');}catch(_){routeRecordStatus((reason||'录制已停止。')+' 已写入 '+routeRecordSegments.length+' 段；浏览器未允许本地保存。');}}
+    catch(error){routeRecordStatus((reason||'录制已停止。')+' 生成内容未通过校验：'+error.message);}
+    routeUploadedText=null;routeUploadedRevision=0;
+    routeMessage('录制结果已写入编辑器；请上锁后上传并校验。');
+  }else{
+    routeRecordStatus((reason||'录制已停止。')+' 没有可写入的有效片段。');
+  }
+  if(automatic)showToast(reason||'录制已停止');
+  if(document.getElementById('route-page').getAttribute('aria-hidden')==='false')startRouteMonitor();
+  updateRouteControls();
+}
 
 function handleDescentCalibrationEntry(){
   if(descentCalibrationTimer){stopDescentCalibrationCapture();return;}
@@ -790,12 +954,17 @@ async function uploadRoute(){
   if(currentArmed||!connectionOk){routeMessage('上传前请连接飞控并保持上锁、电机停止。');return;}
   try{parseRouteText();}catch(error){routeMessage(error.message);return;}
   const text=document.getElementById('route-editor').value;
+  routeUploadedText=null;routeUploadedRevision=0;
   routeStarting=true;updateRouteControls();routeMessage('正在上传并校验；不会解锁或启动。');
   try{
     const response=await controlFetch('/route/upload',{method:'POST',headers:{'Content-Type':'text/plain'},body:text});
     const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'序列上传失败');
+    const readback=await fetch('/route/plan',{cache:'no-store'});
+    if(!readback.ok||Number(readback.headers.get('X-Plan-Revision'))!==result.plan_revision||await readback.text()!==text)
+      throw new Error('设备读回与上传内容不一致，请勿启动序列');
     routeUploadedText=text;routeUploadedRevision=result.plan_revision;
-    routeMessage('已上传校验。启动前请返回遥控器，由操作者解锁并选择自稳模式。');
+    try{localStorage.setItem('cfDroneOpenLoopSequence',text);localStorage.setItem('cfDroneOpenLoopSyncedText',text);}catch(_){}
+    routeMessage('已上传校验。自动流程：进入 AUTO 模式后由操作者解锁；也可保持自稳并使用手动启动。');
     await refreshRouteStatus();
   }catch(error){routeMessage('上传未完成：'+error.message);}
   finally{routeStarting=false;updateRouteControls();}
@@ -805,6 +974,27 @@ function startRoute(){
   if(!currentArmed||currentFlightMode!==2||!connectionOk){routeMessage('启动需要连接飞控、由操作者解锁，并处于自稳模式。');return;}
   if(!routeUploadedRevision||routeUploadedText!==document.getElementById('route-editor').value){routeMessage('请先在上锁状态上传并校验当前内容。');return;}
   requestRouteAction('start');
+}
+async function setAutoModeForRoute(){
+  if(routeRecording){routeMessage('请先停止录制。');return;}
+  if(routeStarting||routePending)return;
+  if(currentArmed||!connectionOk){routeMessage('进入 AUTO 前请连接飞控并保持上锁。');return;}
+  if(!routeUploadedRevision||routeUploadedText!==document.getElementById('route-editor').value||routeServerState!=='ready'){routeMessage('请先在上锁状态上传并校验当前内容。');return;}
+  routePending='auto';updateRouteControls();
+  routeMessage('正在请求 AUTO 模式，并等待飞控状态确认…');
+  try{
+    sendButtonData(9,1);
+    setTimeout(()=>sendButtonData(9,0),100);
+    let confirmed=false;
+    for(let i=0;i<8;i++){
+      await new Promise(resolve=>setTimeout(resolve,250));
+      const status=await refreshRouteStatus();
+      if((status&&status.mode===4)||currentFlightMode===4){confirmed=true;break;}
+    }
+    routeMessage(confirmed?'AUTO 模式已由飞控状态确认；返回遥控器后解锁，飞控会自动执行已上传序列。':'尚未从飞控状态确认 AUTO 模式；请查看顶部飞行模式后再解锁。');
+  }finally{
+    routePending='';updateRouteControls();
+  }
 }
 async function requestRouteAction(action){
   if(routePending)return;
@@ -827,7 +1017,7 @@ async function refreshRouteStatus(){
     const response=await fetch('/route/status',{cache:'no-store'});if(!response.ok)throw new Error('状态不可用');
     const data=await response.json();routeServerState=data.state;
     if(data.arm!==undefined)setArmedState(data.arm);
-    if(data.mode!==undefined){currentFlightMode=data.mode;document.getElementById('flight-mode').textContent=['直控','特技','自稳','不支持','自动'][data.mode]||'未知';}
+    if(data.mode!==undefined){if(routeRecording&&routeRecordStartedArmed&&data.mode!==2)stopRouteRecording('飞行模式已切换，录制已安全停止。',true);currentFlightMode=data.mode;document.getElementById('flight-mode').textContent=['直控','特技','自稳','不支持','自动'][data.mode]||'未知';}
     flightRouteRunning=data.state==='running'||data.state==='start_pending';routeHold=flightRouteRunning||data.state==='landing';
     if(routeUploadedRevision&&data.plan_revision!==routeUploadedRevision){routeUploadedRevision=0;routeUploadedText=null;routeMessage('飞控中的序列已改变，请上锁后重新上传当前内容。');}
     const messages={empty:'尚无已上传的动作序列。',ready:`已校验 ${data.count} 段，共 ${Number(data.duration_s).toFixed(1)} 秒；等待操作者启动。`,start_pending:'正在确认启动条件…',running:`飞控本机执行中：第 ${data.step}/${data.count} 段，共 ${Number(data.duration_s).toFixed(1)} 秒。`,landing:'已停止动作序列，正在保持定推力下降；无法检测触地，需操作者上锁。',complete:'序列已停止，飞控已上锁；这不代表传感器确认着陆。',aborted:'序列已退出，控制已交还当前手动模式。'};
@@ -1039,6 +1229,7 @@ function handleLeaseConflict(message) {
   const shouldNotify = !webRCLeaseBlocked;
   webRCLeaseToken = '';
   webRCLeaseBlocked = true;
+  if(routeRecording&&routeRecordStartedArmed)stopRouteRecording('页面失去遥控控制权，录制已安全停止。',true);
   updateConnectionStatus(false);
   if (shouldNotify) showToast(message || '另一个遥控页面正在控制；关闭其他页面或等待 10 秒后重试');
 }
@@ -1057,6 +1248,7 @@ async function acquireControlLease() {
       }
       webRCLeaseToken = data.lease;
       webRCLeaseBlocked = false;
+      updateRouteControls();
       return true;
     })
     .catch(() => {
@@ -1113,6 +1305,7 @@ function sendToESP(url, data) {
 
       // 模式切换结果
       if (resp.m !== undefined && resp.rt !== 2) {
+      if (routeRecording && routeRecordStartedArmed && resp.m !== 2) stopRouteRecording('飞行模式已切换，录制已安全停止。', true);
       if (resp.m !== currentFlightMode) {
         if (!resp.warn) showToast('✅ 已切换：' + (names[resp.m] || '未知'));
         const leftTouched = [...touches.values()].includes('left');
@@ -1319,10 +1512,12 @@ function showSelfCheckUnavailable() {
 function updateConnectionStatus(connected) {
   connectionOk = connected;
   if (!connected) armedStatusKnown = false;
+  if (!connected && routeRecording && routeRecordStartedArmed) stopRouteRecording('连接断开，录制已安全停止。', true);
   const dot  = document.getElementById('status-dot');
   const text = document.getElementById('connection-text');
   if (connected) { dot.className='status-dot connected'; text.textContent='已连接'; text.style.color='#0f8'; }
   else           { dot.className='status-dot disconnected'; text.textContent='连接断开'; text.style.color='#f33'; }
+  updateRouteControls();
 }
 /*======================== 油门位置重置 ========================*/
 function resetLeftStick(targetRawY) {

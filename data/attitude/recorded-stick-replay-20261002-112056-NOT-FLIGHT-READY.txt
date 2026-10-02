@@ -1,0 +1,13 @@
+# Diagnostic replay of recorded Web RC input; not a validated takeoff/landing plan.
+# Source: retrieved-20261002-112056-descent-mac-20500d335840/flight-log.csv
+# Columns: duration_s throttle_percent roll_percent pitch_percent yaw_percent
+# Six 0.5 s bins are the median manual throttle in each bin. The final 0.1 s
+# represents the recorded zero-throttle transition; the route slew limiter
+# changes the actual replayed trajectory. Use only for offline/prop-off diagnosis.
+0.5 20 0 0 0
+0.5 24 0 0 0
+0.5 34.25 0 0 0
+0.5 39 0 0 0
+0.5 47.5 0 0 0
+0.5 52.5 0 0 0
+0.1 0 0 0 0
