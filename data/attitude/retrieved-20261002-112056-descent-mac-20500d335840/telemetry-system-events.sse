@@ -1,0 +1,79 @@
+event: schema
+data: t,dt_s,gyro_x,gyro_y,gyro_z,acc_x,acc_y,acc_z,rates.x,rates.y,rates.z,ratesTarget.x,ratesTarget.y,ratesTarget.z,attitude.x,attitude.y,attitude.z,attitudeTarget.x,attitudeTarget.y,attitudeTarget.z,thrustTarget,battery_v,rc_roll,rc_pitch,rc_yaw,rc_throttle,rc_mode,flight_mode,rc_age_s,armed,fault_mask,motor_rl,motor_rr,motor_fr,motor_fl,rate_i_x,rate_i_y,rate_i_z,mix_scale,control_source,accel_correction_confidence
+
+id: 88b4a718-707
+event: system-log
+data: 999253|DIAG|ACTIVE LOOP dt=0.0016 max=0.0019 n=11
+
+id: 88b4a718-727
+event: system-log
+data: 1569731|DIAG|ACTIVE LOOP dt=0.0016 max=0.0019 n=15
+
+id: 88b4a718-760
+event: system-log
+data: 1635242|DIAG|ACTIVE LOOP dt=0.0016 max=0.0019 n=20
+
+id: 88b4a718-800
+event: system-log
+data: 1713357|DIAG|ACTIVE LOOP dt=0.0017 max=0.0019 n=26
+
+id: 88b4a718-826
+event: system-log
+data: 1758440|DIAG|ACTIVE LOOP dt=0.0016 max=0.0019 n=32
+
+id: 88b4a718-851
+event: system-log
+data: 2118142|DIAG|ACTIVE LOOP dt=0.0016 max=0.0019 n=37
+
+id: 88b4a718-859
+event: system-log
+data: 2120011|WEB_RC_INPU|T=0% R=0.0 P=0.0 Y=0.0 Btn=0x0000
+
+id: 88b4a718-860
+event: system-log
+data: 2120368|STAGE_BUDGE|stage=rc_web duration_us=561 budget_us=200
+
+id: 88b4a718-861
+event: system-log
+data: 2120537|DIAG|CLEARED BATTERY_LOW mask=0x00000080
+
+id: 88b4a718-862
+event: system-log
+data: 2123379|DIAG|ACTIVE BATTERY_LOW mask=0x000000c0
+
+id: 88b4a718-863
+event: system-log
+data: 2123380|FLIGHT_STAT|Web RC: 已上锁
+
+id: 88b4a718-864
+event: system-log
+data: 2123788|DIAG|CLEARED BATTERY_LOW mask=0x00000000
+
+id: 220554
+event: sample
+data: 2206.993,0.00101,-0.00390625,0,0,-0.5390625,0.015625,9.851562,-0.001953125,0,0.001953125,0.1367188,-0.04101562,0,0.003540039,0.05566406,-1.030762,0,0,-0.3769531,0,3.92,0,0,0,0,nan,4,51.669,0,0,0,0,0,0,0,0,0,1,6,1
+
+id: 220605
+event: sample
+data: 2207.502,0.001008,-0.001953125,0.001953125,0,-0.546875,0.015625,9.867188,0,0.001953125,0,0.1367188,-0.04101562,0,0.003540039,0.05566406,-1.030762,0,0,-0.3769531,0,3.92,0,0,0,0,nan,4,52.178,0,0,0,0,0,0,0,0,0,1,6,1
+
+id: 220655
+event: sample
+data: 2208.003,0.00101,0,-0.001953125,0,-0.53125,0.03125,9.867188,0,-0.001953125,0,0.1367188,-0.04101562,0,0.003540039,0.05554199,-1.030762,0,0,-0.3769531,0,3.92,0,0,0,0,nan,4,52.679,0,0,0,0,0,0,0,0,0,1,6,1
+
+id: 220705
+event: sample
+data: 2208.503,0.00101,-0.001953125,-0.001953125,0.001953125,-0.546875,0.015625,9.875,0,0,0,0.1367188,-0.04101562,0,0.003417969,0.05554199,-1.030884,0,0,-0.3769531,0,3.921,0,0,0,0,nan,4,53.178,0,0,0,0,0,0,0,0,0,1,6,1
+
+id: 220755
+event: sample
+data: 2209.003,0.00101,-0.001953125,-0.001953125,-0.001953125,-0.5390625,0.046875,9.835938,0,-0.001953125,0,0.1367188,-0.04101562,0,0.003173828,0.05541992,-1.030762,0,0,-0.3769531,0,3.92,0,0,0,0,nan,4,53.678,0,0,0,0,0,0,0,0,0,1,6,1
+
+id: 220806
+event: sample
+data: 2209.513,0.00101,0,-0.001953125,0,-0.5625,0.0390625,9.804688,0,-0.001953125,0,0.1367188,-0.04101562,0,0.003173828,0.05529785,-1.030762,0,0,-0.3769531,0,3.92,0,0,0,0,nan,4,54.188,0,0,0,0,0,0,0,0,0,1,6,1
+
+id: 220856
+event: sample
+data: 2210.013,0.00101,0.001953125,-0.001953125,0,-0.59375,0.0078125,9.789062,0,0,0,0.1367188,-0.04101562,0,0.003295898,0.05529785,-1.030762,0,0,-0.3769531,0,3.92,0,0,0,0,nan,4,54.688,0,0,0,0,0,0,0,0,0,1,6,1
+

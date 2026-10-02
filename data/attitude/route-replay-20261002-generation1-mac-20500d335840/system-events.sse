@@ -1,0 +1,71 @@
+event: schema
+data: t,dt_s,gyro_x,gyro_y,gyro_z,acc_x,acc_y,acc_z,rates.x,rates.y,rates.z,ratesTarget.x,ratesTarget.y,ratesTarget.z,attitude.x,attitude.y,attitude.z,attitudeTarget.x,attitudeTarget.y,attitudeTarget.z,thrustTarget,battery_v,rc_roll,rc_pitch,rc_yaw,rc_throttle,rc_mode,flight_mode,rc_age_s,armed,fault_mask,motor_rl,motor_rr,motor_fr,motor_fl,rate_i_x,rate_i_y,rate_i_z,mix_scale,control_source,accel_correction_confidence
+
+id: 88b4a718-826
+event: system-log
+data: 1758440|DIAG|ACTIVE LOOP dt=0.0016 max=0.0019 n=32
+
+id: 88b4a718-851
+event: system-log
+data: 2118142|DIAG|ACTIVE LOOP dt=0.0016 max=0.0019 n=37
+
+id: 88b4a718-870
+event: system-log
+data: 3713708|DIAG|ACTIVE LOOP dt=0.0016 max=0.0019 n=40
+
+id: ed6df456-972
+event: system-log
+data: 683529|DIAG|ACTIVE LOOP dt=0.0017 max=0.0017 n=1
+
+id: ed6df456-1278
+event: system-log
+data: 731516|DIAG|ACTIVE LOOP dt=0.0016 max=0.0021 n=5
+
+id: ed6df456-17015
+event: system-log
+data: 807755|DIAG|ACTIVE LOOP dt=0.0015 max=0.0021 n=13
+
+id: ed6df456-17028
+event: system-log
+data: 810747|FLIGHT_MODE|Web RC: 模式切换到 AUTO
+
+id: ed6df456-17029
+event: system-log
+data: 810789|WEB_RC_INPU|T=0% R=0.0 P=0.0 Y=0.0 Btn=0x0008
+
+id: ed6df456-17030
+event: system-log
+data: 811645|DIAG|CLEARED BATTERY_LOW mask=0x00000080
+
+id: ed6df456-17031
+event: system-log
+data: 814236|DIAG|ACTIVE BATTERY_LOW mask=0x000000c0
+
+id: ed6df456-17032
+event: system-log
+data: 814237|FLIGHT_STAT|Web RC: 已上锁
+
+id: ed6df456-17033
+event: system-log
+data: 814896|DIAG|CLEARED BATTERY_LOW mask=0x00000000
+
+id: 101370
+event: sample
+data: 1015.074,0.00101,-0.00390625,0.001953125,0,0.015625,-0.0390625,9.835938,-0.001953125,0.001953125,0,0.001953125,-0.05078125,0,-0.001464844,-0.002075195,-0.5145264,0,0,1.642822,0,3.796,0,0,0,0,nan,4,inf,0,0,0,0,0,0,0,0,0,1,6,1
+
+id: 101421
+event: sample
+data: 1015.584,0.001007,0.001953125,0.00390625,0,0.015625,-0.0625,9.898438,0,0,0.001953125,0.001953125,-0.05078125,0,-0.001464844,-0.001953125,-0.5145264,0,0,1.642822,0,3.796,0,0,0,0,nan,4,inf,0,0,0,0,0,0,0,0,0,1,6,1
+
+id: 101471
+event: sample
+data: 1016.084,0.001074,0.001953125,-0.001953125,0,0.046875,-0.0078125,9.835938,0,-0.001953125,0,0.001953125,-0.05078125,0,-0.001586914,-0.002075195,-0.5146484,0,0,1.642822,0,3.796,0,0,0,0,nan,4,inf,0,0,0,0,0,0,0,0,0,1,6,1
+
+id: 101521
+event: sample
+data: 1016.584,0.00101,0,-0.00390625,0.001953125,0.015625,-0.015625,9.835938,0,-0.001953125,0,0.001953125,-0.05078125,0,-0.001464844,-0.002075195,-0.5146484,0,0,1.642822,0,3.797,0,0,0,0,nan,4,inf,0,0,0,0,0,0,0,0,0,1,6,1
+
+id: 101572
+event: sample
+data: 1017.094,0.00101,0.001953125,0,-0.001953125,0.0390625,0.0234375,9.835938,0,-0.001953125,-0.001953125,0.001953125,-0.05078125,0,-0.001464844,-0.002197266,-0.5145264,0,0,1.642822,0,3.797,0,0,0,0,nan,4,inf,0,0,0,0,0,0,0,0,0,1,6,1
+

@@ -112,13 +112,14 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   margin-bottom: 4px;
 }
 
+.header-tools{display:flex;justify-content:center;align-items:center;gap:6px;flex-wrap:wrap;margin:4px 0 6px}
 .status-bar {
   display: flex;
   justify-content: center;
   align-items: center;
   gap: clamp(4px,1.2vmin,10px);
-  flex-wrap: nowrap;
-  overflow: hidden;
+  flex-wrap: wrap;
+  overflow: visible;
   margin-top: 4px;
 }
 
@@ -146,9 +147,9 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
 .status-dot.connected { background: #0f8; box-shadow: 0 0 8px #0f8; }
 .status-dot.disconnected { background: #f33; box-shadow: 0 0 8px #f33; }
 .status-dot.warning { background: #ff9; box-shadow: 0 0 8px #ff9; }
-.self-check-button{position:absolute;right:10px;top:9px;border:1px solid rgba(0,255,136,.55);border-radius:8px;background:rgba(0,255,136,.12);color:#aaffd4;padding:6px 10px;font-size:.75rem;font-weight:bold;cursor:pointer;touch-action:manipulation}
+.self-check-button{position:static;border:1px solid rgba(0,255,136,.55);border-radius:8px;background:rgba(0,255,136,.12);color:#aaffd4;padding:6px 10px;font-size:.75rem;font-weight:bold;cursor:pointer;touch-action:manipulation;white-space:nowrap}
 .self-check-button.has-fault{border-color:rgba(255,80,80,.7);background:rgba(255,50,50,.18);color:#ffb0b0}
-.header{position:relative;padding-right:258px}
+.header{position:relative;padding:8px 10px}
 .diagnostic-page{position:fixed;inset:0;z-index:1000;display:none;background:#252525;overflow-y:auto;padding:clamp(14px,4vw,28px);touch-action:pan-y}
 .diagnostic-shell{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
 .diagnostic-top{display:flex;align-items:center;justify-content:space-between;gap:12px}
@@ -186,9 +187,8 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
 
 /*======== 按钮区 ========*/
 .buttons-container{flex:.55;display:flex;flex-direction:column;gap:10px;padding:12px;background:rgba(0,0,0,.4);border-radius:20px;border:2px solid rgba(150,150,150,.3);box-shadow:inset 0 0 20px rgba(0,0,0,.5)}
-#route-page-button{right:92px}
-#descent-calibration-button{right:174px;border-color:rgba(255,160,60,.65);background:rgba(255,140,0,.16);color:#ffd2a3}
-#vibration-calibration-button{right:266px;border-color:rgba(110,190,255,.65);background:rgba(30,120,200,.16);color:#c4e6ff}
+#descent-calibration-button{border-color:rgba(255,160,60,.65);background:rgba(255,140,0,.16);color:#ffd2a3}
+#vibration-calibration-button{border-color:rgba(110,190,255,.65);background:rgba(30,120,200,.16);color:#c4e6ff}
 .route-page{position:fixed;inset:0;z-index:1001;display:none;background:#252525;overflow-y:auto;padding:clamp(14px,4vw,28px);touch-action:pan-y}
 .descent-calibration-page{position:fixed;inset:0;z-index:1002;display:none;background:#252525;overflow-y:auto;padding:clamp(14px,4vw,28px);touch-action:pan-y}
 .vibration-calibration-page{position:fixed;inset:0;z-index:1003;display:none;background:#252525;overflow-y:auto;padding:clamp(14px,4vw,28px);touch-action:pan-y}
@@ -244,10 +244,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   .content>.joystick-container:first-child{grid-column:1;grid-row:2;min-width:0;overflow:hidden}
   .content>.joystick-container:last-child{grid-column:2;grid-row:2;min-width:0;overflow:hidden}
   .header h1{font-size:clamp(0.85rem,3.5vw,1.1rem)}
-  #route-page-button{right:78px}
-  #descent-calibration-button{right:148px}
-  #vibration-calibration-button{right:222px}
-  .self-check-button{top:6px;right:6px;padding:5px 7px;font-size:.68rem}
+  .self-check-button{padding:5px 7px;font-size:.68rem}
   #route-page-button,#descent-calibration-button,#vibration-calibration-button{padding:5px 7px;font-size:.68rem}
   .status-bar{gap:5px;flex-wrap:wrap;justify-content:center}
   .status-item{font-size:clamp(0.6rem,2.5vw,0.7rem);padding:2px 5px}
@@ -258,7 +255,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   :root{--js-size:clamp(120px,min(42vw,44vh),240px);--knob-size:calc(var(--js-size)*0.25)}
   .joystick-title{font-size:0.72rem}
   .header h1{font-size:0.82rem}
-  .header{padding:3px 258px 3px 8px}
+  .header{padding:3px 8px}
   .header h1{margin-bottom:2px}
   .status-bar{margin-top:2px;gap:4px}
   .status-item{font-size:0.58rem;padding:2px 4px}
@@ -276,10 +273,12 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   <!-- 顶部状态栏 -->
   <div class="header">
     <h1>琛光无人机网页遥控器</h1>
-    <button id="self-check-button" class="self-check-button" onclick="openSelfCheck()">自检状态</button>
-    <button id="route-page-button" class="self-check-button" onclick="openRoutePage()">开环序列</button>
-    <button id="descent-calibration-button" class="self-check-button" onclick="handleDescentCalibrationEntry()">迫降标定</button>
-    <button id="vibration-calibration-button" class="self-check-button" onclick="openVibrationCalibrationPage()">振动校准</button>
+    <nav class="header-tools" aria-label="飞控工具">
+      <button id="self-check-button" class="self-check-button" onclick="openSelfCheck()">自检状态</button>
+      <button id="route-page-button" class="self-check-button" onclick="openRoutePage()">开环序列</button>
+      <button id="descent-calibration-button" class="self-check-button" onclick="handleDescentCalibrationEntry()">迫降标定</button>
+      <button id="vibration-calibration-button" class="self-check-button" onclick="openVibrationCalibrationPage()">振动校准</button>
+    </nav>
     <div class="status-bar">
       <div class="status-item"><span class="status-dot" id="status-dot"></span><span id="connection-text">连接中...</span></div>
       <div class="status-item" id="armed-status-item" style="background:rgba(255,51,51,0.15)"><span id="armed-status" style="color:#ff6666">已上锁</span></div>
