@@ -1921,17 +1921,16 @@ void setupWebRC() {
     webRCServer.on("/vibration-calibration/start", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
         if (!requireWebRCLease()) return;
-        const bool confirmed = webRCServer.arg("confirm") == "1";
         portENTER_CRITICAL(&vibrationCalibrationMux);
         const bool active = vibrationCalibrationState == VIBRATION_BOOT_WAIT ||
             vibrationCalibrationState == VIBRATION_QUEUED ||
             vibrationCalibrationState == VIBRATION_BASELINE || vibrationCalibrationState == VIBRATION_RUNNING;
         portEXIT_CRITICAL(&vibrationCalibrationMux);
-        if (!confirmed || active || armed || motorsActive() || !motorOutputsOK || isAccelCalibrationActive() ||
+        if (active || armed || motorsActive() || !motorOutputsOK || isAccelCalibrationActive() ||
             isLevelCalibrationActive() ||
             batteryBlocksArming() || hasBlockingDiagnosticFault() || vibrationRouteBusy() ||
             imuCapture.state() != IMU_CAPTURE_IDLE) {
-            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires_confirmation_disarmed_ready_motors_idle_imu_and_no_faults\"}");
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires_disarmed_ready_motors_idle_imu_and_no_faults\"}");
             return;
         }
         portENTER_CRITICAL(&vibrationCalibrationMux);
