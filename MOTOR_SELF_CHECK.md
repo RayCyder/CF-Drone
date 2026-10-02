@@ -56,3 +56,9 @@
 提交 `3c39e24` 将启动自检从 `setupWebRC()`/主循环迁移到独立的 Wi-Fi 前置启动阶段；提交 `734589f` 在该阶段限额排空串口队列；提交 `99206b3` 补齐中止和超时时的基线、当前电机部分采样保存。最终固件为 [cf-drone-99206b3-prewifi-selfcheck-20261003.bin](deliverables/cf-drone-99206b3-prewifi-selfcheck-20261003.bin)，SHA-256 `e70296ab41d9e136f0b144a62954151d8b1d36c8d9ccfd2c9240a9d2af502368`。
 
 板端启动日志确认顺序为 `Setup Motors`、`Setup IMU`、`MOTOR_SELF_CHECK ... phase=pre_wifi`，检测结束后才进入 `Setup Wi-Fi` 和 `Setup WEB RC`。最终 Web 状态为 `complete`、`step=4`：静止基线 198 个样本；FR/FL/RR/RL 分别保存 496/496/495/496 个样本，四路均为 `detected`。测试结束后串口确认 `armed=0`、`imu_ok=1`、`motor_ok=1`、`faults=0x00000000`，四路电机输出均为 0，电池电压 4.077 V。
+
+## 2026-10-03 500 ms 测试与 1 秒停转间隔复核
+
+提交 `3f0bb39` 保持每路 5%/500 ms，将相邻电机之间的全零等待从 250 ms 增加到 1 秒，并新增第四路后的 `settling` 状态：第四路输出归零后继续等待 1 秒，才发布 `complete`。固件为 [cf-drone-3f0bb39-selfcheck-500ms-1s-gap-20261003.bin](deliverables/cf-drone-3f0bb39-selfcheck-500ms-1s-gap-20261003.bin)，SHA-256 `3747a0c98f481d705dc5c02f675255412ec0a667bd40121a61435338782aaf70`。
+
+板端自动检测完成，静止基线 198 个样本。FR/FL/RR/RL 分别保存 496/495/495/495 个样本，IMU 响应判定依次为 `detected/inconclusive/detected/detected`。FR 的 accel RMS 为 `0.29642 m/s²`，说明测试期间机体检测到与 FR 脉冲同步的振动，但不能证明转子实际转动；人工观察到 FR 未起转时仍应检查电机、焊点、MOSFET、引脚和供电路径。最终串口确认 `armed=0`、`faults=0x00000000`、四路输出均为 0，电池 4.077 V。1 秒窗口保证飞控持续命令零输出；由于没有转速或反电动势反馈，软件不能绝对确认机械转子已经静止。
