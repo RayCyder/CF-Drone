@@ -297,7 +297,7 @@ def main():
                 time.sleep(0.1)
             record(stream, 'log_final', state=status)
             if status and status.get('state') == 'FROZEN':
-                rows = worst = None
+                rows = trace_rows = worst = None
                 for path, suffix in (('/logs.csv', 'flight-log.csv'),
                                      ('/diag/trace.csv', 'loop-trace.csv'),
                                      ('/diag/trace/worst', 'loop-worst.json')):
@@ -308,6 +308,8 @@ def main():
                                 result = download_csv_export(host, port, path, destination)
                                 if path == '/logs.csv':
                                     rows = result
+                                elif path == '/diag/trace.csv':
+                                    trace_rows = result
                             else:
                                 download(host, port, path, destination)
                                 worst = json.loads(destination.read_text())
@@ -316,7 +318,7 @@ def main():
                             record(stream, 'evidence_download_retry', path=path,
                                    attempt=attempt + 1, error=str(error))
                             time.sleep(0.5)
-                if rows is None or worst is None:
+                if rows is None or trace_rows is None or worst is None:
                     route_error = route_error or RuntimeError('required postflight evidence unavailable')
                 else:
                     sequence_rows = [row for row in rows if row['control_source'] == '3' and row['armed'] == '1']
