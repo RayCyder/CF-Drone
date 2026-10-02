@@ -47,7 +47,10 @@ static void queueSerialConsoleOutput(const char *data, size_t length) {
 }
 
 void serviceSerialConsoleOutput() {
-	char output[64];
+	// A 64-byte UART write can wait for the TX ring even after
+	// availableForWrite() reports space. Keep each write below 1 ms of
+	// wire time at 115200 baud, as the IMU capture exporter does.
+	char output[8];
 	const int uartAvailable = Serial.availableForWrite();
 	if (uartAvailable <= 0) return;
 	const size_t limit = min(sizeof(output), (size_t)uartAvailable);
