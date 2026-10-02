@@ -50,3 +50,9 @@
 网页手工启动无响应包含两个独立问题。首先，配置热点中的 STA 恢复逻辑会在前一次连接尚未结束时再次调用 `WiFi.begin()`，驱动拒绝更新配置，设备停留在禁用飞行接口的配置热点状态；提交 `5077015` 将重试改为先断开、等待 250 ms、再开始连接。其次，手工测试开始后，通用运行期路由策略会阻止读取 `/vibration-calibration/status`，页面轮询收到 HTTP 423；提交 `b000869` 允许该只读状态接口在电机测试期间继续工作。
 
 最终固件 [cf-drone-b000869-manual-selfcheck-final-20261003.bin](deliverables/cf-drone-b000869-manual-selfcheck-final-20261003.bin) 已写入并通过独立 `verify-flash`，SHA-256 为 `e14d9bdba050de83973a2ede0b59e15e3fc7938a1541293b4d31ffa4a44a6eb1`。设备连续保持连接 `608`，20 秒观察期没有再次出现 `sta is connecting, cannot set config`。网页等价请求立即返回 `queued`，连续轮询观察到 `baseline`、`running`、`queued` 和 `complete`，FR、FL、RR、RL 四路均为 `detected`。测试后确认上锁、四路输出归零、蓝灯未快闪、故障位 `0x00000000`，记录见 [手工测试结果](data/attitude/manual-motor-selfcheck-5pct-500ms-20261003-015701.json)。
+
+## 2026-10-03 Wi-Fi 前置启动自检复核
+
+提交 `3c39e24` 将启动自检从 `setupWebRC()`/主循环迁移到独立的 Wi-Fi 前置启动阶段；提交 `734589f` 在该阶段限额排空串口队列；提交 `99206b3` 补齐中止和超时时的基线、当前电机部分采样保存。最终固件为 [cf-drone-99206b3-prewifi-selfcheck-20261003.bin](deliverables/cf-drone-99206b3-prewifi-selfcheck-20261003.bin)，SHA-256 `e70296ab41d9e136f0b144a62954151d8b1d36c8d9ccfd2c9240a9d2af502368`。
+
+板端启动日志确认顺序为 `Setup Motors`、`Setup IMU`、`MOTOR_SELF_CHECK ... phase=pre_wifi`，检测结束后才进入 `Setup Wi-Fi` 和 `Setup WEB RC`。最终 Web 状态为 `complete`、`step=4`：静止基线 198 个样本；FR/FL/RR/RL 分别保存 496/496/495/496 个样本，四路均为 `detected`。测试结束后串口确认 `armed=0`、`imu_ok=1`、`motor_ok=1`、`faults=0x00000000`，四路电机输出均为 0，电池电压 4.077 V。
