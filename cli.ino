@@ -183,7 +183,7 @@ void pause(float duration) {
 		estimate();
 		handleInput();
 		serviceSerialConsoleOutput();
-#if WIFI_ENABLED
+#if WIFI_ENABLED && CF_DRONE_ENABLE_MAVLINK
 		processMavlink();
 #endif
 #if WEB_RC_ENABLED

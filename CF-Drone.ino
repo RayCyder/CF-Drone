@@ -103,7 +103,9 @@ void setup() {
 	setLED(true); // 点亮LED，提示正在初始化
 #if WIFI_ENABLED
 	setupWiFi(); // 初始化WiFi（用于Web遥控/MAVLink等）
+#if CF_DRONE_ENABLE_MAVLINK
 	setupMavlinkReceiver(); // UDP读取与MAVLink字节解析运行在通信核
+#endif
 #endif
 #if WEB_RC_ENABLED
 	setupWebRC();  // 初始化Web遥控器
@@ -170,7 +172,7 @@ void loop() {
 	serviceImuCaptureExport(); // 限额发送高频IMU快照，仅上锁导出
 	updateAccelCalibration(); // 六面校准逐帧推进，不阻塞飞控主循环
 	MONITOR_STAGE(LOOP_STAGE_SERIAL_INPUT);
-#if WIFI_ENABLED
+#if WIFI_ENABLED && CF_DRONE_ENABLE_MAVLINK
 	// The control loop runs at ~1 kHz, but MAVLink control/telemetry is much
 	// slower. Poll at 200 Hz to cap network parsing work per second and jitter.
 	static Rate mavlinkServiceRate(200.0f);

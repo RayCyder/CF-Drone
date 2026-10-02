@@ -156,6 +156,10 @@
 #ifndef CF_DRONE_ENABLE_FAST_STOP_SERVER
 #define CF_DRONE_ENABLE_FAST_STOP_SERVER 1
 #endif
+// Keep Wi-Fi/Web RC available when isolating MAVLink during loop diagnostics.
+#ifndef CF_DRONE_ENABLE_MAVLINK
+#define CF_DRONE_ENABLE_MAVLINK 0
+#endif
 
 // ---- 兜底配置（未知芯片默认全开）----
 

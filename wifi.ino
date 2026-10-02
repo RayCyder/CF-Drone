@@ -518,6 +518,7 @@ void setupWiFi() {
 			recordSystemLogEvent("WIFI", eventMessage.c_str());
 		}
 	}
+#if CF_DRONE_ENABLE_MAVLINK
 	udp.begin(udpLocalPort);
 	wifiTxQueue = xQueueCreate(8, sizeof(WifiTxPacket));
 	if (!wifiTxQueue || xTaskCreatePinnedToCore(wifiTransmitTask, "wifi_udp_tx", 4096,
@@ -527,6 +528,7 @@ void setupWiFi() {
 	} else {
 		print("MAVLINK_TX state=READY queue=8 core=0\n");
 	}
+#endif
 	telemetryServer.begin();
 	telemetryServer.setNoDelay(true);
 	if (xTaskCreatePinnedToCore(telemetryStreamTask, "telemetry_sse", 4096, nullptr, 1,
