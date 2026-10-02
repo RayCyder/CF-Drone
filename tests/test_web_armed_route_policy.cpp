@@ -3,7 +3,8 @@
 
 int main() {
     const char *getAllowed[] = {
-        "/", "/web_rc/status", "/route/status", "/descent-calibration/status"
+        "/", "/web_rc/status", "/route/status", "/descent-calibration/status",
+        "/vibration-calibration/status"
     };
     for (const char *path : getAllowed) {
         assert(webArmedRouteAllowed(path, true, false));

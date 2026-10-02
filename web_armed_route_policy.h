@@ -9,7 +9,8 @@ inline bool webArmedRouteAllowed(const char *path, bool get, bool post) {
         return strcmp(path, "/") == 0 ||
             strcmp(path, "/web_rc/status") == 0 ||
             strcmp(path, "/route/status") == 0 ||
-            strcmp(path, "/descent-calibration/status") == 0;
+            strcmp(path, "/descent-calibration/status") == 0 ||
+            strcmp(path, "/vibration-calibration/status") == 0;
     }
     if (post) {
         return strcmp(path, "/web_rc") == 0 ||
