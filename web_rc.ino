@@ -669,6 +669,9 @@ void runBootMotorSelfCheckBeforeWiFi() {
         updateBatteryVoltage();
         serviceMotorTest();
         serviceVibrationCalibration();
+        // The regular loop is not running yet, so drain the already bounded
+        // UART queue here to preserve boot/self-check logs without overflow.
+        serviceSerialConsoleOutput();
         if ((uint32_t)(millis() - startedMs) > timeoutMs) {
             if (imuCapture.state() == IMU_CAPTURE_RUNNING) imuCapture.stop();
             imuCapture.release();

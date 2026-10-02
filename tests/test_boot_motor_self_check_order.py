@@ -27,6 +27,7 @@ for required in (
     "readIMU();",
     "serviceMotorTest();",
     "serviceVibrationCalibration();",
+    "serviceSerialConsoleOutput();",
     "vibrationCalibrationState == VIBRATION_COMPLETE",
     "phase=pre_wifi",
 ):
