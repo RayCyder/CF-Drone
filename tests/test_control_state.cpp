@@ -28,6 +28,8 @@ uint32_t micros(){return nowMs*1000;}
 bool webRCEnabled=false,useWebRC=false;
 bool localSequenceActive=false;
 bool isLocalSequenceRunning(){return localSequenceActive;}
+bool localSequenceAutoReady=false;
+bool isLocalSequenceReadyForAuto(){return localSequenceAutoReady && webRCEnabled && useWebRC;}
 unsigned localSequenceCancelCount=0;
 void cancelLocalSequenceForManualMode(){++localSequenceCancelCount;localSequenceActive=false;}
 unsigned long webRCLastUpdate=0;
@@ -150,6 +152,25 @@ int main(){
     assert(!setFlightMode(ALTHOLD));
     assert(!setFlightMode(AUTO)); // no preflight target stream
     assert(setFlightMode(STAB));
+    // A connected, uploaded local plan admits AUTO without an external target.
+    localSequenceAutoReady=true; webRCEnabled=useWebRC=true;
+    webRCLastUpdate=webRCLastStickUpdate=nowMs;
+    assert(setFlightMode(AUTO) && requestArm());
+    webRCLossFailsafe(); // reset the prior simulated link-loss latch
+    localSequenceActive=true;
+    controlRoll=controlPitch=controlYaw=0; controlThrottle=.3f;
+    interpretControls(); controlAttitude();
+    assert(thrustTarget>motThrMin && fabsf(ratesTarget.z)<1e-6f);
+    attitudeTarget=Quaternion::fromEuler(Vector(0,0,.6f)); ratesExtra.z=.2f;
+    controlAttitude(); assert(fabsf(ratesTarget.z-.2f)<1e-6f);
+    autoFailsafe(); assert(!isControlledLandingActive());
+    nowMs+=9001;
+    webRCLastUpdate=webRCLastStickUpdate=nowMs-9000;
+    webRCLossFailsafe(); assert(isControlledLandingActive());
+    localSequenceActive=false; localSequenceAutoReady=false;
+    disarm(); assert(setFlightMode(STAB));
+    webRCEnabled=useWebRC=false;
+    setDiagnosticFault(DIAG_WEB_RC_LOSS, false);
     localSequenceActive=true; armed=false; mode=STAB; controlThrottle=0; controlYaw=1;
     interpretControls(); assert(!armed); // generated sequence values are not RC arm gestures
     armed=true; controlYaw=0; controlThrottle=.2f;
