@@ -54,8 +54,9 @@ bool parameterPersistencePending(){return parameterWritePending;}
 bool imuRotationRestartPending(){return rotationRestartPending;}
 void sendMotors() {}
 bool motorsActive(){for(float m:motors)if(m!=0)return true;return false;}
-void cancelMotorTest() {}
-void abortVibrationCalibrationForDisarm() {}
+unsigned motorTestCancelCount=0,vibrationAbortCount=0;
+void cancelMotorTest() {++motorTestCancelCount;motorTestActive=false;}
+void abortVibrationCalibrationForDisarm() {++vibrationAbortCount;}
 unsigned systemEventCount=0;
 void recordSystemLogEvent(const char*,const char*) {++systemEventCount;}
 unsigned flightLogTriggerCount=0;
@@ -86,6 +87,12 @@ void rcLossFailsafe();void autoFailsafe();void invertedFailsafe();void batteryFa
 bool tryArmWithSystemLog(){armed=true;return true;}
 int main(){
     armed=false; mode=STAB; controlThrottle=0;
+    motorTestActive=true; motors[MOTOR_FRONT_RIGHT]=.05f;
+    const unsigned cancelsBefore=motorTestCancelCount, abortsBefore=vibrationAbortCount;
+    disarm(DISARM_REASON_CLI);
+    assert(motorTestCancelCount==cancelsBefore+1);
+    assert(vibrationAbortCount==abortsBefore+1);
+    assert(!motorTestActive); for(float motor:motors) assert(motor==0);
     levelCalibrationState=LEVEL_COLLECTING;
     assert(!requestArm());
     assert(armBlockReason() != nullptr);
