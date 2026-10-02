@@ -15,23 +15,23 @@ fi
 
 case "$trace_mode" in
     full)
-        trace_defines=
+        trace_defines=-DCF_DRONE_ENABLE_LOOP_STAGE_MONITOR=1
         trace_wraps=vTaskSwitchContext,--wrap=esp_ipc_call_nonblocking,--wrap=spi_flash_op_block_func
         ;;
     full-armed-loop)
-        trace_defines=-DCF_DRONE_CAPTURE_ARMED_LOOP_TRACE
+        trace_defines='-DCF_DRONE_ENABLE_LOOP_STAGE_MONITOR=1 -DCF_DRONE_CAPTURE_ARMED_LOOP_TRACE'
         trace_wraps=vTaskSwitchContext,--wrap=esp_ipc_call_nonblocking,--wrap=spi_flash_op_block_func
         ;;
     ipc-only)
-        trace_defines=-DCF_DRONE_DISABLE_SCHEDULER_TRACE_HOOK
+        trace_defines='-DCF_DRONE_ENABLE_LOOP_STAGE_MONITOR=1 -DCF_DRONE_DISABLE_SCHEDULER_TRACE_HOOK'
         trace_wraps=esp_ipc_call_nonblocking,--wrap=spi_flash_op_block_func
         ;;
     scheduler-only)
-        trace_defines=-DCF_DRONE_DISABLE_IPC_TRACE_HOOK
+        trace_defines='-DCF_DRONE_ENABLE_LOOP_STAGE_MONITOR=1 -DCF_DRONE_DISABLE_IPC_TRACE_HOOK'
         trace_wraps=vTaskSwitchContext
         ;;
     armed-loop)
-        trace_defines=-DCF_DRONE_CAPTURE_ARMED_LOOP_TRACE
+        trace_defines='-DCF_DRONE_ENABLE_LOOP_STAGE_MONITOR=1 -DCF_DRONE_CAPTURE_ARMED_LOOP_TRACE'
         trace_wraps=
         ;;
     *)

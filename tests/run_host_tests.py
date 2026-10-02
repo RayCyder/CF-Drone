@@ -21,6 +21,8 @@ with tempfile.TemporaryDirectory(prefix='cf-drone-tests-') as tmp:
             ]))
         if test.name == 'test_flight_log.cpp':
             variants.append(('_armed_loop_trace', ['-DCF_DRONE_CAPTURE_ARMED_LOOP_TRACE']))
+        if test.name == 'test_control_state.cpp':
+            variants.append(('_loop_stage_monitor', ['-DCF_DRONE_ENABLE_LOOP_STAGE_MONITOR=1']))
         for suffix, defines in variants:
             binary = str(Path(tmp) / f'{test.stem}{suffix}')
             subprocess.run([compiler, '-std=c++17', '-Wall', '-Wextra', '-Werror', '-Wno-vla',
