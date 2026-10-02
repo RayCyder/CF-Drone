@@ -160,6 +160,12 @@
 #ifndef CF_DRONE_ENABLE_MAVLINK
 #define CF_DRONE_ENABLE_MAVLINK 0
 #endif
+// Automatically run the low-power motor response check after boot. The flight
+// controller can enforce electrical/software gates but cannot detect installed
+// propellers or people near the aircraft.
+#ifndef CF_DRONE_ENABLE_BOOT_MOTOR_SELF_CHECK
+#define CF_DRONE_ENABLE_BOOT_MOTOR_SELF_CHECK 1
+#endif
 
 // ---- 兜底配置（未知芯片默认全开）----
 
