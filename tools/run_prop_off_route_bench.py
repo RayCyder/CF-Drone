@@ -347,7 +347,6 @@ def main():
                            max_armed_dt_ms=max((float(row['dt_s']) * 1000 for row in armed_rows), default=0),
                            missed_samples=status.get('missedSamples'), gaps=gaps)
                     total_min = sum(bounds[0] for bounds in gaps.values())
-                    total_max = sum(bounds[1] for bounds in gaps.values())
                     if not route_error and (
                         not landing_seen or route.get('state') != 'complete' or len(sequence_rows) < 100 or
                         any(count < 20 for count in powered_rows.values()) or mapped_rows < 40 or
@@ -356,7 +355,9 @@ def main():
                         any(int(row['fault_mask']) & ~0x80 or float(row['dt_s']) > 0.005 or
                             float(row['battery_v']) < 3.5 for row in armed_rows) or
                         gaps['armed'][1] or gaps['transition'][1] or
-                        not total_min <= status.get('missedSamples', -1) <= total_max):
+                        # missedSamples is cumulative since recorder resume, while
+                        # the CSV contains only the most recent 400 samples.
+                        status.get('missedSamples', -1) < total_min):
                         route_error = RuntimeError('route evidence failed armed-loop or phase-localized log acceptance')
             elif not route_error:
                 route_error = RuntimeError('flight log did not freeze')
