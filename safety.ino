@@ -16,6 +16,7 @@ static float recentPoweredThrust = NAN;
 static uint32_t recentPoweredAtMs = 0;
 static constexpr uint32_t LANDING_THRUST_HANDOFF_MAX_AGE_MS = 200;
 static constexpr float LANDING_THRUST_HANDOFF_MIN = 0.15f;
+static constexpr float LANDING_IDLE_THRUST_MAX = 0.01f;
 #define WEB_RC_LOSS_TIMEOUT_MS 8000UL  // Web遥控器失联阈值(ms)，必须大于心跳间隔2000ms
 
 // 倒置保护参数
@@ -75,8 +76,12 @@ void failsafe() {
 
 // RC loss failsafe
 void rcLossFailsafe() {
+	static bool freshRCSeenWhileArmed = false;
+	if (!armed) {
+		freshRCSeenWhileArmed = false;
+		return;
+	}
 	if (controlTime == 0) return; // no RC at all
-	if (!armed) return;
 	if (mode == AUTO) return; // AUTO has an independent external-target timeout.
 	const ControlSource source = getCurrentControlSource();
 	if (source == CONTROL_SOURCE_LOCAL_SEQUENCE ||
@@ -87,9 +92,30 @@ void rcLossFailsafe() {
 #if WEB_RC_ENABLED
 	if (isUsingWebRC()) return; // WebRC独立负责其超时（webRCLossFailsafe）
 #endif
-	if (t - controlTime > rcLossTimeout) {
-		descend();
+	const double rcAge = t - controlTime;
+	if (rcAge <= rcLossTimeout) {
+		freshRCSeenWhileArmed = true;
+		return;
 	}
+	const uint32_t handoffAgeMs = millis() - recentPoweredAtMs;
+	const bool recentPoweredHandoff =
+		isfinite(recentPoweredThrust) &&
+		handoffAgeMs <= LANDING_THRUST_HANDOFF_MAX_AGE_MS;
+	if (!freshRCSeenWhileArmed && !recentPoweredHandoff) {
+		if (isfinite(thrustTarget) && thrustTarget > LANDING_IDLE_THRUST_MAX) {
+			disarm(DISARM_REASON_UNKNOWN);
+			print("RC输入为解锁前旧数据，非零输出已安全上锁\n");
+			return;
+		}
+		controlTime = 0; // discard stale pre-arm RC time so idle arm cannot ramp into landing
+		return;
+	}
+	if (isfinite(thrustTarget) && thrustTarget <= LANDING_IDLE_THRUST_MAX &&
+		!recentPoweredHandoff) {
+		controlTime = 0; // zero-throttle idle loss is not a landing handoff
+		return;
+	}
+	descend();
 }
 
 // Smooth descend on RC lost. Without a height/vertical-speed sensor this is
@@ -179,8 +205,17 @@ void autoFailsafe() {
 // Web遥控器丢失保护
 void webRCLossFailsafe() {
 	static bool timeoutHandled = false;
-	if (!webRCEnabled || !useWebRC) return;
-	if (!armed) return;
+	static bool freshStickSeenWhileArmed = false;
+	if (!armed) {
+		freshStickSeenWhileArmed = false;
+		timeoutHandled = false;
+		return;
+	}
+	if (!webRCEnabled || !useWebRC) {
+		freshStickSeenWhileArmed = false;
+		timeoutHandled = false;
+		return;
+	}
 
 	// 使用毫秒直接比较，避免整数除法引入的最大1秒误差
 	const unsigned long nowMs = millis();
@@ -188,6 +223,7 @@ void webRCLossFailsafe() {
 	const unsigned long stickAgeMs = nowMs - webRCLastStickUpdate;
 	if (linkAgeMs <= WEB_RC_LOSS_TIMEOUT_MS && stickAgeMs <= WEB_RC_LOSS_TIMEOUT_MS) {
 		timeoutHandled = false;
+		freshStickSeenWhileArmed = true;
 		return;
 	}
 	// The 10 s active-source timeout is longer than this failsafe threshold. Without a latch,
@@ -195,6 +231,12 @@ void webRCLossFailsafe() {
 	// on every control-loop iteration until the longer timeout expires.
 	if (timeoutHandled) return;
 	timeoutHandled = true;
+	if (!freshStickSeenWhileArmed) {
+		print("Web RC摇杆输入已过期，忽略本次旧连接\n");
+		webRCEnabled = false;
+		useWebRC = false;
+		return;
+	}
 	setDiagnosticFault(DIAG_WEB_RC_LOSS, true);
 	extern bool isLocalSequenceRunning();
 	extern bool isLocalSequenceReadyForAuto();

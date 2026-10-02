@@ -54,6 +54,8 @@ bool parameterPersistencePending(){return parameterWritePending;}
 bool imuRotationRestartPending(){return rotationRestartPending;}
 void sendMotors() {}
 bool motorsActive(){for(float m:motors)if(m!=0)return true;return false;}
+void cancelMotorTest() {}
+void abortVibrationCalibrationForDisarm() {}
 unsigned systemEventCount=0;
 void recordSystemLogEvent(const char*,const char*) {++systemEventCount;}
 unsigned flightLogTriggerCount=0;
@@ -151,9 +153,51 @@ int main(){
     descend();
     assert(thrustTarget<.01f);
     disarm();
+    // A stale browser session present at arm time must not turn a serial/RC
+    // zero-throttle arm into an immediate Web-RC-loss landing.
+    armed=true; mode=STAB; thrustTarget=0.0f;
+    webRCEnabled=useWebRC=true;
+    webRCLastUpdate=nowMs-100;
+    webRCLastStickUpdate=nowMs-9000;
+    webRCLossFailsafe();
+    assert(!isControlledLandingActive());
+    assert(!(getActiveDiagnosticFaults() & DIAG_WEB_RC_LOSS));
+    assert(!webRCEnabled && !useWebRC);
+    disarm();
+    // A stale pre-arm RC timestamp at zero throttle must not enter the landing
+    // ramp after arming; that would raise thrust without a live pilot input.
+    setCurrentControlSource(CONTROL_SOURCE_PHYSICAL_RC);
+    armed=true; mode=STAB; thrustTarget=0.0f; controlThrottle=0.0f;
+    controlTime=t-100.0;
+    failsafe();
+    assert(!isControlledLandingActive());
+    assert(getCurrentControlSource()==CONTROL_SOURCE_PHYSICAL_RC);
+    assert(thrustTarget==0.0f);
+    assert(controlTime==0.0);
+    disarm();
+    setCurrentControlSource(CONTROL_SOURCE_PHYSICAL_RC);
+    armed=true; mode=STAB; thrustTarget=0.03f; controlThrottle=0.03f;
+    controlTime=t-100.0;
+    failsafe();
+    assert(!armed);
+    assert(!isControlledLandingActive());
+    assert(thrustTarget==0.0f);
+    for(float m:motors) assert(m==0);
+    setCurrentControlSource(CONTROL_SOURCE_PHYSICAL_RC);
+    armed=true; mode=STAB; thrustTarget=0.10f; controlThrottle=0.10f;
+    controlTime=t;
+    failsafe();
+    assert(!isControlledLandingActive());
+    controlTime=t-100.0;
+    failsafe();
+    assert(isControlledLandingActive());
+    assert(getCurrentControlSource()==CONTROL_SOURCE_LANDING);
+    disarm();
     // Heartbeats cannot keep a stale Web stick command alive while armed.
     armed=true; mode=STAB; thrustTarget=.7f;
     webRCEnabled=useWebRC=true;
+    webRCLastUpdate=webRCLastStickUpdate=nowMs;
+    webRCLossFailsafe();
     webRCLastUpdate=nowMs-100;
     webRCLastStickUpdate=nowMs-9000;
     webRCLossFailsafe();
@@ -164,6 +208,22 @@ int main(){
     webRCEnabled=useWebRC=false;
     disarm();
     setDiagnosticFault(DIAG_WEB_RC_LOSS, false);
+    armed=true; mode=STAB; thrustTarget=0.2f;
+    webRCEnabled=useWebRC=true;
+    webRCLastUpdate=webRCLastStickUpdate=nowMs;
+    webRCLossFailsafe();
+    webRCEnabled=useWebRC=false;
+    armed=false;
+    webRCLossFailsafe(); // disarmed disabled WebRC must clear the fresh-stick latch
+    armed=true; mode=STAB; thrustTarget=0.0f;
+    webRCEnabled=useWebRC=true;
+    webRCLastUpdate=nowMs-100;
+    webRCLastStickUpdate=nowMs-9000;
+    webRCLossFailsafe();
+    assert(!isControlledLandingActive());
+    assert(!(getActiveDiagnosticFaults() & DIAG_WEB_RC_LOSS));
+    assert(!webRCEnabled && !useWebRC);
+    disarm();
     controlMode=NAN; controlThrottle=0;
     assert(!setFlightMode(ALTHOLD));
     assert(!setFlightMode(AUTO)); // no preflight target stream
