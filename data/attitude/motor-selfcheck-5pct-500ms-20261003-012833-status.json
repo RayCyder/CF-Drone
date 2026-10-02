@@ -1,0 +1,26 @@
+{
+  "captured_at": "2026-10-03T01:28:33+08:00",
+  "web_status": {
+    "armed": false,
+    "led_fast_blink": false,
+    "enabled": false,
+    "active": false,
+    "voltage": 4.08,
+    "throttle": 0.0,
+    "faults": 0,
+    "wifi_connected": true
+  },
+  "serial_motor_output": {
+    "front_right": 0,
+    "front_left": 0,
+    "rear_right": 0,
+    "rear_left": 0
+  },
+  "serial_preflight": {
+    "armed": 0,
+    "imu_ok": 1,
+    "motor_ok": 1,
+    "battery_mv": 4077,
+    "faults": "0x00000000"
+  }
+}

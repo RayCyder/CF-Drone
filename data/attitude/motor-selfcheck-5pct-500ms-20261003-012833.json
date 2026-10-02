@@ -1,0 +1,45 @@
+{
+  "captured_at": "2026-10-03T01:28:33+08:00",
+  "firmware_commit": "aceab08",
+  "firmware_sha256": "75da27d7b4a447ff337ee6390fa2c9e80357f645be2daf30d8ea97e09f68cb13",
+  "state": "complete",
+  "step": 4,
+  "reason": "complete",
+  "output": 0.05,
+  "duration_ms": 500,
+  "baseline": {
+    "gyro_rms": 0.002978,
+    "accel_rms": 0.04030,
+    "samples": 198
+  },
+  "motors": [
+    {
+      "name": "FR",
+      "gyro_rms": 0.014044,
+      "accel_rms": 0.20722,
+      "samples": 496,
+      "response": "detected"
+    },
+    {
+      "name": "FL",
+      "gyro_rms": 0.008310,
+      "accel_rms": 0.10728,
+      "samples": 497,
+      "response": "detected"
+    },
+    {
+      "name": "RR",
+      "gyro_rms": 0.010696,
+      "accel_rms": 0.24742,
+      "samples": 496,
+      "response": "detected"
+    },
+    {
+      "name": "RL",
+      "gyro_rms": 0.016462,
+      "accel_rms": 0.22801,
+      "samples": 497,
+      "response": "detected"
+    }
+  ]
+}
