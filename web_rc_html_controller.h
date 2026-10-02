@@ -227,7 +227,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <button id="self-check-button" class="self-check-button" onclick="openSelfCheck()">自检状态</button>
       <button id="route-page-button" class="self-check-button" onclick="openRoutePage()">开环序列</button>
       <button id="descent-calibration-button" class="self-check-button" onclick="handleDescentCalibrationEntry()">迫降标定</button>
-      <button id="vibration-calibration-button" class="self-check-button" onclick="openVibrationCalibrationPage()">振动校准</button>
+      <button id="vibration-calibration-button" class="self-check-button" onclick="openVibrationCalibrationPage()">电机扰动检测</button>
     </nav>
     <div class="status-bar">
       <div class="status-item"><span class="status-dot" id="status-dot"></span><span id="connection-text">连接中...</span></div>
@@ -303,10 +303,11 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       </div>
       <div id="diagnostic-active" class="diagnostic-active" style="display:none"></div>
       <div id="diagnostic-list" class="diagnostic-list"></div>
-      <section class="diagnostic-summary offline">
-        <strong>电机人工检查（软件无法代替）</strong>
-        <small>拆下全部螺旋桨并固定机体后，通过控制台依次运行 mfr、mfl、mrr、mrl。每次应只有对应电机以 30% 输出转动 3 秒；确认位置正确、无卡滞和异常声响。电机测试期间禁止解锁。飞控没有转速反馈，不能自动判定电机本体是否正常。</small>
+      <section id="motor-self-check" class="diagnostic-summary offline">
+        <strong>电机响应检测尚未执行</strong>
+        <small>拆下全部桨叶并固定机体后，可启动四路自动检测。</small>
       </section>
+      <div class="diagnostic-actions"><button id="motor-self-check-start" onclick="startVibrationCalibration()">启动四电机自动检测</button><button id="motor-self-check-stop" onclick="stopMotorSelfCheck()" disabled>停止检测</button></div>
       <div id="diagnostic-updated" class="diagnostic-updated">尚未获取</div>
     </div>
   </section>
@@ -352,10 +353,10 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   </section>
   <section id="vibration-calibration-page" class="vibration-calibration-page" aria-hidden="true">
     <div class="descent-calibration-shell">
-      <div class="diagnostic-top"><h2>四电机振动校准</h2><div class="diagnostic-actions"><button onclick="closeVibrationCalibrationPage()">返回遥控器</button></div></div>
-      <div class="calibration-card"><strong>开始前：拆下全部桨叶并固定机体</strong><p>飞控保持上锁。系统将按 FR、FL、RR、RL 顺序分别以现有 30% 输出运行 3 秒；每路记录约 1 秒 IMU 数据。关闭页面不会中断流程，固件会在每路 3 秒后自动停止电机。</p><small>请勿触碰机体或电机。本测试比较无桨状态下的振动，不能代替带桨飞行的姿态跟踪验证，也不会自动修改姿态算法参数。</small></div>
+      <div class="diagnostic-top"><h2>四电机低功率扰动检测</h2><div class="diagnostic-actions"><button onclick="closeVibrationCalibrationPage()">返回遥控器</button></div></div>
+      <div class="calibration-card"><strong>开始前：拆下全部桨叶并固定机体</strong><p>飞控保持上锁。系统先记录约 200 ms 静止基线，再按 FR、FL、RR、RL 顺序分别以 10% 输出短脉冲约 100 ms，并采集同步 IMU 数据。关闭页面不会中断流程，可用“停止检测”立即上锁并取消后续试转。</p><small>10% 短脉冲可能不足以起转或形成可测扰动；此时显示“转动未确认”，不会自动增加输出。请勿触碰机体或电机。</small></div>
       <div id="vibration-calibration-status" class="route-status" role="status">正在读取校准状态…</div>
-      <div class="calibration-actions"><button id="vibration-calibration-start" class="primary" onclick="startVibrationCalibration()">开始四电机采集</button><button id="vibration-calibration-download" onclick="downloadVibrationCalibrationCsv()" disabled>下载行数表格 CSV</button></div>
+      <div class="calibration-actions"><button id="vibration-calibration-start" class="primary" onclick="startVibrationCalibration()">开始四电机采集</button><button id="vibration-calibration-stop" onclick="stopMotorSelfCheck()" disabled>停止检测</button><button id="vibration-calibration-download" onclick="downloadVibrationCalibrationCsv()" disabled>下载行数表格 CSV</button></div>
       <div class="calibration-card"><strong>逐电机结果</strong><div id="vibration-calibration-results" class="calibration-points">尚无结果。</div><p id="vibration-calibration-analysis" class="route-status">比较四个电机的加速度振动 RMS；偏高只表示优先复核机械安装、紧固和电机，不直接判定损坏。</p></div>
       <div class="calibration-card"><strong>姿态算法评估边界</strong><p>该流程可筛查电机振动是否可能污染 IMU 输入。姿态算法的改进需另用静态、手动遥控飞行日志及可信姿态参考评估；仅凭单电机振动数据无法可靠地自动调节加速度计权重或滤波参数。</p></div>
     </div>
@@ -900,34 +901,71 @@ function renderVibrationCalibrationResults(motors){
   const outliers=motors.filter(item=>median>0&&Number(item.accel_rms)>median*1.5);
   root.innerHTML='<div><strong>电机　加速度 RMS (m/s²)　陀螺仪 RMS (rad/s)　样本数　相对中位数</strong></div>'+motors.map(item=>{
     const ratio=median>0?Number(item.accel_rms)/median:0;const flag=median>0&&ratio>1.5;
-    return `<div>${item.name}　${Number(item.accel_rms).toFixed(4)}　${Number(item.gyro_rms).toFixed(5)}　${item.samples}　${median>0?ratio.toFixed(2)+'×':''}${flag?'（优先复核）':''}</div>`;
+    return `<div>${item.name}　${Number(item.accel_rms).toFixed(4)}　${Number(item.gyro_rms).toFixed(5)}　${item.samples}　${median>0?ratio.toFixed(2)+'×':''}　${item.response==='detected'?'检测到转动响应':'转动未确认'}${flag?'（优先复核）':''}</div>`;
   }).join('');
   document.getElementById('vibration-calibration-analysis').textContent=outliers.length
     ? `${outliers.map(item=>item.name).join('、')} 的加速度 RMS 高于四路中位数 1.5 倍，建议优先复核机械安装、紧固和电机后复测。该相对阈值用于筛查，不是故障判据。`
     : '未发现高于四路中位数 1.5 倍的电机；这不等同于绝对振动合格，也不能排除带桨或飞行状态下的问题。';
+}
+function renderMotorSelfCheck(data){
+  const card=document.getElementById('motor-self-check');
+  const button=document.getElementById('motor-self-check-start');
+  if(!card||!button)return;
+  const active=data.state==='queued'||data.state==='baseline'||data.state==='running';
+  button.disabled=active||!connectionOk||currentArmed;
+  document.getElementById('motor-self-check-stop').disabled=!active;
+  if(data.state==='complete'){
+    const motors=Array.isArray(data.motors)?data.motors:[];
+    const detected=motors.filter(item=>item.response==='detected').length;
+    card.className='diagnostic-summary '+(detected===4?'ok':'offline');
+    card.innerHTML=`<strong>四电机自动检测：${detected}/4 路有转动响应</strong><small>${motors.map(item=>`${item.name} ${item.response==='detected'?'有转动响应':'转动未确认'}`).join('；')}。未确认的电机需检查接线、机械耦合并复测。此结果不验证转速、旋向、桨叶或带载推力。</small>`;
+  }else if(data.state==='aborted'){
+    card.className='diagnostic-summary offline';
+    card.innerHTML=`<strong>电机检测未完成</strong><small>原因：${data.reason}。请排查条件后重新采集。</small>`;
+  }else if(active){
+    card.className='diagnostic-summary offline';
+    card.innerHTML=`<strong>电机检测进行中</strong><small>${data.state==='baseline'?'采集静止基线':`已完成 ${data.step}/4 路`}；结束前保持机体固定并勿解锁。</small>`;
+  }else{
+    card.className='diagnostic-summary offline';
+    card.innerHTML='<strong>电机响应检测尚未执行</strong><small>拆下全部桨叶并固定机体后，点击下方按钮自动测试四路。</small>';
+  }
 }
 async function refreshVibrationCalibrationStatus(){
   try{
     const response=await fetch('/vibration-calibration/status',{cache:'no-store'});if(!response.ok)throw new Error('状态读取失败');
     const data=await response.json();
     const names=['FR','FL','RR','RL'];
-    const stateText=({empty:'尚无记录',queued:'已排队，准备启动',running:'正在采集',complete:'四路采集完成',aborted:'采集已中止'})[data.state]||'状态未知';
+    const stateText=({empty:'尚无记录',queued:'已排队，准备启动',baseline:'正在采集静止基线',running:'正在采集',complete:'四路采集完成',aborted:'采集已中止'})[data.state]||'状态未知';
     const step=Math.min(Number(data.step)||0,4);
     document.getElementById('vibration-calibration-status').textContent=`${stateText}；已完成 ${step}/4 路${data.state==='running'?`，当前 ${names[Math.min(step,3)]} 电机测试中`:''}${data.state==='aborted'?'；原因：'+data.reason:''}`;
-    document.getElementById('vibration-calibration-start').disabled=data.state==='queued'||data.state==='running'||!connectionOk||currentArmed;
+    document.getElementById('vibration-calibration-start').disabled=data.state==='queued'||data.state==='baseline'||data.state==='running'||!connectionOk||currentArmed;
+    document.getElementById('vibration-calibration-stop').disabled=!(data.state==='queued'||data.state==='baseline'||data.state==='running');
     document.getElementById('vibration-calibration-download').disabled=data.state!=='complete'||currentArmed;
     renderVibrationCalibrationResults(data.motors);
-    if(data.state==='queued'||data.state==='running')setVibrationCalibrationPolling(true);else setVibrationCalibrationPolling(false);
-  }catch(error){document.getElementById('vibration-calibration-status').textContent=error.message||'无法读取校准状态';}
+    renderMotorSelfCheck(data);
+    if(data.state==='queued'||data.state==='baseline'||data.state==='running')setVibrationCalibrationPolling(true);else setVibrationCalibrationPolling(false);
+  }catch(error){
+    document.getElementById('vibration-calibration-status').textContent=error.message||'无法读取校准状态';
+    if(selfCheckOpen)document.getElementById('motor-self-check').innerHTML='<strong>电机检测状态暂不可读</strong><small>请检查连接后刷新。</small>';
+  }
 }
 async function startVibrationCalibration(){
   if(!connectionOk||currentArmed){showToast('请连接飞控并保持上锁');return;}
-  if(!window.confirm('请确认：全部桨叶已拆除、机体已固定，周围无人且电机测试区域安全。现在启动 FR、FL、RR、RL 电机测试？'))return;
+  if(!window.confirm('请确认：全部桨叶已拆除、机体已固定，周围无人且电机测试区域安全。现在依次执行四路 10%、约 100 ms 短脉冲？'))return;
   try{
     const response=await controlFetch('/vibration-calibration/start',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({confirm:'1'})});
     const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'无法开始采集');
     setVibrationCalibrationPolling(true);refreshVibrationCalibrationStatus();
-  }catch(error){document.getElementById('vibration-calibration-status').textContent=error.message||'启动失败';}
+  }catch(error){
+    document.getElementById('vibration-calibration-status').textContent=error.message||'启动失败';
+    if(selfCheckOpen)document.getElementById('motor-self-check').innerHTML=`<strong>电机检测未启动</strong><small>${error.message||'启动失败'}</small>`;
+  }
+}
+function stopMotorSelfCheck(){
+  sendButtonData(1,1);
+  setTimeout(()=>sendButtonData(1,0),100);
+  showToast('已发送上锁与停止检测指令');
+  setTimeout(refreshVibrationCalibrationStatus,300);
 }
 function downloadVibrationCalibrationCsv(){
   if(currentArmed){showToast('请先确认飞控已上锁');return;}
@@ -1369,6 +1407,7 @@ function openSelfCheck() {
   page.style.display = 'block';
   page.setAttribute('aria-hidden', 'false');
   refreshSelfCheck();
+  refreshVibrationCalibrationStatus();
 }
 
 function closeSelfCheck() {
@@ -1471,7 +1510,7 @@ function renderSelfCheckStatus(data) {
   summary.className = 'diagnostic-summary ' + (active.length ? 'fault' : 'ok');
   summary.innerHTML = active.length
     ? `<strong>检测到 ${active.length} 项活动故障</strong><small>如故障涉及 IMU 或电机输出，请勿解锁。处理建议见下方。</small>`
-    : '<strong>诊断自检正常：未报告活动故障</strong><small>解锁条件另见上方状态；仍需完成下方逐电机人工检查，飞控没有转速反馈，无法确认电机本体状态。</small>';
+    : '<strong>启动与运行自检正常：未报告活动故障</strong><small>解锁条件和四电机转动响应检测结果分别见下方；电机输出初始化正常不代表电机已经转动。</small>';
   const activePanel = document.getElementById('diagnostic-active');
   activePanel.style.display = active.length ? 'block' : 'none';
   activePanel.innerHTML = active.length

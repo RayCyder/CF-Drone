@@ -13,6 +13,7 @@
 #include "log_transfer.h"
 #include "system_log.h"
 #include "web_rc_input.h"
+#include "vibration_motor_result.h"
 #include "open_loop_sequence.h"
 #include "descent_calibration.h"
 #include "wifi_profiles.h"

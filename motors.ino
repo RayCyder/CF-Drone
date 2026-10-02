@@ -28,6 +28,7 @@ bool motorOutputsOK = false;
 bool motorTestActive = false;
 bool motorTestArmInhibit = false;
 static uint32_t motorTestDeadlineMs = 0;
+static bool motorTestVerbose = false;
 static const uint32_t MOTOR_TEST_DURATION_MS = 3000;
 
 // Motors array indexes:
@@ -93,7 +94,8 @@ void serviceMotorTest() {
 	memset(motors, 0, sizeof(motors));
 	motorTestActive = false;
 	sendMotors();
-	print("电机测试结束，全部输出已归零。请人工确认目标电机是否正常转动。\n");
+	if (motorTestVerbose) print("电机测试结束，全部输出已归零。\n");
+	motorTestVerbose = false;
 }
 
 void cancelMotorTest() {
@@ -102,33 +104,43 @@ void cancelMotorTest() {
 	motorTestActive = false;
 	motorTestArmInhibit = true;
 	sendMotors();
+	motorTestVerbose = false;
 }
 
 bool motorsActive() {
 	return motors[0] != 0 || motors[1] != 0 || motors[2] != 0 || motors[3] != 0;
 }
 
-void testMotor(int n) {
+bool startMotorTest(int n, float output, uint32_t durationMs) {
 	extern bool armed;
 	extern bool isAccelCalibrationActive();
 	extern bool batteryBlocksArming();
 	extern bool hasBlockingDiagnosticFault();
-	if (!motorOutputsOK || n < 0 || n >= 4) {
-		print("电机输出未就绪或编号无效，拒绝测试。\n");
-		return;
+	if (!motorOutputsOK || n < 0 || n >= 4 || !isfinite(output) ||
+		output < 0.05f || output > 0.3f || durationMs < 50 || durationMs > MOTOR_TEST_DURATION_MS) {
+		print("电机输出未就绪或试转配置无效，拒绝测试。\n");
+		return false;
 	}
 	if (armed || motorTestActive || isAccelCalibrationActive() ||
 		batteryBlocksArming() || hasBlockingDiagnosticFault()) {
 		print("电机测试仅允许在已上锁时执行；当前状态不安全，拒绝测试。\n");
-		return;
+		return false;
 	}
 	// Print before output starts so serial TX never stalls the motor-sampling loop.
-	print("电机 %d 将以 30%% 输出运行 3 秒。确认已拆桨并固定机体。\n", n);
+	const bool verbose = durationMs >= 500;
+	if (verbose) print("电机 %d 将以 %.0f%% 输出运行 %lu ms。确认已拆桨并固定机体。\n",
+		n, output * 100.0f, (unsigned long)durationMs);
 	// 电机测试期间清空所有输出，只给目标电机输出，避免遗留控制量带动其他电机。
 	memset(motors, 0, sizeof(motors));
 	motorTestActive = true;
 	motorTestArmInhibit = true;
-	motorTestDeadlineMs = millis() + MOTOR_TEST_DURATION_MS;
-	motors[n] = 0.3f;
+	motorTestVerbose = verbose;
+	motorTestDeadlineMs = millis() + durationMs;
+	motors[n] = output;
 	sendMotors();
+	return true;
+}
+
+void testMotor(int n) {
+	startMotorTest(n, 0.3f, MOTOR_TEST_DURATION_MS);
 }

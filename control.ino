@@ -446,6 +446,12 @@ DisarmReason getLastDisarmReason() {
 void disarm(DisarmReason reason) {
 	if (reason == DISARM_REASON_WEB_LOCK || reason == DISARM_REASON_WEB_EMERGENCY)
 		webStopLastMs = millis() ? millis() : 1;
+	if (reason == DISARM_REASON_WEB_LOCK || reason == DISARM_REASON_WEB_EMERGENCY) {
+		extern void cancelMotorTest();
+		extern void abortVibrationCalibrationForDisarm();
+		if (motorTestActive) cancelMotorTest();
+		abortVibrationCalibrationForDisarm();
+	}
 	bool outputWasActive = armed;
 	if (armed) __atomic_store_n(&lastDisarmReason, (uint8_t)reason, __ATOMIC_RELAXED);
 	for (int i = 0; i < 4; ++i) outputWasActive = outputWasActive || motors[i] != 0.0f;
