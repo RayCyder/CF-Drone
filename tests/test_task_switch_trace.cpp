@@ -20,6 +20,15 @@ int main() {
     trace.switchedIn(1400, 1, 1);
     assert(trace.count() == 0 && !trace.captureActive());
 
+    TaskSwitchTraceRecorder shortGap(9);
+    shortGap.switchedOut(1000, 9, 1);
+    shortGap.switchedIn(1800, 9, 1);
+#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+    assert(shortGap.count() == 2); // Diagnostic build retains sub-ms handoffs.
+#else
+    assert(shortGap.count() == 0);
+#endif
+
     // A long dispatch gap retains the task identity and ordered timestamps.
     trace.setLoopSequence(42);
     trace.switchedOut(2000, 1, 1);
@@ -76,7 +85,7 @@ int main() {
     assert(trace.count() <= TASK_SWITCH_TRACE_CAPACITY);
     const uint32_t last = trace.nextSequence() - 1;
     assert(eventAt(trace, last).kind == TASK_SWITCH_TRACE_OVERFLOW);
-    assert(eventAt(trace, last).droppedEvents == 32);
+    assert(eventAt(trace, last).droppedEvents == TASK_SWITCH_PENDING_CAPACITY + 8);
 
     // Public history is a fixed ring and sequence checks reject overwritten data.
     for (uint8_t i = 0; i < 20; ++i) {

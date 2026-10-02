@@ -20,7 +20,13 @@ constexpr uint8_t TASK_SWITCH_PENDING_CAPACITY = 16;
 constexpr uint8_t TASK_SWITCH_TRACE_CAPACITY = 64;
 constexpr uint8_t TASK_SWITCH_PENDING_CAPACITY = 24;
 #endif
+#if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
+// Keep sub-millisecond handoffs in the diagnostic build so 1.5 ms loop
+// warnings can be separated from work done by the flight task itself.
+constexpr uint32_t TASK_SWITCH_TRACE_MIN_US = 600;
+#else
 constexpr uint32_t TASK_SWITCH_TRACE_MIN_US = 1500;
+#endif
 
 enum TaskSwitchTraceKind : uint8_t {
     TASK_SWITCH_LOOP_OUT = 0,
