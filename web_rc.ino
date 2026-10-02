@@ -89,12 +89,12 @@ static const char *openLoopReason = "empty";
 
 enum VibrationCalibrationState : uint8_t {
     VIBRATION_EMPTY, VIBRATION_BOOT_WAIT, VIBRATION_QUEUED, VIBRATION_BASELINE,
-    VIBRATION_RUNNING, VIBRATION_COMPLETE, VIBRATION_ABORTED
+    VIBRATION_RUNNING, VIBRATION_SETTLING, VIBRATION_COMPLETE, VIBRATION_ABORTED
 };
 static constexpr float VIBRATION_TEST_OUTPUT = 0.05f;
 static constexpr uint32_t VIBRATION_TEST_MS = 500;
 static constexpr uint32_t VIBRATION_BASELINE_MS = 200;
-static constexpr uint32_t VIBRATION_SETTLE_MS = 250;
+static constexpr uint32_t VIBRATION_SETTLE_MS = 1000;
 static constexpr uint32_t VIBRATION_BOOT_DELAY_MS = 2000;
 static portMUX_TYPE vibrationCalibrationMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint8_t vibrationCalibrationState = VIBRATION_EMPTY;
@@ -346,7 +346,8 @@ static void serviceLevelCalibration() {
             vibrationRouteBusy() || vibrationCalibrationState == VIBRATION_BOOT_WAIT ||
             vibrationCalibrationState == VIBRATION_QUEUED ||
             vibrationCalibrationState == VIBRATION_BASELINE ||
-            vibrationCalibrationState == VIBRATION_RUNNING || isLocalSequenceRunning() ||
+            vibrationCalibrationState == VIBRATION_RUNNING ||
+            vibrationCalibrationState == VIBRATION_SETTLING || isLocalSequenceRunning() ||
             !parameterPersistenceReady() || imuCapture.state() != IMU_CAPTURE_IDLE) {
             setLevelCalibrationState(LEVEL_REJECTED, "preflight_failed");
             return;
@@ -489,7 +490,7 @@ static void setVibrationCalibrationState(uint8_t state, const char *reason) {
 void abortVibrationCalibrationForDisarm() {
     const uint8_t state = vibrationCalibrationState;
     if (state != VIBRATION_BOOT_WAIT && state != VIBRATION_QUEUED && state != VIBRATION_BASELINE &&
-        state != VIBRATION_RUNNING) return;
+        state != VIBRATION_RUNNING && state != VIBRATION_SETTLING) return;
     if (state == VIBRATION_BASELINE || state == VIBRATION_RUNNING) {
         if (imuCapture.state() == IMU_CAPTURE_RUNNING) imuCapture.stop();
         imuCapture.release();
@@ -562,6 +563,16 @@ static void serviceVibrationCalibration() {
         recordSystemLogEvent("MOTOR_SELF_CHECK", "boot_started output=5% pulse_ms=500");
     }
 #endif
+    if (vibrationCalibrationState == VIBRATION_SETTLING) {
+        if (motorsActive() || motorTestActive) {
+            cancelMotorTest();
+            setVibrationCalibrationState(VIBRATION_ABORTED, "final_stop_failed");
+            return;
+        }
+        if ((uint32_t)(millis() - vibrationPhaseStartedMs) < VIBRATION_SETTLE_MS) return;
+        setVibrationCalibrationState(VIBRATION_COMPLETE, "complete");
+        return;
+    }
     if (vibrationCalibrationState == VIBRATION_QUEUED && vibrationCalibrationStartRequested) {
         // Let the previous motor's frame vibration decay before sampling the next one.
         if (vibrationCalibrationIndex > 0 &&
@@ -655,9 +666,9 @@ static void serviceVibrationCalibration() {
     vibrationCalibrationResults[vibrationCalibrationIndex] = result;
     ++vibrationCalibrationIndex;
     const bool complete = vibrationCalibrationIndex >= 4;
-    vibrationCalibrationState = complete ? VIBRATION_COMPLETE : VIBRATION_QUEUED;
+    vibrationCalibrationState = complete ? VIBRATION_SETTLING : VIBRATION_QUEUED;
     vibrationCalibrationStartRequested = !complete;
-    vibrationCalibrationReason = complete ? "complete" : "next_motor";
+    vibrationCalibrationReason = complete ? "final_stop_wait" : "next_motor";
     portEXIT_CRITICAL(&vibrationCalibrationMux);
 }
 
@@ -678,11 +689,12 @@ void runBootMotorSelfCheckBeforeWiFi() {
         (unsigned long)VIBRATION_BOOT_DELAY_MS);
     const uint32_t startedMs = millis();
     const uint32_t timeoutMs = VIBRATION_BOOT_DELAY_MS + VIBRATION_BASELINE_MS +
-        4U * VIBRATION_TEST_MS + 3U * VIBRATION_SETTLE_MS + 2500U;
+        4U * VIBRATION_TEST_MS + 4U * VIBRATION_SETTLE_MS + 2500U;
     while (vibrationCalibrationState == VIBRATION_BOOT_WAIT ||
            vibrationCalibrationState == VIBRATION_QUEUED ||
            vibrationCalibrationState == VIBRATION_BASELINE ||
-           vibrationCalibrationState == VIBRATION_RUNNING) {
+           vibrationCalibrationState == VIBRATION_RUNNING ||
+           vibrationCalibrationState == VIBRATION_SETTLING) {
         readIMU();
         updateBatteryVoltage();
         serviceMotorTest();
@@ -1896,7 +1908,7 @@ void setupWebRC() {
             isAccelCalibrationActive() || motorTestActive || vibrationRouteBusy() ||
             vibrationCalibrationState == VIBRATION_BOOT_WAIT ||
             vibrationCalibrationState == VIBRATION_QUEUED || vibrationCalibrationState == VIBRATION_BASELINE ||
-            vibrationCalibrationState == VIBRATION_RUNNING ||
+            vibrationCalibrationState == VIBRATION_RUNNING || vibrationCalibrationState == VIBRATION_SETTLING ||
             isLocalSequenceRunning() || !parameterPersistenceReady() ||
             imuCapture.state() != IMU_CAPTURE_IDLE || isLevelCalibrationActive()) {
             webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires_level_confirm_disarmed_stationary_imu_and_free_capture\"}");
@@ -1994,7 +2006,8 @@ void setupWebRC() {
         portENTER_CRITICAL(&vibrationCalibrationMux);
         const bool active = vibrationCalibrationState == VIBRATION_BOOT_WAIT ||
             vibrationCalibrationState == VIBRATION_QUEUED ||
-            vibrationCalibrationState == VIBRATION_BASELINE || vibrationCalibrationState == VIBRATION_RUNNING;
+            vibrationCalibrationState == VIBRATION_BASELINE || vibrationCalibrationState == VIBRATION_RUNNING ||
+            vibrationCalibrationState == VIBRATION_SETTLING;
         portEXIT_CRITICAL(&vibrationCalibrationMux);
         if (active || armed || motorsActive() || !motorOutputsOK || isAccelCalibrationActive() ||
             isLevelCalibrationActive() ||
@@ -2026,7 +2039,7 @@ void setupWebRC() {
         memcpy(results, vibrationCalibrationResults, sizeof(results));
         baseline = vibrationBaseline;
         portEXIT_CRITICAL(&vibrationCalibrationMux);
-        const char *stateName[] = {"empty", "boot_wait", "queued", "baseline", "running", "complete", "aborted"};
+        const char *stateName[] = {"empty", "boot_wait", "queued", "baseline", "running", "settling", "complete", "aborted"};
         char json[760];
         snprintf(json, sizeof(json),
             "{\"state\":\"%s\",\"step\":%u,\"reason\":\"%s\","
@@ -2035,7 +2048,7 @@ void setupWebRC() {
             "{\"name\":\"FL\",\"gyro_rms\":%.6f,\"accel_rms\":%.5f,\"samples\":%u,\"response\":\"%s\"},"
             "{\"name\":\"RR\",\"gyro_rms\":%.6f,\"accel_rms\":%.5f,\"samples\":%u,\"response\":\"%s\"},"
             "{\"name\":\"RL\",\"gyro_rms\":%.6f,\"accel_rms\":%.5f,\"samples\":%u,\"response\":\"%s\"}]}",
-            state < 7 ? stateName[state] : "unknown", (unsigned)index, reason,
+            state < 8 ? stateName[state] : "unknown", (unsigned)index, reason,
             baseline.gyroRms, baseline.accelRms, baseline.samples,
             results[0].gyroRms, results[0].accelRms, results[0].samples, motorResponseName(results[0], baseline),
             results[1].gyroRms, results[1].accelRms, results[1].samples, motorResponseName(results[1], baseline),

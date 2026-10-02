@@ -365,7 +365,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   <section id="vibration-calibration-page" class="vibration-calibration-page" aria-hidden="true">
     <div class="descent-calibration-shell">
       <div class="diagnostic-top"><h2>四电机低功率扰动检测</h2><div class="diagnostic-actions"><button onclick="closeVibrationCalibrationPage()">返回遥控器</button></div></div>
-      <div class="calibration-card"><strong>开始前：固定机体并确保周围安全</strong><p>飞控保持上锁。系统先记录约 200 ms 静止基线，再按 FR、FL、RR、RL 顺序分别以 5% 输出约 500 ms，并采集同步 IMU 数据。该短时低功率测试可带桨执行，但机体仍须固定。关闭页面不会中断流程，可用“停止检测”立即上锁并取消后续试转。</p><small>每路约 500 帧，足够执行自动响应判定；请同时人工观察是否起转和有无异响，测试期间勿触碰机体或电机。</small></div>
+      <div class="calibration-card"><strong>开始前：固定机体并确保周围安全</strong><p>飞控保持上锁。系统先记录约 200 ms 静止基线，再按 FR、FL、RR、RL 顺序分别以 5% 输出约 500 ms，并采集同步 IMU 数据。每路结束后全部输出归零并等待 1 秒，第四路后也等待 1 秒再报告完成。该短时低功率测试可带桨执行，但机体仍须固定。关闭页面不会中断流程，可用“停止检测”立即上锁并取消后续试转。</p><small>每路约 500 帧，足够执行自动响应判定；请同时人工观察是否起转和有无异响，测试期间勿触碰机体或电机。</small></div>
       <div id="vibration-calibration-status" class="route-status" role="status">正在读取校准状态…</div>
       <div class="calibration-actions"><button id="vibration-calibration-start" class="primary" onclick="startVibrationCalibration()">开始四电机采集</button><button id="vibration-calibration-stop" onclick="stopMotorSelfCheck()" disabled>停止检测</button><button id="vibration-calibration-download" onclick="downloadVibrationCalibrationCsv()" disabled>下载行数表格 CSV</button></div>
       <div class="calibration-card"><strong>逐电机结果</strong><div id="vibration-calibration-results" class="calibration-points">尚无结果。</div><p id="vibration-calibration-analysis" class="route-status">比较四个电机的加速度振动 RMS；偏高只表示优先复核机械安装、紧固和电机，不直接判定损坏。</p></div>
@@ -923,7 +923,7 @@ function renderMotorSelfCheck(data){
   const card=document.getElementById('motor-self-check');
   const button=document.getElementById('motor-self-check-start');
   if(!card||!button)return;
-  const active=data.state==='boot_wait'||data.state==='queued'||data.state==='baseline'||data.state==='running';
+  const active=data.state==='boot_wait'||data.state==='queued'||data.state==='baseline'||data.state==='running'||data.state==='settling';
   button.disabled=active||currentArmed;
   document.getElementById('motor-self-check-stop').disabled=!active;
   if(data.state==='complete'){
@@ -936,7 +936,7 @@ function renderMotorSelfCheck(data){
     card.innerHTML=`<strong>电机检测未完成</strong><small>原因：${data.reason}。请排查条件后重新采集。</small>`;
   }else if(active){
     card.className='diagnostic-summary offline';
-    const phase=data.state==='boot_wait'?'上电自动检测等待期':data.state==='baseline'?'采集静止基线':`已完成 ${data.step}/4 路`;
+    const phase=data.state==='boot_wait'?'上电自动检测等待期':data.state==='baseline'?'采集静止基线':data.state==='settling'?'四路完成，等待最后一路完全停转':`已完成 ${data.step}/4 路`;
     card.innerHTML=`<strong>电机检测进行中</strong><small>${phase}；结束前保持机体固定并勿解锁。</small>`;
   }else{
     card.className='diagnostic-summary offline';
@@ -948,15 +948,15 @@ async function refreshVibrationCalibrationStatus(){
     const response=await fetch('/vibration-calibration/status',{cache:'no-store'});if(!response.ok)throw new Error('状态读取失败');
     const data=await response.json();
     const names=['FR','FL','RR','RL'];
-    const stateText=({empty:'尚无记录',boot_wait:'上电自动检测等待中',queued:'已排队，准备启动',baseline:'正在采集静止基线',running:'正在采集',complete:'四路采集完成',aborted:'采集已中止'})[data.state]||'状态未知';
+    const stateText=({empty:'尚无记录',boot_wait:'上电自动检测等待中',queued:'已排队，准备启动',baseline:'正在采集静止基线',running:'正在采集',settling:'全部输出已归零，等待电机停转',complete:'四路采集完成',aborted:'采集已中止'})[data.state]||'状态未知';
     const step=Math.min(Number(data.step)||0,4);
     document.getElementById('vibration-calibration-status').textContent=`${stateText}；已完成 ${step}/4 路${data.state==='running'?`，当前 ${names[Math.min(step,3)]} 电机测试中`:''}${data.state==='aborted'?'；原因：'+data.reason:''}`;
-    document.getElementById('vibration-calibration-start').disabled=data.state==='boot_wait'||data.state==='queued'||data.state==='baseline'||data.state==='running'||currentArmed;
-    document.getElementById('vibration-calibration-stop').disabled=!(data.state==='boot_wait'||data.state==='queued'||data.state==='baseline'||data.state==='running');
+    document.getElementById('vibration-calibration-start').disabled=data.state==='boot_wait'||data.state==='queued'||data.state==='baseline'||data.state==='running'||data.state==='settling'||currentArmed;
+    document.getElementById('vibration-calibration-stop').disabled=!(data.state==='boot_wait'||data.state==='queued'||data.state==='baseline'||data.state==='running'||data.state==='settling');
     document.getElementById('vibration-calibration-download').disabled=data.state!=='complete'||currentArmed;
     renderVibrationCalibrationResults(data.motors);
     renderMotorSelfCheck(data);
-    if(data.state==='boot_wait'||data.state==='queued'||data.state==='baseline'||data.state==='running')setVibrationCalibrationPolling(true);else setVibrationCalibrationPolling(false);
+    if(data.state==='boot_wait'||data.state==='queued'||data.state==='baseline'||data.state==='running'||data.state==='settling')setVibrationCalibrationPolling(true);else setVibrationCalibrationPolling(false);
   }catch(error){
     document.getElementById('vibration-calibration-status').textContent=error.message||'无法读取校准状态';
     if(selfCheckOpen)document.getElementById('motor-self-check').innerHTML='<strong>电机检测状态暂不可读</strong><small>请检查连接后刷新。</small>';

@@ -39,6 +39,10 @@ assert baseline_save < baseline_reject, "captured baseline must be saved before 
 assert "saveCurrentVibrationMotorCapture();" in web, (
     "partial motor capture must remain available to Web after an aborted test"
 )
+assert "static constexpr uint32_t VIBRATION_SETTLE_MS = 1000" in web
+assert "VIBRATION_SETTLING" in web
+assert "4U * VIBRATION_SETTLE_MS" in runner
+assert "vibrationCalibrationState = complete ? VIBRATION_SETTLING : VIBRATION_QUEUED" in web
 
 timeout_start = runner.index("const uint8_t timedOutState = vibrationCalibrationState")
 timeout_release = runner.index("imuCapture.release();", timeout_start)
