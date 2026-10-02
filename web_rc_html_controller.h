@@ -120,7 +120,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
 /*======== 按钮区 ========*/
 .buttons-container{flex:.55;display:flex;flex-direction:column;gap:10px;padding:12px;background:rgba(0,0,0,.4);border-radius:20px;border:2px solid rgba(150,150,150,.3);box-shadow:inset 0 0 20px rgba(0,0,0,.5)}
 #descent-calibration-button{border-color:rgba(255,160,60,.65);background:rgba(255,140,0,.16);color:#ffd2a3}
-#vibration-calibration-button{border-color:rgba(110,190,255,.65);background:rgba(30,120,200,.16);color:#c4e6ff}
+#console-open-button{border-color:rgba(110,190,255,.65);background:rgba(30,120,200,.16);color:#c4e6ff}
 .route-page{position:fixed;inset:0;z-index:1001;display:none;background:#252525;overflow-y:auto;padding:clamp(14px,4vw,28px);touch-action:pan-y}
 .descent-calibration-page{position:fixed;inset:0;z-index:1002;display:none;background:#252525;overflow-y:auto;padding:clamp(14px,4vw,28px);touch-action:pan-y}
 .vibration-calibration-page{position:fixed;inset:0;z-index:1003;display:none;background:#252525;overflow-y:auto;padding:clamp(14px,4vw,28px);touch-action:pan-y}
@@ -170,6 +170,13 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
 .console-output{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;touch-action:pan-y;user-select:text;-webkit-user-select:text;font-family:'Courier New',monospace;font-size:0.7rem;color:#00ff88;word-break:break-all;-webkit-overflow-scrolling:touch}
 .console-output,.console-output *{touch-action:pan-y;user-select:text;-webkit-user-select:text}
 .console-output div{padding:1px 0;border-bottom:1px solid rgba(255,255,255,.03)}
+.console-tools{display:flex;flex-direction:column;gap:7px;padding:8px;border:1px solid rgba(110,190,255,.25);border-radius:8px;background:rgba(30,90,140,.12)}
+.console-tools-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.console-tools-row strong{font-size:.72rem;color:#c4e6ff;margin-right:2px}
+.console-tools button{border:1px solid #526b7d;border-radius:6px;background:#263640;color:#e9f6ff;padding:5px 8px;font-size:.68rem;cursor:pointer;touch-action:manipulation}
+.console-tools button.primary{background:#1c5e8d;border-color:#58a9df}
+.console-status{min-height:1.1em;font-size:.66rem;color:#9ab0bf}
+.console-status.ok{color:#62d895}.console-status.error{color:#ff8a8a}.console-status.busy{color:#ffd166}
 
 /*======== 动画 ========*/
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(67,97,238,.7)}70%{box-shadow:0 0 0 12px rgba(67,97,238,0)}100%{box-shadow:0 0 0 0 rgba(67,97,238,0)}}
@@ -195,7 +202,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   .content>.joystick-container:last-child{grid-column:2;grid-row:2;min-width:0;overflow:hidden}
   .header h1{font-size:clamp(0.85rem,3.5vw,1.1rem)}
   .self-check-button{padding:5px 7px;font-size:.68rem}
-  #route-page-button,#descent-calibration-button,#vibration-calibration-button{padding:5px 7px;font-size:.68rem}
+  #route-page-button,#descent-calibration-button,#console-open-button{padding:5px 7px;font-size:.68rem}
   .status-bar{gap:5px;flex-wrap:wrap;justify-content:center}
   .status-item{font-size:clamp(0.6rem,2.5vw,0.7rem);padding:2px 5px}
 }
@@ -227,13 +234,12 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <button id="self-check-button" class="self-check-button" onclick="openSelfCheck()">自检状态</button>
       <button id="route-page-button" class="self-check-button" onclick="openRoutePage()">开环序列</button>
       <button id="descent-calibration-button" class="self-check-button" onclick="handleDescentCalibrationEntry()">迫降标定</button>
-      <button id="vibration-calibration-button" class="self-check-button" onclick="openVibrationCalibrationPage()">电机扰动检测</button>
+      <button id="console-open-button" class="self-check-button" onclick="toggleConsole()">调试</button>
     </nav>
     <div class="status-bar">
       <div class="status-item"><span class="status-dot" id="status-dot"></span><span id="connection-text">连接中...</span></div>
       <div class="status-item" id="armed-status-item" style="background:rgba(255,51,51,0.15)"><span id="armed-status" style="color:#ff6666">已上锁</span></div>
       <div class="status-item"><span>飞行模式</span><span id="flight-mode">自稳</span></div>
-      <button id="console-open-button" class="status-item" style="background:#24527a;color:white;border:0;cursor:pointer;touch-action:manipulation" onclick="toggleConsole()">调试</button>
       <button id="route-takeover-main" class="status-item" style="display:none;background:#167c3a;color:white;border:0" onclick="takeManualControl()">接管摇杆</button>
       <div class="status-item"><span>电池电压</span><span id="battery">-</span></div>
       <div class="status-item"><span>遥控延迟</span><span id="latency">-</span></div>
@@ -271,9 +277,14 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
     <div class="console-dialog">
       <div class="console-dialog-header"><h2 id="console-title">调试控制台</h2><button id="console-close-button" type="button" onclick="toggleConsole()">关闭</button></div>
       <div id="console-panel" class="console-panel">
+    <div class="console-tools">
+      <div class="console-tools-row"><strong>调试工具</strong><button class="primary" onclick="openVibrationCalibrationFromConsole()">电机扰动检测</button></div>
+      <div class="console-tools-row"><strong>常用命令</strong><button onclick="runConsoleCommand('diag brief')">快速预检</button><button onclick="runConsoleCommand('diag')">完整诊断</button><button onclick="runConsoleCommand('imu')">IMU</button><button onclick="runConsoleCommand('ps')">姿态</button><button onclick="runConsoleCommand('rc')">遥控输入</button><button onclick="runConsoleCommand('mot')">电机输出</button><button onclick="runConsoleCommand('wifi')">Wi-Fi</button><button onclick="runConsoleCommand('time')">循环时间</button><button onclick="runConsoleCommand('sys')">系统任务</button><button onclick="runConsoleCommand('log status')">日志状态</button><button onclick="runConsoleCommand('p')">参数列表</button><button onclick="runConsoleCommand('help')">命令帮助</button></div>
+      <div id="console-status" class="console-status" role="status">打开后将主动确认飞控处于上锁状态。</div>
+    </div>
     <div id="console-output" class="console-output"></div>
     <div style="display:flex;gap:6px;touch-action:pan-y">
-      <input id="console-input" placeholder="输入命令 (ps/imu/rc/arm/disarm/help)..."
+      <input id="console-input" placeholder="输入命令 (diag brief / imu / rc / help)..."
         style="flex:1;background:rgba(0,0,0,.6);border:1px solid rgba(100,100,100,.5);border-radius:6px;color:#0f8;padding:4px 8px;font-size:0.7rem;font-family:'Courier New',monospace;touch-action:auto">
       <button onclick="downloadConsoleLogs()" style="background:#444;border:1px solid #777;border-radius:6px;color:#fff;padding:4px 8px;font-size:0.7rem;cursor:pointer;touch-action:manipulation;white-space:nowrap">下载日志</button>
       <button onclick="sendConsoleCmd()" style="background:#1a73e8;border:none;border-radius:6px;color:#fff;padding:4px 10px;font-size:0.7rem;cursor:pointer;touch-action:auto">发送</button>
@@ -442,6 +453,7 @@ let consolePollingTimer = null;
 let consoleLastTotal    = 0;   // 增量拉取游标：已展示到第 N 行
 let consoleFetchInFlight = false; // 防并发：上次 fetch 未返回时跳过本次
 let consolePanelOpen = false;
+let consoleCommandPending = false;
 function setArmedState(armed) {
   const wasArmed = currentArmed;
   currentArmed = !!armed;
@@ -1615,26 +1627,60 @@ function showToast(msg) {
 }
 
 /*======================== 调试控制台 ========================*/
-function toggleConsole() {
+function setConsoleStatus(message,state=''){
+  const status=document.getElementById('console-status');
+  if(!status)return;
+  status.textContent=message;
+  status.className='console-status'+(state?' '+state:'');
+}
+
+async function openConsole() {
+  if(consolePanelOpen)return;
   const panel = document.getElementById('console-window');
   const btn   = document.getElementById('console-open-button');
-  const open  = !consolePanelOpen;
-  if (open && (!armedStatusKnown || currentArmed)) { showToast('请确认飞控已上锁后打开调试控制台'); return; }
-  consolePanelOpen = open;
-  panel.setAttribute('aria-hidden',open?'false':'true');
-  if (btn) { open ? btn.classList.add('active') : btn.classList.remove('active'); }
-  if (open) {
+  if(btn)btn.disabled=true;
+  try{
+    const statusResponse=await fetch('/web_rc/status',{cache:'no-store'});
+    const flightStatus=await statusResponse.json().catch(()=>({}));
+    if(!statusResponse.ok||typeof flightStatus.armed!=='boolean')throw new Error('无法确认飞控上锁状态');
+    setArmedState(flightStatus.armed);
+    if(flightStatus.armed)throw new Error('请先上锁再打开调试控制台');
+    const enableResponse=await controlFetch('/console/enable',{method:'POST'});
+    const enabled=await enableResponse.json().catch(()=>({}));
+    if(!enableResponse.ok||!enabled.ok)throw new Error(enabled.error||enabled.e||'控制台启用失败');
+    consolePanelOpen=true;
+    panel.setAttribute('aria-hidden','false');
+    if(btn)btn.classList.add('active');
     document.getElementById('console-close-button').focus();
     document.getElementById('console-output').innerHTML = '';
     consoleLastTotal = 0;
-    controlFetch('/console/enable', {method:'POST'}).catch(()=>{});
+    setConsoleStatus('控制台已连接，可输入命令或使用快捷按钮。','ok');
     fetchConsoleLogs();
-  } else {
-    controlFetch('/console/disable', {method:'POST'}).catch(()=>{});
-    clearTimeout(consolePollingTimer);
-    consolePollingTimer = null;
-    btn?.focus();
+  }catch(error){
+    const message=error.message||'调试控制台打开失败';
+    setConsoleStatus(message,'error');
+    showToast(message);
+  }finally{
+    if(btn)btn.disabled=false;
   }
+}
+
+function closeConsole(){
+  if(!consolePanelOpen)return;
+  consolePanelOpen=false;
+  document.getElementById('console-window').setAttribute('aria-hidden','true');
+  const btn=document.getElementById('console-open-button');
+  btn?.classList.remove('active');
+  clearTimeout(consolePollingTimer);consolePollingTimer=null;
+  controlFetch('/console/disable',{method:'POST'}).catch(error=>showToast(error.message||'控制台关闭请求失败'));
+  btn?.focus();
+}
+
+function toggleConsole(){consolePanelOpen?closeConsole():openConsole();}
+
+function openVibrationCalibrationFromConsole(){
+  closeConsole();
+  openVibrationCalibrationPage();
 }
 
 document.getElementById('console-window').addEventListener('click',event=>{
@@ -1721,7 +1767,8 @@ function fetchConsoleLogs() {
     else if (typeof data.total === 'number') consoleLastTotal = data.total;
 
     nextPollDelay = data.has_more ? CONSOLE_CATCHUP_POLL_MS : CONSOLE_BASE_POLL_MS;
-  }).catch(()=>{
+  }).catch(error=>{
+    setConsoleStatus(error.name==='AbortError'?'控制台读取超时，正在重试…':'控制台输出读取失败，正在重试…','error');
     nextPollDelay = CONSOLE_BASE_POLL_MS;
   }).finally(() => {
     clearTimeout(requestTimeout);
@@ -1730,20 +1777,38 @@ function fetchConsoleLogs() {
   });
 }
 
-function sendConsoleCmd() {
+async function sendConsoleCmd() {
   const input = document.getElementById('console-input');
   const cmd = input.value.trim();
-  if (!cmd) return;
-  input.value = '';
-  controlFetch('/console/cmd', {method:'POST', headers:{'Content-Type':'text/plain'}, body:cmd})
-    .then(r => r.json())
-    .then(resp => {
-      if (!resp.ok) {
-        if (resp.e === 'queue full') showToast('⚠️ 命令队列已满，请稍后重试');
-        return;
-      }
-      fetchConsoleLogs();
-    }).catch(()=>{});
+  if (!cmd||consoleCommandPending) return;
+  consoleCommandPending=true;
+  input.disabled=true;
+  setConsoleStatus(`正在发送：${cmd}`,'busy');
+  try{
+    const response=await controlFetch('/console/cmd',{method:'POST',headers:{'Content-Type':'text/plain'},body:cmd});
+    const resp=await response.json().catch(()=>({}));
+    if(!response.ok||!resp.ok){
+      const reason=resp.error||resp.e||(response.status===423?'解锁或电机输出期间暂停调试命令':'命令发送失败');
+      throw new Error(reason);
+    }
+    if(input.value.trim()===cmd)input.value='';
+    setConsoleStatus(`已提交：${cmd}`,'ok');
+    fetchConsoleLogs();
+  }catch(error){
+    const message=error.message||'命令发送失败';
+    setConsoleStatus(message,'error');
+    showToast(message);
+  }finally{
+    consoleCommandPending=false;
+    input.disabled=false;
+    input.focus();
+  }
+}
+
+function runConsoleCommand(command){
+  const input=document.getElementById('console-input');
+  input.value=command;
+  sendConsoleCmd();
 }
 
 // 回车发送 + ↑/↓ 命令历史
