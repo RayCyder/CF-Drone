@@ -1,0 +1,5 @@
+IMU: MPU-6500 detected
+CLI命令菜单，输入相应�PREFLIGHT armed=0 imu_ok=1 motor_ok=1 battery_mv=4077 faults=0x00000000
+front-right 0 front-left 0 rear-right 0 rear-left 0
+front-right 0 front-left 0 rear-right 0 rear-left 0
+PREFLIGHT armed=0 imu_ok=1 motor_ok=1 battery_mv=4077 faults=0x00000000
