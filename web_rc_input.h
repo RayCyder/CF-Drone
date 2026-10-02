@@ -1,6 +1,10 @@
 #pragma once
 
 #include <stdint.h>
+#include "control.h"
+#include "web_rc_fast_stop_policy.h"
+
+WebRCFastStopAction consumeWebRCFastStop();
 
 struct WebRCInputEvent {
 	uint8_t type;

@@ -167,19 +167,30 @@ def main():
             if state.get('armed') or state.get('throttle') != 0 or state.get('control_source') != 2:
                 raise RuntimeError(f'neutral route preflight failed: {state}')
 
+            for pressed in (1, 0):
+                button = json.dumps({'t': 2, 'b': 9, 's': pressed, 'lease': token}, separators=(',', ':'))
+                result, _ = timed_request('POST', '/web_rc', button, 'application/json')
+                record(stream, 'auto_button', pressed=pressed, response=result)
+                if result.get('s') != 'ok':
+                    raise RuntimeError(f'AUTO button rejected: {result}')
+            time.sleep(0.2)
+            route, _ = timed_request('GET', '/route/status')
+            if route.get('mode') != 4 or route.get('state') != 'ready':
+                raise RuntimeError(f'AUTO mode not ready before arming: {route}')
+
             signal.alarm(math.ceil(1.0 + args.hold_duration_s + 0.8 + 12))
             serial.send('arm')
             arm_command_sent = True
             time.sleep(0.2)
             state, _ = timed_request('GET', '/web_rc/status')
             record(stream, 'armed_check', state=state)
-            if state.get('armed') is not True or state.get('control_source') != 2:
+            if state.get('armed') is not True:
                 raise RuntimeError('route arming rejected')
-            started, _ = timed_request('POST', '/route/start' + lease_query,
-                                       urlencode({'revision': revision}), 'application/x-www-form-urlencoded')
+            started, _ = timed_request('GET', '/route/status')
             record(stream, 'start', response=started)
-            if started.get('state') != 'start_pending':
-                raise RuntimeError(f'route start rejected: {started}')
+            if (started.get('state') not in ('running', 'landing') or
+                state.get('control_source') not in (2, 3)):
+                raise RuntimeError(f'AUTO route did not start: {started}')
 
             last_stick = time.monotonic()
             last_attitude_request = time.monotonic()
@@ -197,7 +208,7 @@ def main():
                     landing_seen = True
                     time.sleep(0.2)
                     break
-                elif phase not in ('start_pending',):
+                elif phase != 'ready':
                     raise RuntimeError(f'unexpected route state: {route}')
                 if time.monotonic() - last_stick >= 0.5:
                     stick_zero(stream)

@@ -23,6 +23,7 @@
 #include "flight_log.h"
 #include "wifi_recovery_policy.h"
 #include "web_rc_lease_policy.h"
+#include "web_rc_fast_stop_policy.h"
 #include "web_armed_route_policy.h"
 
 // 飞控统一控制变量（供协议适配层写入，与 SBUS/MAVLink 共用）
@@ -71,6 +72,7 @@ static portMUX_TYPE openLoopMux = portMUX_INITIALIZER_UNLOCKED;
 static uint8_t openLoopActiveBuffer = 0;
 static uint16_t openLoopCount = 0;
 static char *openLoopUploadedText = nullptr;
+static bool openLoopRecordedInput = false;
 static uint16_t openLoopIndex = 0;
 static uint32_t openLoopTotalMs = 0;
 static uint32_t openLoopRevision = 0;
@@ -79,10 +81,7 @@ static uint32_t openLoopCurrentDeadlineMs = 0;
 static uint32_t openLoopLastSchedulerMs = 0;
 static OpenLoopControls openLoopAppliedControls = {0, 0, 0, 0};
 static bool openLoopLandingStarted = false;
-static bool openLoopStartRequested = false;
-static bool openLoopStopRequested = false;
 static bool openLoopTakeoverRequested = false;
-static uint32_t openLoopRequestedRevision = 0;
 static bool openLoopUploadInProgress = false;
 static uint8_t openLoopState = OPEN_LOOP_STATE_EMPTY;
 static const char *openLoopReason = "empty";
@@ -431,8 +430,6 @@ void cancelLocalSequenceForManualMode() {
     if (openLoopState == OPEN_LOOP_STATE_RUNNING || openLoopState == OPEN_LOOP_STATE_START_PENDING ||
         openLoopState == OPEN_LOOP_STATE_LANDING) {
         openLoopState = OPEN_LOOP_STATE_ABORTED;
-        openLoopStartRequested = false;
-        openLoopStopRequested = false;
         openLoopTakeoverRequested = false;
         openLoopLandingStarted = false;
         setOpenLoopReason("manual_takeover");
@@ -550,8 +547,6 @@ static void serviceVibrationCalibration() {
 
 static void enterOpenLoopLandingLocked(const char *reason) {
     openLoopState = OPEN_LOOP_STATE_LANDING;
-    openLoopStartRequested = false;
-    openLoopStopRequested = false;
     openLoopTakeoverRequested = false;
     openLoopLandingStarted = false;
     setOpenLoopReason(reason);
@@ -561,6 +556,7 @@ static void stepOpenLoopSequence() {
     bool beginLanding = false;
     bool requestManualStab = false;
     bool applyStep = false;
+    bool recordedInput = false;
     OpenLoopPackedStep step;
     uint32_t elapsedForSlew = 0;
     const uint32_t now = millis();
@@ -568,20 +564,16 @@ static void stepOpenLoopSequence() {
     portENTER_CRITICAL(&openLoopMux);
     if (openLoopTakeoverRequested) {
         openLoopTakeoverRequested = false;
-        openLoopStartRequested = false;
-        openLoopStopRequested = false;
         openLoopState = OPEN_LOOP_STATE_ABORTED;
         openLoopLandingStarted = false;
         setOpenLoopReason("takeover_requested");
         requestManualStab = true;
-    } else if (openLoopStopRequested) {
-        openLoopStopRequested = false;
-        if (armed) enterOpenLoopLandingLocked("stop_requested");
-        else {
-            openLoopState = OPEN_LOOP_STATE_COMPLETE;
-            setOpenLoopReason("stop_disarmed");
-        }
     }
+
+    if (isControlledLandingActive() &&
+        (openLoopState == OPEN_LOOP_STATE_RUNNING ||
+         openLoopState == OPEN_LOOP_STATE_START_PENDING))
+        enterOpenLoopLandingLocked("operator_landing");
 
     // An uploaded plan is the single local AUTO program. Start on the next
     // armed AUTO flight-loop tick; the browser does not stream replay inputs.
@@ -589,29 +581,6 @@ static void stepOpenLoopSequence() {
         !openLoopUploadInProgress && armed && mode == AUTO &&
         !isControlledLandingActive() && isWebRCEnabled()) {
         startOpenLoopNow(now);
-    }
-
-    if (openLoopStartRequested && openLoopState == OPEN_LOOP_STATE_START_PENDING) {
-        if (openLoopRequestedRevision != openLoopRevision) {
-            openLoopState = OPEN_LOOP_STATE_READY;
-            openLoopStartRequested = false;
-            setOpenLoopReason("revision_mismatch");
-        } else if (openLoopCount == 0) {
-            openLoopState = OPEN_LOOP_STATE_EMPTY;
-            openLoopStartRequested = false;
-            setOpenLoopReason("no_uploaded_sequence");
-        } else if (!isWebRCEnabled()) {
-            openLoopState = OPEN_LOOP_STATE_READY;
-            openLoopStartRequested = false;
-            setOpenLoopReason("web_rc_link_required");
-        } else if (!armed || mode != STAB) {
-            openLoopState = OPEN_LOOP_STATE_READY;
-            openLoopStartRequested = false;
-            setOpenLoopReason("requires_armed_stab");
-        } else {
-            openLoopStartRequested = false;
-            startOpenLoopNow(now);
-        }
     }
 
     if (openLoopState == OPEN_LOOP_STATE_LANDING) {
@@ -653,6 +622,7 @@ static void stepOpenLoopSequence() {
             if (openLoopState == OPEN_LOOP_STATE_RUNNING) {
                 copyOpenLoopStep(openLoopActiveBuffer, openLoopIndex, step);
                 elapsedForSlew = dtMs;
+                recordedInput = openLoopRecordedInput;
                 openLoopLastSchedulerMs = now;
                 applyStep = true;
             }
@@ -667,7 +637,11 @@ static void stepOpenLoopSequence() {
         openLoopMapStepToControls(step, stickDeadzone, throttleDeadzone,
                                   webRCStickScale, webRCYawScale, webRCThrottleScale, target);
         portENTER_CRITICAL(&openLoopMux);
-        openLoopSlewControls(openLoopAppliedControls, target, elapsedForSlew);
+        // Browser recordings already contain the pilot's time-varying stick
+        // values. A second slew changes their amplitude and timing. Keep the
+        // existing slew for authored plans that lack the recording marker.
+        if (recordedInput) openLoopAppliedControls = target;
+        else openLoopSlewControls(openLoopAppliedControls, target, elapsedForSlew);
         OpenLoopControls controls = openLoopAppliedControls;
         portEXIT_CRITICAL(&openLoopMux);
         applyOpenLoopControls(controls);
@@ -747,6 +721,62 @@ static ResponsiveWebServer responsiveWebRCServer(80);
 WebServer &webRCServer = responsiveWebRCServer; // 主服务器：80端口
 static uint32_t webRCMaxRequestUs = 0;
 static uint32_t webRCSlowRequests = 0;
+
+#if CF_DRONE_ENABLE_FAST_STOP_SERVER
+// A separate tiny listener prevents a slow page/download request on port 80
+// from queueing an emergency stop behind WebServer::handleClient().
+static WiFiServer fastStopServer(82);
+static uint8_t pendingFastStop = WEB_RC_FAST_STOP_NONE;
+static void copyWebRCStopToken(char *destination);
+
+WebRCFastStopAction consumeWebRCFastStop() {
+    return (WebRCFastStopAction)__atomic_exchange_n(&pendingFastStop,
+        (uint8_t)WEB_RC_FAST_STOP_NONE, __ATOMIC_ACQ_REL);
+}
+
+static void serviceFastStopClient() {
+    static WiFiClient client;
+    static uint32_t acceptedAtMs = 0;
+    static char requestLine[48];
+    static size_t lineLength = 0;
+    if (!client) {
+        client = fastStopServer.available();
+        if (!client) return;
+        acceptedAtMs = millis();
+        lineLength = 0;
+    }
+    bool complete = false;
+    while (client.available() > 0 && lineLength < sizeof(requestLine) - 1) {
+        const int next = client.read();
+        if (next < 0) break;
+        if (next == '\n') { complete = true; break; }
+        requestLine[lineLength++] = (char)next;
+    }
+    if (!complete) {
+        // Never let a partial or slow client delay a later stop request.
+        if (lineLength == sizeof(requestLine) - 1 ||
+            (uint32_t)(millis() - acceptedAtMs) >= 4 || !client.connected())
+            client.stop();
+        return;
+    }
+    requestLine[lineLength] = '\0';
+    char stopToken[WEB_RC_LEASE_TOKEN_CHARS + 1];
+    copyWebRCStopToken(stopToken);
+    const WebRCFastStopAction action = parseWebRCFastStopRequest(requestLine, stopToken);
+    if (action != WEB_RC_FAST_STOP_NONE) {
+        // Kill takes priority over lock, and both take priority over landing.
+        uint8_t old = __atomic_load_n(&pendingFastStop, __ATOMIC_RELAXED);
+        if ((uint8_t)action > old)
+            __atomic_store_n(&pendingFastStop, (uint8_t)action, __ATOMIC_RELEASE);
+    }
+    client.print(action != WEB_RC_FAST_STOP_NONE
+        ? "HTTP/1.1 204 No Content\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+        : "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+    client.stop();
+}
+#else
+WebRCFastStopAction consumeWebRCFastStop() { return WEB_RC_FAST_STOP_NONE; }
+#endif
 
 #if WIFI_ENABLED
 extern bool isWiFiConfigPortalActive();
@@ -829,6 +859,27 @@ static portMUX_TYPE webRCInputMux = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE webRCStateMux = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE webRCWarnMux = portMUX_INITIALIZER_UNLOCKED;
 static WebRCLeasePolicy webRCLease;
+static char webRCStopToken[WEB_RC_LEASE_TOKEN_CHARS + 1] = {};
+static portMUX_TYPE webRCStopTokenMux = portMUX_INITIALIZER_UNLOCKED;
+static bool webRCStopTokenMatches(const char *candidate) {
+    portENTER_CRITICAL(&webRCStopTokenMux);
+    const bool matches = candidate && webRCStopToken[0] &&
+        strncmp(webRCStopToken, candidate, WEB_RC_LEASE_TOKEN_CHARS + 1) == 0;
+    portEXIT_CRITICAL(&webRCStopTokenMux);
+    return matches;
+}
+static void publishWebRCStopToken(const char *token) {
+    portENTER_CRITICAL(&webRCStopTokenMux);
+    memcpy(webRCStopToken, token, WEB_RC_LEASE_TOKEN_CHARS + 1);
+    portEXIT_CRITICAL(&webRCStopTokenMux);
+}
+#if CF_DRONE_ENABLE_FAST_STOP_SERVER
+static void copyWebRCStopToken(char *destination) {
+    portENTER_CRITICAL(&webRCStopTokenMux);
+    memcpy(destination, webRCStopToken, WEB_RC_LEASE_TOKEN_CHARS + 1);
+    portEXIT_CRITICAL(&webRCStopTokenMux);
+}
+#endif
 extern void setWebConsoleCommandOutput(bool enabled);
 
 uint16_t getWebRCButtons() {
@@ -899,9 +950,8 @@ static void clearWebRCQueuedInputAndButtons() {
 
 static void makeWebRCLeaseToken(char *token, size_t capacity) {
     if (!token || capacity < WEB_RC_LEASE_TOKEN_CHARS + 1) return;
-    static uint32_t sequence = 0;
     const uint32_t a = (uint32_t)esp_random();
-    const uint32_t b = (uint32_t)millis() ^ (++sequence * 0x9E3779B9UL);
+    const uint32_t b = (uint32_t)esp_random();
     snprintf(token, capacity, "%08lX%08lX", (unsigned long)a, (unsigned long)b);
 }
 
@@ -933,6 +983,20 @@ static bool readWebRCLeaseToken(const String *body, char *token, size_t capacity
     return true;
 }
 
+static bool readWebRCStopToken(const String &body, char *token, size_t capacity) {
+    if (!token || capacity < WEB_RC_LEASE_TOKEN_CHARS + 1) return false;
+    const char *field = strstr(body.c_str(), "\"stop\"");
+    const char *colon = field ? strchr(field, ':') : nullptr;
+    const char *quote = colon ? strchr(colon, '"') : nullptr;
+    if (!quote) return false;
+    const char *value = quote + 1;
+    const char *end = strchr(value, '"');
+    if (!end || end - value != WEB_RC_LEASE_TOKEN_CHARS) return false;
+    memcpy(token, value, WEB_RC_LEASE_TOKEN_CHARS);
+    token[WEB_RC_LEASE_TOKEN_CHARS] = '\0';
+    return true;
+}
+
 static bool isWebRCEmergencyButtonOverride(const String &body) {
     const char *json = body.c_str();
     const char *typePos = strstr(json, "\"t\":");
@@ -950,6 +1014,14 @@ static bool requireWebRCLease(const String *body = nullptr) {
         return false;
     }
     return true;
+}
+
+static bool requireWebRCStopToken(const String &body) {
+    char token[WEB_RC_LEASE_TOKEN_CHARS + 1];
+    if (readWebRCStopToken(body, token, sizeof(token)) &&
+        webRCStopTokenMatches(token)) return true;
+    webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"web_rc_stop_token_required\"}");
+    return false;
 }
 
 bool enqueueConsoleCmd(const char* cmd) {
@@ -1073,6 +1145,7 @@ void setWebRCInput(float roll, float pitch, float yaw, float throttle) {
         controlTime     = t;
     }
 
+#if CF_DRONE_ENABLE_WEB_INPUT_EVENT_LOG
     static float lastLoggedThrottle = -1.0f;
     if (fabsf(pThrottle - lastLoggedThrottle) > 5.0f) {
         char event[96];
@@ -1081,6 +1154,7 @@ void setWebRCInput(float roll, float pitch, float yaw, float throttle) {
         recordSystemLogEvent("WEB_RC_INPUT", event);
         lastLoggedThrottle = pThrottle;
     }
+#endif
 }
 
 // ==================== JSON 协议处理器 ====================
@@ -1200,7 +1274,9 @@ static void handleWebRCRequestBody() {
         return;
     }
     String body = webRCServer.arg("plain");
-    if (!isWebRCEmergencyButtonOverride(body) && !requireWebRCLease(&body)) return;
+    if (isWebRCEmergencyButtonOverride(body)) {
+        if (!requireWebRCStopToken(body)) return;
+    } else if (!requireWebRCLease(&body)) return;
     if (handleJSONProtocol(body)) {
         char resp[320];
         // warn 在按钮事件（rt=2）和心跳包（rt=4）响应中携带并清除：
@@ -1348,7 +1424,38 @@ void setupWebRC() {
             return;
         }
 #endif
-        webRCServer.send_P(200, "text/html; charset=utf-8", webRCIndexHtml);
+        // send_P performs one large write for this 100+ KiB page and ignores
+        // a short write. A truncated response leaves later JS functions
+        // undefined in the browser. Send bounded pieces and account for every
+        // byte before closing the connection.
+        WiFiClient client = webRCServer.client();
+        client.setNoDelay(true);
+        const size_t length = sizeof(webRCIndexHtml) - 1;
+        char header[160];
+        const int headerLength = snprintf(header, sizeof(header),
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+            "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: %u\r\n\r\n",
+            (unsigned)length);
+        if (headerLength <= 0 || headerLength >= (int)sizeof(header) ||
+            client.write((const uint8_t *)header, (size_t)headerLength) != (size_t)headerLength) {
+            client.stop();
+            return;
+        }
+        size_t sent = 0;
+        uint32_t lastProgressMs = millis();
+        while (sent < length && client.connected()) {
+            const size_t remaining = length - sent;
+            const size_t chunk = remaining < 1024 ? remaining : 1024;
+            const size_t written = client.write((const uint8_t *)webRCIndexHtml + sent, chunk);
+            if (written > 0) {
+                sent += written;
+                lastProgressMs = millis();
+            } else if ((uint32_t)(millis() - lastProgressMs) > 5000) {
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
+        client.stop();
     });
 #if WIFI_ENABLED
     webRCServer.on("/wifi", HTTP_GET, []() {
@@ -1450,6 +1557,12 @@ void setupWebRC() {
 #endif
     webRCServer.on("/web_rc/lease", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
+        // A fresh page may take control while disarmed. In flight, only the
+        // current page's stop token can renew an expired lease.
+        if (armed && !webRCStopTokenMatches(webRCServer.arg("stop").c_str())) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"web_rc_stop_token_required\"}");
+            return;
+        }
         char token[WEB_RC_LEASE_TOKEN_CHARS + 1];
         makeWebRCLeaseToken(token, sizeof(token));
         bool ownerChanged = false;
@@ -1464,10 +1577,13 @@ void setupWebRC() {
             return;
         }
         if (ownerChanged) clearWebRCQueuedInputAndButtons();
-        char response[128];
+        char stopToken[WEB_RC_LEASE_TOKEN_CHARS + 1];
+        makeWebRCLeaseToken(stopToken, sizeof(stopToken));
+        publishWebRCStopToken(stopToken);
+        char response[192];
         snprintf(response, sizeof(response),
-            "{\"ok\":1,\"lease\":\"%s\",\"timeout_ms\":%lu}",
-            token, (unsigned long)WEB_RC_TIMEOUT_MS);
+            "{\"ok\":1,\"lease\":\"%s\",\"stop\":\"%s\",\"timeout_ms\":%lu}",
+            token, stopToken, (unsigned long)WEB_RC_TIMEOUT_MS);
         webRCServer.send(200, "application/json", response);
     });
     webRCServer.on("/web_rc",           HTTP_POST, handleWebRCRequest);
@@ -1496,6 +1612,7 @@ void setupWebRC() {
             return;
         }
         const String body = webRCServer.arg("plain");
+        const bool recordedInput = body.startsWith("# WEB_RC_RECORDED_V1\n");
         const OpenLoopParseResult parsed = parseOpenLoopSequenceText(
             body.c_str(), body.length(), openLoopBuffers[stagingIndex], OPEN_LOOP_MAX_STEPS);
         if (!parsed.ok || armed || motorsActive()) {
@@ -1525,14 +1642,13 @@ void setupWebRC() {
         openLoopCount = parsed.count;
         previousText = openLoopUploadedText;
         openLoopUploadedText = uploadedText;
+        openLoopRecordedInput = recordedInput;
         openLoopTotalMs = parsed.totalMs;
         openLoopIndex = 0;
         openLoopRevision++;
         if (openLoopRevision == 0) openLoopRevision = 1;
         revision = openLoopRevision;
         openLoopState = OPEN_LOOP_STATE_READY;
-        openLoopStartRequested = false;
-        openLoopStopRequested = false;
         openLoopTakeoverRequested = false;
         openLoopUploadInProgress = false;
         setOpenLoopReason("uploaded");
@@ -1565,42 +1681,6 @@ void setupWebRC() {
         webRCServer.sendHeader("X-Plan-Revision", String(revision));
         webRCServer.send(200, "text/plain; charset=utf-8", text);
     });
-    webRCServer.on("/route/start", HTTP_POST, []() {
-        if (rejectFlightApiInConfigPortal()) return;
-        if (!requireWebRCLease()) return;
-        uint32_t revision = 0;
-        if (!parseRevisionArg(revision)) {
-            webRCServer.send(400, "application/json", "{\"ok\":0,\"error\":\"missing_revision\"}");
-            return;
-        }
-        portENTER_CRITICAL(&openLoopMux);
-        const bool accepted = !openLoopUploadInProgress && openLoopState == OPEN_LOOP_STATE_READY &&
-            openLoopCount > 0 && revision == openLoopRevision && isWebRCEnabled() && armed && mode == STAB;
-        if (accepted) {
-            openLoopRequestedRevision = revision;
-            openLoopStartRequested = true;
-            openLoopState = OPEN_LOOP_STATE_START_PENDING;
-            setOpenLoopReason("start_pending");
-        }
-        portEXIT_CRITICAL(&openLoopMux);
-        if (!accepted) {
-            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires_current_plan_connected_armed_stab\"}");
-            return;
-        }
-        webRCServer.send(202, "application/json", "{\"ok\":1,\"state\":\"start_pending\",\"pending\":true}");
-    });
-    webRCServer.on("/route/stop", HTTP_POST, []() {
-        if (rejectFlightApiInConfigPortal()) return;
-        portENTER_CRITICAL(&openLoopMux);
-        const bool active = openLoopState == OPEN_LOOP_STATE_RUNNING || openLoopState == OPEN_LOOP_STATE_START_PENDING;
-        if (active) openLoopStopRequested = true;
-        portEXIT_CRITICAL(&openLoopMux);
-        if (!active) {
-            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"sequence_not_running\"}");
-            return;
-        }
-        webRCServer.send(202, "application/json", "{\"ok\":1,\"pending\":true}");
-    });
     webRCServer.on("/route/takeover", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
         if (!requireWebRCLease()) return;
@@ -1620,7 +1700,7 @@ void setupWebRC() {
         uint16_t count, index;
         uint32_t totalMs, revision;
         const char *reason;
-        bool pending;
+        bool pending, recordedInput;
         portENTER_CRITICAL(&openLoopMux);
         state = openLoopState;
         count = openLoopCount;
@@ -1628,14 +1708,16 @@ void setupWebRC() {
         totalMs = openLoopTotalMs;
         revision = openLoopRevision;
         reason = openLoopReason;
-        pending = openLoopStartRequested || openLoopStopRequested || openLoopTakeoverRequested;
+        pending = openLoopTakeoverRequested;
+        recordedInput = openLoopRecordedInput;
         portEXIT_CRITICAL(&openLoopMux);
-        char response[256];
+        char response[288];
         snprintf(response, sizeof(response),
-            "{\"state\":\"%s\",\"count\":%u,\"step\":%u,\"duration_s\":%.1f,\"plan_revision\":%lu,\"pending\":%s,\"reason\":\"%s\",\"arm\":%d,\"mode\":%d}",
+            "{\"state\":\"%s\",\"count\":%u,\"step\":%u,\"duration_s\":%.1f,\"plan_revision\":%lu,\"pending\":%s,\"reason\":\"%s\",\"arm\":%d,\"mode\":%d,\"recorded\":%s}",
             openLoopStateName(state), (unsigned)count,
             (unsigned)(index < count ? index + 1 : count), totalMs / 1000.0,
-            (unsigned long)revision, pending ? "true" : "false", reason, (int)armed, mode);
+            (unsigned long)revision, pending ? "true" : "false", reason, (int)armed, mode,
+            recordedInput ? "true" : "false");
         webRCServer.send(200, "application/json", response);
     });
 
@@ -2474,6 +2556,20 @@ void setupWebRC() {
 
     webRCServer.begin();
 
+#if CF_DRONE_ENABLE_FAST_STOP_SERVER
+    fastStopServer.begin();
+    if (xTaskCreatePinnedToCore([](void*) {
+            for (;;) {
+                serviceFastStopClient();
+                vTaskDelay(pdMS_TO_TICKS(1));
+            }
+        }, "web_rc_stop", 3072, nullptr, 2, nullptr, 0) != pdPASS) {
+        print("WEB_RC_FAST_STOP state=DISABLED reason=task_create_failed\n");
+    } else {
+        print("WEB_RC_FAST_STOP state=READY port=82 core=0 priority=2\n");
+    }
+#endif
+
     if (xTaskCreatePinnedToCore([](void*) {
             for (;;) {
                 webRCServer.handleClient();
@@ -2530,6 +2626,7 @@ void readWebRC() {
 #else
 void setupWebRC() { print("Web RC已禁用\n"); }
 void readWebRC()  {}
+WebRCFastStopAction consumeWebRCFastStop() { return WEB_RC_FAST_STOP_NONE; }
 void processConsoleCommandQueue() {}
 bool isLevelCalibrationActive() { return false; }
 #endif

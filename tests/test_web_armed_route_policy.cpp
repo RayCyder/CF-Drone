@@ -10,8 +10,8 @@ int main() {
         assert(!webArmedRouteAllowed(path, false, true));
     }
     const char *postAllowed[] = {
-        "/web_rc", "/web_rc/heartbeat", "/web_rc/lease", "/route/start",
-        "/route/stop", "/route/takeover", "/descent-calibration/start",
+        "/web_rc", "/web_rc/heartbeat", "/web_rc/lease",
+        "/route/takeover", "/descent-calibration/start",
         "/descent-calibration/stop", "/console/disable"
     };
     for (const char *path : postAllowed) {
@@ -24,6 +24,8 @@ int main() {
     assert(!webArmedRouteAllowed("/logs.csv", true, false));
     assert(!webArmedRouteAllowed("/diag/trace.csv", true, false));
     assert(!webArmedRouteAllowed("/route/upload", false, true));
+    assert(!webArmedRouteAllowed("/route/stop", false, true));
+    assert(!webArmedRouteAllowed("/route/start", false, true));
     assert(!webArmedRouteAllowed("/level-calibration/apply", false, true));
     assert(!webArmedRouteAllowed(nullptr, true, false));
 }

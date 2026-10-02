@@ -377,6 +377,7 @@ void setLoopTimingSequence(uint32_t loopSequence) {
     currentLoopSequence = loopSequence;
 }
 
+#if CF_DRONE_ENABLE_LOOP_STAGE_MONITOR
 static void reportLoopStages() {
     static bool wasArmed = false;
     if (!armed) {
@@ -406,6 +407,7 @@ static void reportLoopStages() {
     }
     for (auto &entry : loopStages) entry.pendingWorstUs = 0;
 }
+#endif
 
 void setDiagnosticFault(DiagnosticFault fault, bool active) {
 	if (fault == DIAG_LOOP_OVERRUN && !armed) active = false;
@@ -504,6 +506,7 @@ void recordLoopTiming(float dt) {
 #if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
         trace.imuWait = currentImuWaitTrace;
 #endif
+#if CF_DRONE_ENABLE_LOOP_STAGE_MONITOR
         trace.stageUs[LOOP_TRACE_IMU_WAIT] = currentLoopTraceStages[LOOP_TRACE_IMU_WAIT];
         trace.stageUs[LOOP_TRACE_IMU_PROCESS] = currentLoopTraceStages[LOOP_TRACE_IMU_PROCESS];
         for (uint8_t i = LOOP_TRACE_RC_WEB; i <= LOOP_TRACE_WIFI_SERVICE; ++i)
@@ -512,6 +515,9 @@ void recordLoopTiming(float dt) {
         uint64_t attributedUs = 0;
         for (uint8_t i = 0; i < LOOP_TRACE_UNACCOUNTED; ++i) attributedUs += trace.stageUs[i];
         trace.stageUs[LOOP_TRACE_UNACCOUNTED] = attributedUs < us ? (uint32_t)(us - attributedUs) : 0;
+#else
+        trace.stageUs[LOOP_TRACE_UNACCOUNTED] = us;
+#endif
         portENTER_CRITICAL(&loopTraceMux);
         trace.sequence = loopTrace.nextSequence;
         loopTrace.push(trace);
@@ -533,7 +539,9 @@ void recordLoopTiming(float dt) {
 }
 
 void updateDiagnostics() {
+#if CF_DRONE_ENABLE_LOOP_STAGE_MONITOR
     reportLoopStages();
+#endif
 	extern bool imuOK;
 	extern bool motorOutputsOK;
 	extern double controlTime;

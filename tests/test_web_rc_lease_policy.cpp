@@ -28,5 +28,6 @@ int main() {
     assert(!webRCLeaseAllowsEmergencyButtonOverride(2, 0));
     assert(webRCLeaseAllowsEmergencyButtonOverride(2, 1));
     assert(webRCLeaseAllowsEmergencyButtonOverride(2, 2));
-    assert(!webRCLeaseAllowsEmergencyButtonOverride(2, 3));
+    assert(webRCLeaseAllowsEmergencyButtonOverride(2, 3));
+    assert(!webRCLeaseAllowsEmergencyButtonOverride(2, 4));
 }

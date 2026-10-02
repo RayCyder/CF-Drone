@@ -403,8 +403,12 @@ bool autoTargetTimedOut() {
 	return (uint32_t)(millis() - autoTargetLastValidMs) > AUTO_TARGET_TIMEOUT_MS;
 }
 
+static uint32_t webStopLastMs = 0;
+
 const char* armBlockReason() {
 	if (armed) return "";
+	if (webStopLastMs && (uint32_t)(millis() - webStopLastMs) < 2000)
+		return "网页上锁后请稍候再解锁";
 	if (motorTestArmInhibit) return "电机测试后请先释放解锁输入";
 	#if WEB_RC_ENABLED
 	extern bool isLocalSequenceReadyForAuto();
@@ -440,6 +444,8 @@ DisarmReason getLastDisarmReason() {
 }
 
 void disarm(DisarmReason reason) {
+	if (reason == DISARM_REASON_WEB_LOCK || reason == DISARM_REASON_WEB_EMERGENCY)
+		webStopLastMs = millis() ? millis() : 1;
 	bool outputWasActive = armed;
 	if (armed) __atomic_store_n(&lastDisarmReason, (uint8_t)reason, __ATOMIC_RELAXED);
 	for (int i = 0; i < 4; ++i) outputWasActive = outputWasActive || motors[i] != 0.0f;

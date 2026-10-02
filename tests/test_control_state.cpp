@@ -126,7 +126,15 @@ int main(){
     assert(motorMixScale<1.0f); // low collective is preserved; torque is scaled to avoid raising thrust
     assert(fabsf((satA+satB+satC+satD)*.25f-.1f)<1e-6f);
     assert(min(min(satA,satB),min(satC,satD))>=0.0f);
-    descend(); const float first=thrustTarget;
+    // A manual throttle release immediately followed by LAND must hand off
+    // from the last powered command rather than ramping up from zero.
+    thrustTarget=.7f;
+    failsafe(); // cache the powered command from the preceding control frame
+    thrustTarget=0.0f;
+    nowMs+=100;
+    descend();
+    assert(thrustTarget>.49f && thrustTarget<=ALTHOLD_HOVER_THRUST);
+    const float first=thrustTarget;
     descend(); assert(thrustTarget==first); // idempotent within one frame
     controlMode=0; controlThrottle=.7625f; // stale RC selector must not overwrite LAND
     for(int i=0;i<3000;++i){ t+=dt; ++nowMs; control(); }
@@ -135,6 +143,14 @@ int main(){
     assert(!(getActiveDiagnosticFaults() & DIAG_AUTO_TARGET_TIMEOUT)); // manual descent isn't an external timeout
     disarm(); assert(!isControlledLandingActive() && !armed);
     for(float m:motors) assert(m==0);
+    // An expired handoff must not resurrect old thrust after a long idle gap.
+    armed=true; mode=STAB; thrustTarget=.7f;
+    failsafe();
+    thrustTarget=0.0f;
+    nowMs+=LANDING_THRUST_HANDOFF_MAX_AGE_MS+1;
+    descend();
+    assert(thrustTarget<.01f);
+    disarm();
     // Heartbeats cannot keep a stale Web stick command alive while armed.
     armed=true; mode=STAB; thrustTarget=.7f;
     webRCEnabled=useWebRC=true;
@@ -284,6 +300,7 @@ int main(){
 
     clearDiagnosticHistory();
     armed=true;
+#if CF_DRONE_ENABLE_LOOP_STAGE_MONITOR
     beginLoopTraceCycle();
     recordLoopStage(LOOP_STAGE_RC_WEB,120);
     recordLoopStage(LOOP_STAGE_ESTIMATE,240);
@@ -292,16 +309,21 @@ int main(){
     recordLoopStage(LOOP_STAGE_LOOP_GAP,100);
     recordLoopStage(LOOP_STAGE_IMU_WAIT,800);
     recordLoopStage(LOOP_STAGE_IMU_PROCESS,100);
+#endif
     recordLoopTiming(.002f);
     assert(getLoopTraceCount()==1);
     LoopOverrunTrace trace;
     assert(copyLoopTrace(getLoopTraceOldestSequence(),trace));
     assert(trace.dtUs==2000);
+#if CF_DRONE_ENABLE_LOOP_STAGE_MONITOR
     assert(trace.stageUs[LOOP_TRACE_RC_WEB]==120);
     assert(trace.stageUs[LOOP_TRACE_ESTIMATE]==240);
     assert(trace.stageUs[LOOP_TRACE_LOOP_GAP]==100);
     assert(trace.stageUs[LOOP_TRACE_IMU_WAIT]==800);
     assert(trace.stageUs[LOOP_TRACE_IMU_PROCESS]==100);
     assert(trace.stageUs[LOOP_TRACE_UNACCOUNTED]==640);
+#else
+    assert(trace.stageUs[LOOP_TRACE_UNACCOUNTED]==2000);
+#endif
     puts("landing/control state regression: PASS");
 }

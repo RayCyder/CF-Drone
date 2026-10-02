@@ -142,6 +142,21 @@
 
 #endif
 
+// Optional high-rate instrumentation. Leave safety diagnostics and loop-overrun
+// detection enabled; only detailed per-stage accounting is compiled out.
+#ifndef CF_DRONE_ENABLE_LOOP_STAGE_MONITOR
+#define CF_DRONE_ENABLE_LOOP_STAGE_MONITOR 0
+#endif
+#ifndef CF_DRONE_ENABLE_FLIGHT_LOG
+#define CF_DRONE_ENABLE_FLIGHT_LOG 1
+#endif
+#ifndef CF_DRONE_ENABLE_WEB_INPUT_EVENT_LOG
+#define CF_DRONE_ENABLE_WEB_INPUT_EVENT_LOG 0
+#endif
+#ifndef CF_DRONE_ENABLE_FAST_STOP_SERVER
+#define CF_DRONE_ENABLE_FAST_STOP_SERVER 1
+#endif
+
 // ---- 兜底配置（未知芯片默认全开）----
 
 // ---- 扩展板总开关说明 ----

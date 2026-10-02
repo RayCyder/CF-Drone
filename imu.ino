@@ -86,25 +86,33 @@ void readIMU() {
 	imuSampleValid = false;
 	if (!imuOK) return; // IMU 故障时跳过，gyro/acc 保持零值，主循环继续运行
 	static uint8_t consecutiveGoodFrames = 0;
+#if CF_DRONE_ENABLE_LOOP_STAGE_MONITOR
 	const uint32_t waitStarted = micros();
+#endif
 	const bool imuDataReady = imu.waitForData(5);
 #if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
 	recordImuWaitTrace(imu.lastWaitTrace());
 #endif
 	if (!imuDataReady) {
+#if CF_DRONE_ENABLE_LOOP_STAGE_MONITOR
 		recordLoopStage(LOOP_STAGE_IMU_WAIT, micros() - waitStarted);
+#endif
 		consecutiveGoodFrames = 0;
 		setDiagnosticFault(DIAG_IMU_TIMEOUT, true);
 		return;
 	}
+#if CF_DRONE_ENABLE_LOOP_STAGE_MONITOR
 	recordLoopStage(LOOP_STAGE_IMU_WAIT, micros() - waitStarted);
 	const uint32_t processStarted = micros();
+#endif
 	Vector sampledGyro;
 	Vector sampledAcc;
 	imu.getGyro(sampledGyro.x, sampledGyro.y, sampledGyro.z);
 	imu.getAccel(sampledAcc.x, sampledAcc.y, sampledAcc.z);
 	if (!sampledGyro.valid() || !sampledAcc.valid()) {
+#if CF_DRONE_ENABLE_LOOP_STAGE_MONITOR
 		recordLoopStage(LOOP_STAGE_IMU_PROCESS, micros() - processStarted);
+#endif
 		consecutiveGoodFrames = 0;
 		setDiagnosticFault(DIAG_IMU_INVALID, true);
 		return;
@@ -117,7 +125,9 @@ void readIMU() {
 	Vector bodyAcc = (sampledAcc - accBias) / accScale;
 	Vector bodyGyro = sampledGyro - gyroBias;
 	if (!bodyAcc.valid() || !bodyGyro.valid() || !imuRotation.valid()) {
+#if CF_DRONE_ENABLE_LOOP_STAGE_MONITOR
 		recordLoopStage(LOOP_STAGE_IMU_PROCESS, micros() - processStarted);
+#endif
 		consecutiveGoodFrames = 0;
 		setDiagnosticFault(DIAG_IMU_INVALID, true);
 		return;
@@ -137,7 +147,9 @@ void readIMU() {
 	bodyAcc  = Quaternion::rotateVector(bodyAcc,  _imuRotQuat);
 	bodyGyro = Quaternion::rotateVector(bodyGyro, _imuRotQuat);
 	if (!bodyAcc.valid() || !bodyGyro.valid()) {
+#if CF_DRONE_ENABLE_LOOP_STAGE_MONITOR
 		recordLoopStage(LOOP_STAGE_IMU_PROCESS, micros() - processStarted);
+#endif
 		consecutiveGoodFrames = 0;
 		setDiagnosticFault(DIAG_IMU_INVALID, true);
 		return;
@@ -154,7 +166,9 @@ void readIMU() {
 	}
 	imuCapture.append(micros(), gyro.x, gyro.y, gyro.z, acc.x, acc.y, acc.z, imu.getTemp(),
 		rawGyroSensor.x, rawGyroSensor.y, rawGyroSensor.z);
+#if CF_DRONE_ENABLE_LOOP_STAGE_MONITOR
 	recordLoopStage(LOOP_STAGE_IMU_PROCESS, micros() - processStarted);
+#endif
 }
 
 void calibrateGyroOnce(const Vector &rawGyroSensor, const Vector &rawAccSensor) {

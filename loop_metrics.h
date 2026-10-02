@@ -5,10 +5,12 @@
 
 constexpr uint8_t LOOP_TRACE_STAGE_COUNT = 16;
 #if defined(CF_DRONE_ENABLE_TASK_SWITCH_TRACE)
-// Reserve one former ring slot for the separately retained peak record.
-constexpr uint8_t LOOP_TRACE_CAPACITY = 18;
+// Keep the task-trace image within ESP32-D DRAM; the peak and RTC records
+// remain separate from this recent-event ring.
+constexpr uint8_t LOOP_TRACE_CAPACITY = 16;
 #else
-constexpr uint8_t LOOP_TRACE_CAPACITY = 32;
+// Leave DRAM headroom for the optional per-stage monitor on ESP32-D.
+constexpr uint8_t LOOP_TRACE_CAPACITY = 30;
 #endif
 
 // Integer Q4 EMA keeps fractional-microsecond precision without floating point in
