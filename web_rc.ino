@@ -91,7 +91,7 @@ enum VibrationCalibrationState : uint8_t {
     VIBRATION_EMPTY, VIBRATION_BOOT_WAIT, VIBRATION_QUEUED, VIBRATION_BASELINE,
     VIBRATION_RUNNING, VIBRATION_COMPLETE, VIBRATION_ABORTED
 };
-static constexpr float VIBRATION_TEST_OUTPUT = 0.10f;
+static constexpr float VIBRATION_TEST_OUTPUT = 0.05f;
 static constexpr uint32_t VIBRATION_TEST_MS = 100;
 static constexpr uint32_t VIBRATION_BASELINE_MS = 200;
 static constexpr uint32_t VIBRATION_SETTLE_MS = 250;
@@ -542,7 +542,7 @@ static void serviceVibrationCalibration() {
         }
         vibrationCalibrationStartRequested = true;
         setVibrationCalibrationState(VIBRATION_QUEUED, "boot_queued");
-        recordSystemLogEvent("MOTOR_SELF_CHECK", "boot_started output=10% pulse_ms=100");
+        recordSystemLogEvent("MOTOR_SELF_CHECK", "boot_started output=5% pulse_ms=100");
     }
 #endif
     if (vibrationCalibrationState == VIBRATION_QUEUED && vibrationCalibrationStartRequested) {
@@ -2717,7 +2717,7 @@ void setupWebRC() {
     vibrationCalibrationState = VIBRATION_BOOT_WAIT;
     vibrationCalibrationReason = "boot_wait";
     portEXIT_CRITICAL(&vibrationCalibrationMux);
-    print("MOTOR_SELF_CHECK state=BOOT_WAIT delay_ms=%lu output=10%% pulse_ms=100 auto_boot=1\n",
+    print("MOTOR_SELF_CHECK state=BOOT_WAIT delay_ms=%lu output=5%% pulse_ms=100 auto_boot=1\n",
         (unsigned long)VIBRATION_BOOT_DELAY_MS);
 #endif
 
