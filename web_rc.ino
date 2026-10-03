@@ -69,6 +69,7 @@ unsigned long webRCLastStickUpdate = 0; // 最后一次摇杆包的时间戳
 // Browser-uploaded open-loop sequence. Fixed double buffers avoid heap churn and
 // keep route execution local to the flight loop after upload.
 static OpenLoopPackedStep openLoopBuffers[2][OPEN_LOOP_MAX_STEPS];
+static_assert(sizeof(openLoopBuffers) <= 3072, "Open-loop buffers static RAM budget");
 static portMUX_TYPE openLoopMux = portMUX_INITIALIZER_UNLOCKED;
 static uint8_t openLoopActiveBuffer = 0;
 static uint16_t openLoopCount = 0;
@@ -1017,6 +1018,7 @@ static WiFiServer* redirectServer8080 = nullptr;
 #define CONSOLE_LINES    BOARD_CONSOLE_LINES    // 控制台行数：C3=20（节省~7KB RAM）/ ESP32&S3=50
 #define CONSOLE_LINE_LEN BOARD_CONSOLE_LINE_LEN  // 每行字符数：C3=160 / ESP32&S3=240
 static char consoleBuf[CONSOLE_LINES][CONSOLE_LINE_LEN];
+static_assert(sizeof(consoleBuf) <= 11280, "Web console static RAM budget");
 static int  consoleTail   = 0;
 static int  consoleFilled = 0;
 static int  consoleTotal  = 0;   // 单调递增总行数，用于增量拉取

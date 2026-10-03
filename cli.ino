@@ -104,7 +104,7 @@ const char* motd =
 "mfr, mfl, mrr, mrl - 测试马达 (马达不受算法影响运转，为了安全不要装桨叶！！！)\n"
 "ca - 六面校准加速度计\n"
 "imucap [start|raw-start|stop|status|dump|dump-temp|dump-raw-temp] - 采集/导出约1秒、1kHz IMU数据（仅上锁）\n"
-"ps - 显示pitch/roll/yaw姿态\n"
+"ps - 显示pitch/roll和陀螺积分相对yaw\n"
 "cr - 校准RC遥控器\n"
 "rc - 显示RC遥控数据\n"
 "wifi - 显示WiFi信息\n"
@@ -116,6 +116,7 @@ const char* motd =
 "psq - 显示姿态四元数\n"
 "imu - 显示IMU数据\n"
 "sensors - 读取H6上的BMP388气压计与QMC5883P指南针\n"
+"magcal start|status|stop|save|align <deg>|reset - 校准QMC5883P软硬铁偏差和航向安装偏角\n"
 "time - 显示时间信息\n"
 "mot - 显示motor输出\n"
 "sys - 显示系统info信息\n"
@@ -242,7 +243,7 @@ void doCommand(String str, bool echo = false) {
 		print("dt: %f\n", dt);
 	} else if (command == "ps") {
 		Vector a = attitude.toEuler();
-		print("roll: %f pitch: %f yaw: %f\n", degrees(a.x), degrees(a.y), degrees(a.z));
+		print("roll: %f pitch: %f yaw_gyro_relative: %f\n", degrees(a.x), degrees(a.y), degrees(a.z));
 	} else if (command == "psq") {
 		print("qw: %f qx: %f qy: %f qz: %f\n", attitude.w, attitude.x, attitude.y, attitude.z);
 	} else if (command == "imu") {
@@ -250,7 +251,29 @@ void doCommand(String str, bool echo = false) {
 		printIMUCalibration();
 		print("landed: %d\n", landed);
 	} else if (command == "sensors") {
-		printExternalSensorReadings();
+		printExternalSensorReadings(attitude.getRoll(), attitude.getPitch());
+	} else if (command == "magcal") {
+		if (arg0 == "start") {
+			if (startMagCalibration()) print("MAG_CAL started; keep motors stopped and slowly rotate the aircraft through all axes for 30-60 seconds.\n");
+			else print("MAG_CAL start rejected: compass unavailable or outputs active.\n");
+		} else if (arg0 == "stop") {
+			stopMagCalibration();
+			printMagCalibrationStatus();
+		} else if (arg0 == "status") {
+			printMagCalibrationStatus();
+		} else if (arg0 == "save") {
+			print(saveMagCalibration() ? "MAG_CAL saved and verified in NVS.\n" : "MAG_CAL save rejected: stop collection and ensure all three axes have adequate coverage.\n");
+		} else if (arg0 == "align") {
+			char *end = nullptr;
+			const float knownHeading = strtof(arg1.c_str(), &end);
+			const bool validNumber = arg1.length() > 0 && end != arg1.c_str() && *end == '\0';
+			if (validNumber && alignMagHeading(knownHeading, attitude.getRoll(), attitude.getPitch())) print("MAG_CAL heading alignment updated in RAM; use magcal save to persist it.\n");
+			else print("MAG_CAL align rejected: first save a valid calibration, keep outputs stopped, and supply reference magnetic heading in degrees [0,360).\n");
+		} else if (arg0 == "reset") {
+			print(resetMagCalibration() ? "MAG_CAL saved calibration erased; compass heading will remain unavailable until recalibrated.\n" : "MAG_CAL reset rejected: stop outputs and retry when NVS is available.\n");
+		} else {
+			print("Usage: magcal start|status|stop|save|align <deg>|reset\n");
+		}
 	} else if (command == "imucap") {
 		if (arg0 == "start" || arg0 == "raw-start") {
 			const bool captureRawGyro = arg0 == "raw-start";

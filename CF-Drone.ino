@@ -162,6 +162,7 @@ void loop() {
 	updateBatteryVoltage(); // 更新电池电压采样与低电压保护判断
 	MONITOR_STAGE(LOOP_STAGE_BATTERY_ADC);
 	serviceMotorTest(); // 命中3秒截止时间时先清零试转输出
+	updateExternalSensors(); // Low-rate compass calibration sampling; active only while disarmed
 	if (!motorTestActive) control(); // 单电机诊断试转期间维持目标输出，其余飞控循环保持正常频率
 	MONITOR_STAGE(LOOP_STAGE_CONTROL_LAW);
 	sendMotors(); // 将电机控制量输出到电机（PWM/DShot）

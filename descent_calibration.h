@@ -161,3 +161,6 @@ private:
 	uint8_t nonStabSamples_ = 0;
 	const char *reason_ = "empty";
 };
+
+static_assert(sizeof(DescentCalibrationRecorder) <= 12 * 1024,
+	"Descent calibration static RAM budget");
