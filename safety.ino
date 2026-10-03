@@ -122,15 +122,25 @@ void rcLossFailsafe() {
 // only a conservative fixed-thrust descent, not closed-loop speed control.
 void descend() {
 	const bool firstLandingFrame = !controlledLandingActive;
-	controlledLandingActive = true;
-	setCurrentControlSource(CONTROL_SOURCE_LANDING);
 	if (firstLandingFrame) {
 		const float entryThrust = thrustTarget;
 		const uint32_t handoffAgeMs = millis() - recentPoweredAtMs;
+		const bool poweredEntry = isfinite(entryThrust) && entryThrust > LANDING_IDLE_THRUST_MAX;
+		const bool recentPoweredHandoff =
+			isfinite(recentPoweredThrust) &&
+			recentPoweredThrust >= LANDING_THRUST_HANDOFF_MIN &&
+			handoffAgeMs <= LANDING_THRUST_HANDOFF_MAX_AGE_MS;
+		if (armed && !poweredEntry && !recentPoweredHandoff) {
+			recordSystemLogEvent("LANDING", "idle_entry_disarm");
+			disarm(DISARM_REASON_FAILSAFE_IDLE);
+			print("下降请求发生在零油门怠速，已立即停机上锁\n");
+			return;
+		}
+		controlledLandingActive = true;
+		setCurrentControlSource(CONTROL_SOURCE_LANDING);
 		bool restored = false;
 		if (armed && isfinite(entryThrust) && entryThrust < LANDING_THRUST_HANDOFF_MIN &&
-			isfinite(recentPoweredThrust) &&
-			handoffAgeMs <= LANDING_THRUST_HANDOFF_MAX_AGE_MS) {
+			recentPoweredHandoff) {
 			thrustTarget = min(recentPoweredThrust, ALTHOLD_HOVER_THRUST);
 			restored = true;
 		}

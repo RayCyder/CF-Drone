@@ -171,6 +171,20 @@ int main(){
     assert(!(getActiveDiagnosticFaults() & DIAG_WEB_RC_LOSS));
     assert(!webRCEnabled && !useWebRC);
     disarm();
+    // A live Web RC session that times out while armed at idle must stop and
+    // lock. Entering the landing ramp here would raise thrust by itself.
+    armed=true; mode=STAB; thrustTarget=0.0f;
+    webRCEnabled=useWebRC=true;
+    webRCLastUpdate=webRCLastStickUpdate=nowMs;
+    webRCLossFailsafe();
+    nowMs+=9000;
+    webRCLossFailsafe();
+    assert(!armed);
+    assert(!isControlledLandingActive());
+    assert(thrustTarget==0.0f);
+    for(float motor:motors) assert(motor==0);
+    webRCLossFailsafe(); // clear the timeout latch after the disarm
+    setDiagnosticFault(DIAG_WEB_RC_LOSS, false);
     // A stale pre-arm RC timestamp at zero throttle must not enter the landing
     // ramp after arming; that would raise thrust without a live pilot input.
     setCurrentControlSource(CONTROL_SOURCE_PHYSICAL_RC);
