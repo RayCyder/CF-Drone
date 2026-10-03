@@ -293,6 +293,14 @@ After the separate Wi-Fi/Web repair work, the same STA address became reachable 
 
 This run did not apply full Web throttle, so it does not resolve the earlier full-input throttle-drop mechanism. The retained logs do not identify which action entered controlled descent or caused the disarm; the Web link was fresh (`rc_age_s <= 0.27 s`) in the final window. The large loaded voltage sag is confirmed. Further full-power tests should wait for a charged/known-good battery and a check of the replacement FR motor's current draw.
 
+## 2026-10-04 解锁后 Web 失联与自行加油
+
+现场快照以 `reasonMask=32` 冻结，对应 `DIAG_WEB_RC_LOSS`。400 条、约 4 秒的 100 Hz 飞行日志全部处于解锁状态；控制源先为 Web RC，Wi-Fi 在约 `216.113 s` 断开，随后控制源切换为下降。切换前 `thrustTarget=0`，四路只有解锁怠速输出；切换后旧代码把推力从零逐步提高到下降目标，因此表现为“自行启动”。同一窗口内主循环最大采样间隔为 `1.263 ms`，没有测到主循环卡死。生产 trace 另保留一个 `6.343 ms` 的未归因间隔，但它不在上述自行加油窗口，且普通固件未启用阶段计时，不能据此归因到 IMU。
+
+修复后，任意下降入口若处于零油门，且最近 200 ms 内没有有效动力推力交接，会立即停机上锁，不进入下降增推。有效飞行推力下仍保留快速队列迫降。上电四电机响应检测维持普通固件默认开启，但测试始终在锁定状态运行；所有脉冲入口和各采集阶段均检查 `armed=false`，发现解锁立即拒绝或中止并清零。
+
+本次“Web 无响应、上锁和急停延迟”的直接限制是 Wi-Fi 数据链路已经断开：端口 80 的普通命令和端口 82 的快速急停都无法跨越失联链路送达设备。快速端口能绕过 HTTP 队头阻塞，但不能替代无线链路。零油门失联现在会由机载保护自行上锁，因此不再依赖失联期间的浏览器急停请求。
+
 ## 2026-10-02 无桨本地航线延长保持
 
 修复本地序列油门映射后，以单次上传的 `20% 1 s → 30% 10 s → 10% 0.8 s` 在无桨固定架上复测。第一次在解锁前 TCP 连通预检超时，飞控始终锁定且输出为零。第二次约在 30% 中段发现 `LOOP_OVERRUN=0x80`，脚本立即上锁；保留的最坏循环为 `1.717 ms`，其中 `imu_wait=1.071 ms`，估计计算约 `0.060 ms`，并未出现 5 ms 级停顿。[中止记录](data/attitude/prop-off-route-20261002-032834.jsonl)和[最坏循环](data/attitude/prop-off-route-20261002-032834-loop-worst.json)可复核。

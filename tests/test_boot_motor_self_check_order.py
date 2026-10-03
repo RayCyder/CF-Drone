@@ -7,6 +7,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 main = (ROOT / "CF-Drone.ino").read_text(encoding="utf-8")
 web = (ROOT / "web_rc.ino").read_text(encoding="utf-8")
+motors = (ROOT / "motors.ino").read_text(encoding="utf-8")
+board = (ROOT / "board_config.h").read_text(encoding="utf-8")
+
+assert "#define CF_DRONE_ENABLE_BOOT_MOTOR_SELF_CHECK 1" in board
 
 setup = main[main.index("void setup()") : main.index("void loop()")]
 expected_order = (
@@ -32,6 +36,18 @@ for required in (
     "phase=pre_wifi",
 ):
     assert required in runner, f"boot self-check runner lost required behavior: {required}"
+
+motor_start = motors[motors.index("bool startMotorTest(") : motors.index("void testMotor(")]
+assert "if (armed || motorTestActive" in motor_start, (
+    "motor pulses must be rejected whenever the flight controller is armed"
+)
+for state_guard in (
+    "if (armed || motorsActive() || !imuOK || !motorOutputsOK || controlThrottle > 0.01f",
+    "if (armed || motorsActive() || !motorOutputsOK || isAccelCalibrationActive()",
+    "if (armed || motorsActive() || batteryBlocksArming() || hasBlockingDiagnosticFault())",
+    "if (armed || batteryBlocksArming() || hasBlockingDiagnosticFault())",
+):
+    assert state_guard in web, f"motor self-check lost armed-state abort: {state_guard}"
 
 baseline_save = web.index("const VibrationMotorResult baseline = saveVibrationBaselineCapture()")
 baseline_reject = web.index("baseline.samples < VIBRATION_RESPONSE_MIN_BASELINE_SAMPLES", baseline_save)
