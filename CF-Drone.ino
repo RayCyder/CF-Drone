@@ -17,6 +17,7 @@
 #include "open_loop_sequence.h"
 #include "descent_calibration.h"
 #include "wifi_profiles.h"
+#include "external_sensors.h"
 #include <esp_system.h>
 
 // Arduino's sketch prototype generator omits the string overload because a
@@ -104,6 +105,7 @@ void setup() {
 	setLED(true); // 点亮LED，提示正在初始化
 	setupIMU(); // 电机加电自检依赖IMU采样，必须先于WiFi初始化
 	initializeDiagnostics();
+	setupExternalSensors(); // H6 I2C barometer/compass probe; readings stay diagnostic-only
 	runBootMotorSelfCheckBeforeWiFi(); // 保存结果供稍后启动的Web只读展示
 #if WIFI_ENABLED
 	setupWiFi(); // 初始化WiFi（用于Web遥控/MAVLink等）

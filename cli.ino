@@ -11,6 +11,7 @@
 #include "log_transfer.h"
 #include "imu_capture.h"
 #include "console_output_queue.h"
+#include "external_sensors.h"
 
 extern LowPassFilter<Vector> gyroBiasFilter;
 static LogOutputChunk serialLogChunk;
@@ -114,6 +115,7 @@ const char* motd =
 "disarm - 锁定无人机\n"
 "psq - 显示姿态四元数\n"
 "imu - 显示IMU数据\n"
+"sensors - 读取H6上的BMP388气压计与QMC5883P指南针\n"
 "time - 显示时间信息\n"
 "mot - 显示motor输出\n"
 "sys - 显示系统info信息\n"
@@ -247,6 +249,8 @@ void doCommand(String str, bool echo = false) {
 		printIMUInfo();
 		printIMUCalibration();
 		print("landed: %d\n", landed);
+	} else if (command == "sensors") {
+		printExternalSensorReadings();
 	} else if (command == "imucap") {
 		if (arg0 == "start" || arg0 == "raw-start") {
 			const bool captureRawGyro = arg0 == "raw-start";

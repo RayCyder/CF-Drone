@@ -4,3 +4,4 @@
 #include "drivers/MPU9250.cpp"
 #include "drivers/invensense_imu.cpp"
 #include "drivers/SBUS.cpp"
+#include "drivers/external_sensors.cpp"
