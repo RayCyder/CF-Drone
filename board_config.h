@@ -90,7 +90,7 @@
 // ---- 性能与资源配置（S3 标准）----
 #define BOARD_VBAT_ADC_SAMPLES       16 // 每次电压均值样本数；样本分散到多个主循环
 #define BOARD_LOG_DURATION           4  // 加入诊断字段后保留最近4秒日志，控制RAM占用
-#define BOARD_CONSOLE_LINES          50  // 控制台行数
+#define BOARD_CONSOLE_LINES          46  // 与静态 RAM 预算一致
 #define BOARD_CONSOLE_LINE_LEN       240  // 每行字符数
 #define BOARD_MAVLINK_TELEM_FAST_HZ  10  // MAVLink 快速遥测降速
 #define BOARD_WIFI_ENABLED           1
@@ -98,6 +98,8 @@
 
 // ---- 扩展板传感器 ----
 #define EXPANSION_BOARD_ENABLED      1 // 1 = 启用扩展板传感器探测（BMP388/VL53L1X/QMC5883L/PMW3901）;0 = 跳过探测，所有能力标志保持 false，不影响基础飞行功能
+#define BOARD_BAROMETER_ENABLED      0 // 当前 S3 设备未安装 BMP388
+#define BOARD_COMPASS_ENABLED        0 // 当前 S3 设备未安装 QMC5883P
 #define BOARD_VL53_XSHUT_PIN   37      // VL53L1X XSHUT，暂定 GPIO37
 #define BOARD_PMW_CS_PIN       38      // PMW3901 CS，暂定 GPIO38
 
@@ -174,6 +176,12 @@
 //   0 = 跳过探测，所有能力标志保持 false，不影响基础飞行功能
 #if !defined(EXPANSION_BOARD_ENABLED)
 #define EXPANSION_BOARD_ENABLED 1  // 兜底：未知芯片默认启用
+#endif
+#if !defined(BOARD_BAROMETER_ENABLED)
+#define BOARD_BAROMETER_ENABLED EXPANSION_BOARD_ENABLED
+#endif
+#if !defined(BOARD_COMPASS_ENABLED)
+#define BOARD_COMPASS_ENABLED EXPANSION_BOARD_ENABLED
 #endif
 
 // ---- WiFi / Web RC 开关兜底（未知芯片默认全开）----

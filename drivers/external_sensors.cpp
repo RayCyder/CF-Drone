@@ -227,6 +227,10 @@ void loadMagCalibration() {
 } // namespace
 
 void setupExternalSensors() {
+#if !BOARD_BAROMETER_ENABLED && !BOARD_COMPASS_ENABLED
+	Serial.println("EXT_SENSOR barometer=disabled compass=disabled board_config=1");
+	return;
+#endif
 #if BOARD_I2C_SDA >= 0 && BOARD_I2C_SCL >= 0
 	const bool i2cReady = Wire.begin(BOARD_I2C_SDA, BOARD_I2C_SCL, 100000);
 #else
@@ -237,10 +241,19 @@ void setupExternalSensors() {
 		return;
 	}
 	uint8_t address = 0;
+#if BOARD_BAROMETER_ENABLED
 	const bool bmpReady = beginBmp388(address);
 	bmpAddress = bmpReady ? address : 0;
+#else
+	const bool bmpReady = false;
+	bmpAddress = 0;
+#endif
+#if BOARD_COMPASS_ENABLED
 	qmcReady = beginQmc5883p();
 	loadMagCalibration();
+#else
+	qmcReady = false;
+#endif
 	Serial.printf("EXT_SENSOR bus=ready sda=%d scl=%d bmp388=%s addr=0x%02X qmc5883p=%s addr=0x%02X\n",
 		BOARD_I2C_SDA, BOARD_I2C_SCL, bmpReady ? "ready" : "not_found", bmpAddress,
 		qmcReady ? "ready" : "not_found", qmcReady ? QMC5883P_ADDR : 0);
