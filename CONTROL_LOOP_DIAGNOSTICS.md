@@ -301,6 +301,8 @@ This run did not apply full Web throttle, so it does not resolve the earlier ful
 
 本次“Web 无响应、上锁和急停延迟”的直接限制是 Wi-Fi 数据链路已经断开：端口 80 的普通命令和端口 82 的快速急停都无法跨越失联链路送达设备。快速端口能绕过 HTTP 队头阻塞，但不能替代无线链路。零油门失联现在会由机载保护自行上锁，因此不再依赖失联期间的浏览器急停请求。
 
+提交 `964874c` 的生产固件编译为 `1,376,803 B` 程序空间、`124,380 B` 静态 RAM；app 镜像为 `1,376,944 B`，SHA-256 `4fc7bac882a6eaa11319173cb10e47e94b1b1d1bc01cc9f62dc8e5625b9630c7`。目标板为 ESP32-D0WD-V3、MAC `20:50:0d:33:58:40`。仅写入 app0 `0x10000`，写入校验和独立 `verify-flash` 均成功。重启后的锁定上电检测完成 FR、FL、RR、RL 四路，四路各 495 个样本且均判定 `detected`；Web 最终状态为 `armed=false`、蓝灯不快闪、油门和目标推力为零、故障零、Wi-Fi 已连接且本次无断线，写入保护结束后 `arm_ready=true`。本次未解锁，也未执行飞行油门测试。
+
 ## 2026-10-02 无桨本地航线延长保持
 
 修复本地序列油门映射后，以单次上传的 `20% 1 s → 30% 10 s → 10% 0.8 s` 在无桨固定架上复测。第一次在解锁前 TCP 连通预检超时，飞控始终锁定且输出为零。第二次约在 30% 中段发现 `LOOP_OVERRUN=0x80`，脚本立即上锁；保留的最坏循环为 `1.717 ms`，其中 `imu_wait=1.071 ms`，估计计算约 `0.060 ms`，并未出现 5 ms 级停顿。[中止记录](data/attitude/prop-off-route-20261002-032834.jsonl)和[最坏循环](data/attitude/prop-off-route-20261002-032834-loop-worst.json)可复核。
