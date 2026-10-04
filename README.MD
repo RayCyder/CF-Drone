@@ -29,6 +29,9 @@ arduino-cli compile --fqbn esp32:esp32:esp32c3 .
 
 # ESP32-S3；默认分区的应用空间不足，需选 min_spiffs
 arduino-cli compile --fqbn esp32:esp32:esp32s3:PartitionScheme=min_spiffs .
+
+# Seeed XIAO ESP32-S3（若实际硬件为此板型，使用它自己的 8 MB 分区选项）
+arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3:PartitionScheme=default_8MB .
 ```
 
 ESP32-D 也可使用仓库脚本，它会把构建产物放在临时目录：
@@ -42,6 +45,44 @@ ESP32-D 也可使用仓库脚本，它会把构建产物放在临时目录：
 ```sh
 ARDUINO_CLI=/path/to/arduino-cli ./tools/build_esp32d.sh /tmp/cf-drone-build
 ```
+
+## 刷写固件
+
+刷写前先拆下全部螺旋桨并固定机体。ESP32-S3 固件启动时会执行电机输出自检；拆桨后再连接 USB 和电池供电。选择与实际芯片和板卡匹配的 FQBN、分区方案及串口，不能因为外观相似就混用 ESP32、C3、S3 镜像。
+
+先找到 USB 串口：macOS 可查看 `/dev/cu.*`，Linux 可查看 `/dev/ttyUSB*` 或 `/dev/ttyACM*`，Windows 可在设备管理器查看 `COM` 端口。若没有端口，检查 USB 数据线、USB-UART 驱动和设备下载模式。把下面的 `<串口>` 替换为实际端口，例如 `/dev/cu.usbserial-10` 或 `COM5`。
+
+### 新机器首次刷写
+
+1. 按上文安装 Arduino-ESP32 平台和 MAVLink 库，确认开发板型号及 USB 串口。
+2. 在仓库根目录执行对应板型的刷写命令。Arduino CLI 会编译并上传固件：
+
+   ```sh
+   # ESP32-D
+   arduino-cli upload --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs --port <串口> .
+
+   # ESP32-C3
+   arduino-cli upload --fqbn esp32:esp32:esp32c3 --port <串口> .
+
+   # ESP32-S3
+   arduino-cli upload --fqbn esp32:esp32:esp32s3:PartitionScheme=min_spiffs --port <串口> .
+
+   # Seeed XIAO ESP32-S3（仅当实际板卡为此型号）
+   arduino-cli upload --fqbn esp32:esp32:XIAO_ESP32S3:PartitionScheme=default_8MB --port <串口> .
+   ```
+
+3. 若芯片未自动进入下载模式，按住板上的 `BOOT`，短按 `RESET/EN`，开始连接后松开 `BOOT`；不同开发板的按键时序可能略有不同。
+4. 上传完成后打开 115200 baud 串口监视器，确认出现 `BOOT` 和“程序初始化完成”。输入 `diag brief`、`imu`、`rc` 检查上锁状态、IMU、遥控接收和活动故障。C3 目标关闭 Wi-Fi/Web；ESP32/S3 可按“手机 Wi-Fi 遥控”一节配置 `Drone_WiFi` 热点。
+5. 新出厂或尚未校准的传感器，在电机停止、机体按提示依次静置于六个方向时执行 `ca`，并确认串口提示参数写入且读回验证成功。按实际机架、接收机和电机接线检查板型引脚与参数；不要因烧录成功就直接解锁。
+
+### 同一台机器二次刷写
+
+1. 拆桨、断开电池和 USB 后接好 USB；再次确认板型和串口。先断电可避免刷写过程中意外给电机供电。
+2. 运行上面的同一条 `arduino-cli upload` 命令。普通上传会更新固件及其构建所需的启动/分区镜像，不需要先执行全片擦除。
+3. 普通刷写会保留 NVS 中的参数、Wi-Fi 凭据和持久系统日志；重启后用 115200 baud 串口检查 `BOOT`、`diag brief`、`imu`，并确认飞控仍上锁、电机输出为零。ESP32/S3 的 Wi-Fi 凭据通常无需重新输入；如设备进入配置热点，可按“手机 Wi-Fi 遥控”恢复连接。
+4. 只有明确要清除旧设备配置或排查 NVS/分区损坏时，才考虑全片擦除。全片擦除会删除已保存的参数、Wi-Fi 凭据和日志；擦除后按“新机器首次刷写”重新配置。改变板型或分区方案也可能使已有分区数据不可用，先记录需要保留的参数，再进行迁移。
+
+串口监视器会独占串口，开始上传前先关闭监视器。烧录、启动和诊断检查只验证固件与基础硬件初始化；不替代拆桨检查、遥控方向/失联检查，也不构成带桨或飞行验证。
 
 ## 当前编译验证
 
