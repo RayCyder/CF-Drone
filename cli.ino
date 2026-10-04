@@ -215,7 +215,9 @@ void doCommand(String str, bool echo = false) {
     }
 	// echo command
 	if (echo) {
+		#if !defined(CONFIG_IDF_TARGET_ESP32S3)
 		print("> %s\n", str.c_str());
+		#endif
 	}
 
 	command.toLowerCase();
