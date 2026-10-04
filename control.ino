@@ -38,31 +38,6 @@ extern bool imuRotationRestartPending();
 #define PITCH_I_LIM ROLL_I_LIM
 #define YAW_P 3 // 偏航角度环增益（用于具备航向参考的 AUTO 目标）
 
-// // 参数适配50mm轴距的微型四轴飞行器
-// // ============== 角速率环（内环）参数 ==============
-// #define PITCHRATE_P 0.06 // 增大P值提高响应速度
-// #define PITCHRATE_I 0.05 // 中等I值补偿电机差异
-// #define PITCHRATE_D 0.002 // 小D值抑制震荡
-// #define PITCHRATE_I_LIM 0.3 // 限制积分积累
-// #define ROLLRATE_P PITCHRATE_P // 横滚和俯仰使用相同参数
-// #define ROLLRATE_I PITCHRATE_I 
-// #define ROLLRATE_D PITCHRATE_D
-// #define ROLLRATE_I_LIM PITCHRATE_I_LIM
-// #define YAWRATE_P 0.3 // 偏航需要更高的P值（惯性较小）
-// #define YAWRATE_I 0.01 // 中等I值补偿
-// #define YAWRATE_D 0.01 // 小D值
-// #define YAWRATE_I_LIM 0.3
-// // ============== 角度环（外环）参数 ==============
-// #define ROLL_P 4 // 较高的P值快速响应
-// #define ROLL_I 0 // 角度环通常不需要I项
-// #define ROLL_D 0 // 角度环通常不需要D项
-// #define ROLL_I_LIM radians(5.0f) // 外环横滚积分限幅（rad/s），约 5°/s，防止低油门/切模式时积分发散
-// #define PITCH_P ROLL_P // 横滚和俯仰相同
-// #define PITCH_I ROLL_I
-// #define PITCH_D ROLL_D
-// #define PITCH_I_LIM ROLL_I_LIM
-// #define YAW_P 3 // 偏航响应稍慢
-
 // ============== 限制值 ==============
 #define PITCHRATE_MAX radians(360) // 高转速限制（1000°/s）
 #define ROLLRATE_MAX radians(360)
