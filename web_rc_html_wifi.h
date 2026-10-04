@@ -17,7 +17,7 @@ a{display:inline-block;margin-top:18px;color:#9fc7ff}#status{min-height:1.5em;co
 #saved-profile-list{list-style:none;padding:0;margin:8px 0}.saved-profile{display:flex;align-items:center;justify-content:space-between;gap:10px;background:#30353c;border-radius:7px;padding:8px 10px;margin:6px 0}.saved-profile button{width:auto;margin:0;padding:7px 10px;background:#8b3434;font-size:.85rem}.muted{color:#aaa;font-size:.85rem}
 </style></head><body><main>
 <h1>无人机 Wi-Fi 配置</h1>
-<p><strong>此配置为可选功能。</strong>不配置时，设备使用默认热点 Drone_WiFi，访问 192.168.4.1 即可控制。配置下方网络后，设备将关闭 Drone_WiFi 并仅连接所选网络，之后需要使用路由器分配的地址访问。</p>
+<p><strong>当前处于 Drone_WiFi 热点配置入口。</strong>保存下方网络后，设备会切换到 Wi-Fi 连接模式并重启；之后请使用路由器分配的地址访问。</p>
 <p>最多保存 4 个 2.4 GHz 网络；无人机按优先顺序连接，当前添加或更新的网络会排在第一位。删除全部已保存网络后，设备会重启并恢复 Drone_WiFi。</p>
 <form id="wifi-form"><label for="ssid">Wi-Fi 名称（SSID）</label>
 <select id="networks" aria-label="附近的 Wi-Fi 网络"><option value="">点击扫描附近网络…</option></select>

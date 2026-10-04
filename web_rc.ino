@@ -1750,6 +1750,25 @@ void setupWebRC() {
             : "{\"ok\":1,\"message\":\"已删除网络配置；飞控即将重启并连接剩余的优先网络。\"}");
         scheduleWiFiRestart();
     });
+    webRCServer.on("/wifi/mode", HTTP_POST, []() {
+        if (rejectWiFiMaintenanceWhileActive()) return;
+        if (webRCServer.arg("mode") != "ap") {
+            webRCServer.send(400, "application/json",
+                "{\"ok\":0,\"message\":\"不支持的 Wi-Fi 模式\"}");
+            return;
+        }
+        if (!configWiFi(true, "Drone_WiFi", "")) {
+            const char *reason = wifiConfigLastError();
+            String message = "切换失败（" + String(reason) + "）；飞控未重启。";
+            String json = "{\"ok\":0,\"reason\":" + wifiJsonQuote(reason) +
+                ",\"message\":" + wifiJsonQuote(message.c_str()) + "}";
+            webRCServer.send(500, "application/json", json);
+            return;
+        }
+        webRCServer.send(200, "application/json",
+            "{\"ok\":1,\"message\":\"飞控即将切换到 Drone_WiFi；请连接该热点后访问 192.168.4.1。\"}");
+        scheduleWiFiRestart();
+    });
 #endif
     webRCServer.on("/web_rc/lease", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
@@ -2338,21 +2357,25 @@ void setupWebRC() {
         float vbat = batteryVoltage;
         if (isnan(vbat) || vbat < 0.0f) vbat = 0.0f;
         bool wifiConnected = false;
+        const char *wifiControlMode = "disabled";
         uint32_t wifiDisconnects = 0, wifiLastDisconnectMs = 0;
 #if WIFI_ENABLED
         wifiConnected = WiFi.isConnected();
+        const wifi_mode_t activeWifiMode = WiFi.getMode();
+        wifiControlMode = wifiConnected ? "sta" :
+            ((activeWifiMode & WIFI_MODE_AP) ? "ap" : "offline");
         wifiDisconnects = getWiFiDisconnectCount();
         wifiLastDisconnectMs = getWiFiLastDisconnectMs();
 #endif
         const WebRCHoverThrottleReturn hoverReturn =
             computeWebRCHoverThrottleReturn(hoverThrottleInput(), webRCThrottleScale);
-        char json[896];
+        char json[928];
         const char *armReason = armBlockReason();
         const bool armReady = armed || !armReason;
         snprintf(json, sizeof(json),
             "{\"armed\":%s,\"led_fast_blink\":%s,\"enabled\":%s,\"active\":%s,"
             "\"voltage\":%.2f,\"throttle\":%.1f,\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,"
-            "\"faults\":%lu,\"uptime_ms\":%lu,\"wifi_connected\":%s,"
+            "\"faults\":%lu,\"uptime_ms\":%lu,\"wifi_connected\":%s,\"wifi_mode\":\"%s\","
             "\"wifi_disconnects\":%lu,\"wifi_last_disconnect_ms\":%lu,"
             "\"stick_age_ms\":%ld,\"packet_age_ms\":%ld,\"http_idle_drops\":%lu,"
             "\"http_max_handle_us\":%lu,\"http_slow_handles\":%lu,"
@@ -2369,7 +2392,7 @@ void setupWebRC() {
             (useWebRC && enabled) ? "true" : "false",
             vbat, throttle, roll, pitch, yaw,
             (unsigned long)getActiveDiagnosticFaults(), now,
-            wifiConnected ? "true" : "false",
+            wifiConnected ? "true" : "false", wifiControlMode,
             (unsigned long)wifiDisconnects, (unsigned long)wifiLastDisconnectMs,
             stickUpdated ? (long)(now - lastStickUpdate) : -1L,
             updated ? (long)(now - lastUpdate) : -1L,

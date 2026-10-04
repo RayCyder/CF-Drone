@@ -255,7 +255,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <button id="route-page-button" class="self-check-button" onclick="openRoutePage()">开环序列</button>
       <button id="descent-calibration-button" class="self-check-button" onclick="handleDescentCalibrationEntry()">迫降标定</button>
       <button id="console-open-button" class="self-check-button" onclick="toggleConsole()">调试</button>
-      <button id="wifi-settings-button" class="self-check-button" onclick="openWifiSettings()">Wi-Fi 配置</button>
+      <button id="wifi-settings-button" class="self-check-button" onclick="openWifiSettings()">Wi-Fi 模式</button>
     </nav>
     <div class="status-bar">
       <div class="status-item"><span class="status-dot" id="status-dot"></span><span id="connection-text">连接中...</span></div>
@@ -480,14 +480,43 @@ try {
 } catch (_) {}
 let webRCLeasePromise = null;
 let webRCLeaseBlocked = false;
+let currentWifiMode = 'unknown';
 
-function openWifiSettings() {
+function updateWifiModeButton(mode) {
+  if (!['ap','sta','offline'].includes(mode)) return;
+  currentWifiMode = mode;
+  const button = document.getElementById('wifi-settings-button');
+  if (!button) return;
+  button.textContent = mode === 'ap' ? '连接 Wi-Fi' :
+    mode === 'sta' ? '切换 Drone_WiFi' : 'Wi-Fi 配置';
+}
+
+async function openWifiSettings() {
   if (currentArmed) {
-    showToast('请先上锁，再进入 Wi-Fi 配置');
+    showToast('请先上锁，再切换 Wi-Fi 模式');
     return;
   }
-  const message = 'Wi-Fi 配置是可选功能。未配置时，设备使用 Drone_WiFi，访问 192.168.4.1 即可控制。配置后设备将关闭 Drone_WiFi，仅连接所选网络，需要使用路由器分配的地址访问。现在进入配置页面？';
-  if (window.confirm(message)) location.href = '/wifi';
+  if (currentWifiMode !== 'sta') {
+    location.href = '/wifi';
+    return;
+  }
+  if (!window.confirm('确认切换到 Drone_WiFi 热点模式？当前 Wi-Fi 连接会断开；重启后请连接 Drone_WiFi，并访问 192.168.4.1。已保存的 Wi-Fi 网络会保留。')) return;
+  const button = document.getElementById('wifi-settings-button');
+  button.disabled = true;
+  try {
+    const response = await fetch('/wifi/mode', {
+      method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body:new URLSearchParams({mode:'ap'})
+    });
+    const reply = await response.json().catch(()=>({}));
+    if (!response.ok) throw new Error(reply.message || '切换失败');
+    showToast(reply.message || '正在切换到 Drone_WiFi…');
+    button.textContent = '正在切换…';
+  } catch (error) {
+    button.disabled = false;
+    showToast(error.message || 'Wi-Fi 模式切换失败');
+  }
 }
 
 let buttonStates     = new Array(16).fill(false);
@@ -1546,6 +1575,7 @@ function loadSelfCheckStatus(showLoading) {
       document.getElementById('hover-throttle-label').textContent=Math.round(bounded);
     }
     if (typeof data.armed === 'boolean') setArmedState(data.armed);
+    if (typeof data.wifi_mode === 'string') updateWifiModeButton(data.wifi_mode);
     selfCheckHasData = true;
     renderSelfCheckStatus(data);
     if (data.voltage !== undefined && data.voltage > 0.5)
