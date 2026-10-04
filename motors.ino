@@ -6,9 +6,15 @@
 #include "util.h"
 #include "board_config.h"
 #include "diagnostics.h"
+#include "control.h"
 #include "motor_test_timer.h"
 #include "pwm_config.h"
+#include <esp_timer.h>
 #include <string.h>
+
+#ifndef RTC_DATA_ATTR
+#define RTC_DATA_ATTR
+#endif
 
 float motors[4]; // normalized motor thrusts in range [0..1]
 
@@ -30,10 +36,14 @@ bool motorTestArmInhibit = false;
 static uint32_t motorTestDeadlineMs = 0;
 static bool motorTestVerbose = false;
 static const uint32_t MOTOR_TEST_DURATION_MS = 3000;
+RTC_DATA_ATTR static esp_timer_handle_t motorTestStopTimer = nullptr;
 static constexpr uint32_t MOTOR_CUTOFF_LATCHED = 0x80000000UL;
 static constexpr uint32_t MOTOR_CUTOFF_GENERATION_MASK = 0x7FFFFFFFUL;
 static uint32_t motorEmergencyCutoffState = 0;
 static uint32_t motorEmergencyCutoffAcknowledgedGeneration = 0;
+static uint8_t motorEmergencyCutoffReason = DISARM_REASON_UNKNOWN;
+static uint32_t motorOutputRefreshedMs = 0;
+static bool motorOutputWasNonzero = false;
 
 // Motors array indexes:
 const int MOTOR_REAR_LEFT = 0;
@@ -41,8 +51,17 @@ const int MOTOR_REAR_RIGHT = 1;
 const int MOTOR_FRONT_RIGHT = 2;
 const int MOTOR_FRONT_LEFT = 3;
 
+static void writeMotorStopOutputs();
+
+static void motorTestStopTimerCallback(void *) {
+	// esp_timer callbacks run on the timer task. This path remains available
+	// when the flight loop is blocked in IMU, logging, or another subsystem.
+	if (__atomic_load_n(&motorTestActive, __ATOMIC_ACQUIRE)) writeMotorStopOutputs();
+}
+
 void setupMotors() {
 	print("Setup Motors\n");
+	motorTestStopTimer = nullptr;
 	motorOutputsOK = true;
 
 	// 先解绑所有引脚（重复调用时清理旧 LEDC 通道），再拉低防止误转
@@ -78,6 +97,19 @@ void setupMotors() {
 	memcpy(configuredMotorPins, motorPins, sizeof(configuredMotorPins));
 	motorPinConfigInitialized = true;
 	setDiagnosticFault(DIAG_MOTOR_INIT, !motorOutputsOK);
+	const esp_timer_create_args_t stopTimerArgs = {
+		.callback = &motorTestStopTimerCallback,
+		.arg = nullptr,
+		.dispatch_method = ESP_TIMER_TASK,
+		.name = "motor_test_stop",
+		.skip_unhandled_events = true,
+	};
+	if (esp_timer_create(&stopTimerArgs, &motorTestStopTimer) != ESP_OK) {
+		motorTestStopTimer = nullptr;
+		motorOutputsOK = false;
+		setDiagnosticFault(DIAG_MOTOR_INIT, true);
+		print("  motor test hard-stop timer create failed\n");
+	}
 
 	sendMotors();
 	print("Motors initialized\n");
@@ -100,7 +132,18 @@ uint32_t motorEmergencyCutoffGeneration() {
 	return __atomic_load_n(&motorEmergencyCutoffState, __ATOMIC_ACQUIRE) & MOTOR_CUTOFF_GENERATION_MASK;
 }
 
-void latchMotorEmergencyCutoff() {
+DisarmReason getMotorEmergencyCutoffReason() {
+	return (DisarmReason)__atomic_load_n(&motorEmergencyCutoffReason, __ATOMIC_ACQUIRE);
+}
+
+bool motorOutputRefreshExpired(uint32_t nowMs, uint32_t timeoutMs) {
+	if (!__atomic_load_n(&motorOutputWasNonzero, __ATOMIC_ACQUIRE)) return false;
+	const uint32_t refreshedMs = __atomic_load_n(&motorOutputRefreshedMs, __ATOMIC_ACQUIRE);
+	return refreshedMs && (uint32_t)(nowMs - refreshedMs) >= timeoutMs;
+}
+
+void latchMotorEmergencyCutoff(DisarmReason reason) {
+	__atomic_store_n(&motorEmergencyCutoffReason, (uint8_t)reason, __ATOMIC_RELEASE);
 	uint32_t oldState = __atomic_load_n(&motorEmergencyCutoffState, __ATOMIC_RELAXED);
 	for (;;) {
 		uint32_t generation = (oldState & MOTOR_CUTOFF_GENERATION_MASK) + 1;
@@ -142,16 +185,28 @@ bool clearMotorEmergencyCutoffIfAcknowledged() {
 
 void sendMotors() {
 	const bool cutoff = motorEmergencyCutoffLatched();
+	const bool expiredTest = __atomic_load_n(&motorTestActive, __ATOMIC_ACQUIRE) &&
+		motorTestDeadlineReached(millis(), motorTestDeadlineMs);
 	for (int i = 0; i < 4; i++) {
-		ledcWrite(motorPins[i], getDutyCycle(cutoff ? 0.0f : motors[i]));
+		ledcWrite(motorPins[i], getDutyCycle((cutoff || expiredTest) ? 0.0f : motors[i]));
 	}
-	// Close the race where the fast-stop task latches between the first check
-	// and the final motor write. The last writer is always a zero-duty pass.
-	if (!cutoff && motorEmergencyCutoffLatched()) writeMotorStopOutputs();
+	bool nonzero = false;
+	if (!cutoff && !expiredTest) {
+		for (int i = 0; i < 4; ++i) nonzero = nonzero || motors[i] > 0.0f;
+	}
+	__atomic_store_n(&motorOutputWasNonzero, nonzero, __ATOMIC_RELEASE);
+	const uint32_t refreshedMs = millis();
+	__atomic_store_n(&motorOutputRefreshedMs, refreshedMs ? refreshedMs : 1, __ATOMIC_RELEASE);
+	// Close races where a cutoff or the motor-test deadline arrives between the
+	// first check and the final motor write. The last writer is a zero-duty pass.
+	if ((!cutoff && motorEmergencyCutoffLatched()) ||
+		(!expiredTest && __atomic_load_n(&motorTestActive, __ATOMIC_ACQUIRE) &&
+		 motorTestDeadlineReached(millis(), motorTestDeadlineMs))) writeMotorStopOutputs();
 }
 
 void serviceMotorTest() {
 	if (!motorTestActive || !motorTestDeadlineReached(millis(), motorTestDeadlineMs)) return;
+	if (motorTestStopTimer) esp_timer_stop(motorTestStopTimer);
 	memset(motors, 0, sizeof(motors));
 	motorTestActive = false;
 	sendMotors();
@@ -161,6 +216,7 @@ void serviceMotorTest() {
 
 void cancelMotorTest() {
 	if (!motorTestActive) return;
+	if (motorTestStopTimer) esp_timer_stop(motorTestStopTimer);
 	memset(motors, 0, sizeof(motors));
 	motorTestActive = false;
 	motorTestArmInhibit = true;
@@ -178,6 +234,7 @@ bool startMotorTest(int n, float output, uint32_t durationMs, bool allowLowBatte
 	extern bool batteryBlocksArming();
 	extern bool hasBlockingDiagnosticFault();
 	if (!motorOutputsOK || n < 0 || n >= 4 || !isfinite(output) ||
+		!motorTestStopTimer ||
 		output < 0.05f || output > 0.3f || durationMs < 50 || durationMs > MOTOR_TEST_DURATION_MS) {
 		print("电机输出未就绪或试转配置无效，拒绝测试。\n");
 		return false;
@@ -197,6 +254,15 @@ bool startMotorTest(int n, float output, uint32_t durationMs, bool allowLowBatte
 	motorTestArmInhibit = true;
 	motorTestVerbose = verbose;
 	motorTestDeadlineMs = millis() + durationMs;
+	esp_timer_stop(motorTestStopTimer);
+	if (esp_timer_start_once(motorTestStopTimer, (uint64_t)durationMs * 1000ULL) != ESP_OK) {
+		motorTestActive = false;
+		motorTestArmInhibit = true;
+		memset(motors, 0, sizeof(motors));
+		writeMotorStopOutputs();
+		print("电机测试硬停止定时器启动失败，拒绝输出。\n");
+		return false;
+	}
 	motors[n] = output;
 	sendMotors();
 	return true;

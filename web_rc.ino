@@ -933,6 +933,7 @@ static uint32_t webRCSlowRequests = 0;
 // from queueing an emergency stop behind WebServer::handleClient().
 static WiFiServer fastStopServer(82);
 static uint8_t pendingFastStop = WEB_RC_FAST_STOP_NONE;
+RTC_DATA_ATTR static bool webRCFastStopTaskReady = false;
 static void copyWebRCStopToken(char *destination);
 
 WebRCFastStopAction consumeWebRCFastStop() {
@@ -940,8 +941,12 @@ WebRCFastStopAction consumeWebRCFastStop() {
         (uint8_t)WEB_RC_FAST_STOP_NONE, __ATOMIC_ACQ_REL);
 }
 
+bool webRCFastStopReady() {
+	return webRCFastStopTaskReady;
+}
+
 static void serviceFastStopClient() {
-    extern void latchMotorEmergencyCutoff();
+    extern void latchMotorEmergencyCutoff(DisarmReason reason);
     static WiFiClient client;
     static uint32_t acceptedAtMs = 0;
     static char requestLine[48];
@@ -976,7 +981,8 @@ static void serviceFastStopClient() {
         if ((uint8_t)action > old)
             __atomic_store_n(&pendingFastStop, (uint8_t)action, __ATOMIC_RELEASE);
         if (action == WEB_RC_FAST_STOP_LOCK || action == WEB_RC_FAST_STOP_KILL)
-            latchMotorEmergencyCutoff();
+            latchMotorEmergencyCutoff(action == WEB_RC_FAST_STOP_KILL ?
+                DISARM_REASON_WEB_EMERGENCY : DISARM_REASON_WEB_LOCK);
     }
     client.print(action != WEB_RC_FAST_STOP_NONE
         ? "HTTP/1.1 204 No Content\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
@@ -985,6 +991,7 @@ static void serviceFastStopClient() {
 }
 #else
 WebRCFastStopAction consumeWebRCFastStop() { return WEB_RC_FAST_STOP_NONE; }
+bool webRCFastStopReady() { return false; }
 #endif
 
 #if WIFI_ENABLED
@@ -2801,6 +2808,7 @@ void setupWebRC() {
     webRCServer.begin();
 
 #if CF_DRONE_ENABLE_FAST_STOP_SERVER
+	webRCFastStopTaskReady = false;
     fastStopServer.begin();
     if (xTaskCreatePinnedToCore([](void*) {
             for (;;) {
@@ -2810,6 +2818,7 @@ void setupWebRC() {
         }, "web_rc_stop", 3072, nullptr, 2, nullptr, 0) != pdPASS) {
         print("WEB_RC_FAST_STOP state=DISABLED reason=task_create_failed\n");
     } else {
+		webRCFastStopTaskReady = true;
         print("WEB_RC_FAST_STOP state=READY port=82 core=0 priority=2\n");
     }
 #endif
@@ -2873,6 +2882,7 @@ void readWebRC()  {}
 void runBootMotorSelfCheckBeforeWiFi() {}
 void abortVibrationCalibrationForDisarm() {}
 WebRCFastStopAction consumeWebRCFastStop() { return WEB_RC_FAST_STOP_NONE; }
+bool webRCFastStopReady() { return true; }
 void processConsoleCommandQueue() {}
 bool isLevelCalibrationActive() { return false; }
 #endif

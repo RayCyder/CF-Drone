@@ -54,6 +54,7 @@ void acknowledgeMotorEmergencyCutoff(uint32_t generation);
 void testMotor(int n);
 void serviceSerialConsoleOutput();
 void serviceMotorTest();
+bool setupSafetyHardStopTask();
 extern bool motorTestActive;
 void runBootMotorSelfCheckBeforeWiFi();
 void descend();
@@ -104,6 +105,7 @@ void setup() {
 	recordSystemLogEvent("BOOT", bootEvent);
 	setupLED(); // 初始化状态指示灯
 	setupMotors(); // 初始化电机输出（PWM/DShot）
+	setupSafetyHardStopTask(); // 独立监控迫降/倒置硬停机截止时间
 	setLED(true); // 点亮LED，提示正在初始化
 	setupIMU(); // 电机加电自检依赖IMU采样，必须先于WiFi初始化
 	initializeDiagnostics();

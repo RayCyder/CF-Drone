@@ -135,7 +135,7 @@
 // ---- 性能与资源配置（ESP32 标准）----
 #define BOARD_VBAT_ADC_SAMPLES       16 // 每次电压均值样本数；样本分散到多个主循环
 #define BOARD_LOG_DURATION           4  // 加入诊断字段后保留最近4秒日志，控制RAM占用
-#define BOARD_CONSOLE_LINES          46  // 释放一行控制台历史空间，给 H6 磁力计校准状态留出DRAM
+#define BOARD_CONSOLE_LINES          44  // 保留数百字节内部DRAM安全余量，避免小改动再次链接溢出
 #define BOARD_CONSOLE_LINE_LEN       240  // 每行字符数
 #define BOARD_MAVLINK_TELEM_FAST_HZ  10  // MAVLink 快速遥测降速
 #define BOARD_WIFI_ENABLED           1  // WIFI开关

@@ -15,6 +15,7 @@ assert "#define CF_DRONE_ENABLE_BOOT_MOTOR_SELF_CHECK 1" in board
 setup = main[main.index("void setup()") : main.index("void loop()")]
 expected_order = (
     "setupMotors();",
+    "setupSafetyHardStopTask();",
     "setupIMU();",
     "runBootMotorSelfCheckBeforeWiFi();",
     "setupWiFi();",
@@ -45,6 +46,32 @@ assert "(!allowLowBattery && batteryBlocksArming())" in motor_start
 assert "startMotorTest(n, 0.3f, MOTOR_TEST_DURATION_MS, false)" in motors, (
     "manual motor tests must retain the low-battery interlock"
 )
+safety = (ROOT / "safety.ino").read_text(encoding="utf-8")
+control = (ROOT / "control.ino").read_text(encoding="utf-8")
+for flight_hard_stop_contract in (
+    "CONTROLLED_LANDING_MAX_MS",
+    "INVERTED_TIMEOUT_MS",
+    "MOTOR_OUTPUT_STALE_TIMEOUT_MS = 250",
+    '"flight_hard_stop"',
+    "motorOutputRefreshExpired",
+    "latchMotorEmergencyCutoff(DISARM_REASON_LOOP_STALL);",
+):
+    assert flight_hard_stop_contract in safety, (
+        f"flight failsafes require an independent motor cutoff: {flight_hard_stop_contract}"
+    )
+assert 'recordSystemLogEvent("HARD_STOP", event);' in control, (
+    "every latched cutoff, including port-82 lock/kill, must persist its reason"
+)
+for hard_stop_contract in (
+    "motorTestStopTimerCallback",
+    "esp_timer_create(&stopTimerArgs, &motorTestStopTimer)",
+    "esp_timer_start_once(motorTestStopTimer",
+    "motorTestDeadlineReached(millis(), motorTestDeadlineMs)",
+    "writeMotorStopOutputs();",
+):
+    assert hard_stop_contract in motors, (
+        f"motor tests require an independent hard-stop deadline: {hard_stop_contract}"
+    )
 for state_guard in (
     "if (armed || motorsActive() || !imuOK || !motorOutputsOK || controlThrottle > 0.01f",
     "if (armed || motorsActive() || !motorOutputsOK || isAccelCalibrationActive()",

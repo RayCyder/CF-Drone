@@ -405,6 +405,12 @@ const char* armBlockReason() {
 	if (isAccelCalibrationActive()) return "加速度计校准正在运行";
 	if (isLevelCalibrationActive()) return "水平校准进行中或已保存安装角，重启飞控后才可解锁";
 	if (imuRotationRestartPending()) return "IMU 安装角已改变，重启飞控后才可解锁";
+	extern bool safetyHardStopReady();
+	if (!safetyHardStopReady()) return "独立飞行安全停机任务未就绪，禁止解锁";
+	#if WEB_RC_ENABLED
+	extern bool webRCFastStopReady();
+	if (!webRCFastStopReady()) return "网页快速停机通道未就绪，禁止解锁";
+	#endif
 	if (controlThrottle > ARM_THROTTLE_LIMIT) return "油门高于解锁上限 5%";
 	if (!imuOK) return "IMU 未就绪";
 	extern bool gyroBiasReady();
@@ -434,12 +440,26 @@ bool requestArm() {
 }
 
 static uint8_t lastDisarmReason = DISARM_REASON_UNKNOWN;
+static uint32_t hardStopLoggedGeneration = 0;
 
 DisarmReason getLastDisarmReason() {
 	return (DisarmReason)__atomic_load_n(&lastDisarmReason, __ATOMIC_RELAXED);
 }
 
 void disarm(DisarmReason reason) {
+	extern bool motorEmergencyCutoffLatched();
+	extern uint32_t motorEmergencyCutoffGeneration();
+	extern DisarmReason getMotorEmergencyCutoffReason();
+	if (motorEmergencyCutoffLatched()) {
+		const uint32_t generation = motorEmergencyCutoffGeneration();
+		if (generation && generation != hardStopLoggedGeneration) {
+			hardStopLoggedGeneration = generation;
+			char event[56];
+			snprintf(event, sizeof(event), "reason=%u generation=%lu",
+				(unsigned)getMotorEmergencyCutoffReason(), (unsigned long)generation);
+			recordSystemLogEvent("HARD_STOP", event);
+		}
+	}
 	if (reason == DISARM_REASON_WEB_LOCK || reason == DISARM_REASON_WEB_EMERGENCY)
 		webStopLastMs = millis() ? millis() : 1;
 	// Every disarm source is a motor-stop command. This also covers the
@@ -453,6 +473,8 @@ void disarm(DisarmReason reason) {
 	if (armed) __atomic_store_n(&lastDisarmReason, (uint8_t)reason, __ATOMIC_RELAXED);
 	for (int i = 0; i < 4; ++i) outputWasActive = outputWasActive || motors[i] != 0.0f;
 	armed = false;
+	extern void clearSafetyHardStopDeadlines();
+	clearSafetyHardStopDeadlines();
 	clearControlledLanding();
 	thrustTarget = 0.0f;
 	memset(motors, 0, sizeof(float) * 4);

@@ -13,6 +13,7 @@ using portMUX_TYPE = int;
 #include "../task_switch_trace_runtime.h"
 #include "../level_calibration_state.h"
 #include "../flight_sensor_interfaces.h"
+#include "../control.h"
 
 double t=1,controlTime=0;
 float dt=.001f,loopRate=1000;
@@ -27,6 +28,7 @@ uint32_t nowMs=1000;
 uint32_t millis(){return nowMs;}
 uint32_t micros(){return nowMs*1000;}
 bool webRCEnabled=false,useWebRC=false;
+bool webRCFastStopReady(){return true;}
 bool localSequenceActive=false;
 bool isLocalSequenceRunning(){return localSequenceActive;}
 bool localSequenceAutoReady=false;
@@ -62,6 +64,11 @@ bool imuRotationRestartPending(){return rotationRestartPending;}
 void sendMotors() {}
 bool motorCutoffReady=true;
 unsigned motorCutoffClearCount=0;
+bool motorCutoffLatched=false;
+DisarmReason motorCutoffReason=DISARM_REASON_UNKNOWN;
+bool motorEmergencyCutoffLatched(){return motorCutoffLatched;}
+DisarmReason getMotorEmergencyCutoffReason(){return motorCutoffReason;}
+uint32_t motorEmergencyCutoffGeneration(){return motorCutoffLatched ? 1U : 0U;}
 bool motorEmergencyCutoffReadyForArm() { return motorCutoffReady; }
 bool clearMotorEmergencyCutoffIfAcknowledged() { ++motorCutoffClearCount; return motorCutoffReady; }
 bool motorsActive(){for(float m:motors)if(m!=0)return true;return false;}
@@ -221,6 +228,10 @@ int main(){
 	assert(fabsf(thrustTarget-descendThrust)<.001f);
 	testBarometerEstimate=BarometerEstimate();
     assert(!(getActiveDiagnosticFaults() & DIAG_AUTO_TARGET_TIMEOUT)); // manual descent isn't an external timeout
+	nowMs+=CONTROLLED_LANDING_MAX_MS;
+	t+=CONTROLLED_LANDING_MAX_MS/1000.0;
+	descend();
+	assert(!armed && getLastDisarmReason()==DISARM_REASON_LANDING_TIMEOUT);
     disarm(); assert(!isControlledLandingActive() && !armed);
     for(float m:motors) assert(m==0);
     // An expired handoff must not resurrect old thrust after a long idle gap.
@@ -231,6 +242,14 @@ int main(){
     descend();
     assert(thrustTarget<.01f);
     disarm();
+	armed=true;
+	attitude=Quaternion::fromEuler(Vector((float)M_PI,0,0));
+	invertedFailsafe();
+	assert(armed && isInverted);
+	nowMs+=INVERTED_TIMEOUT_MS+1;
+	invertedFailsafe();
+	assert(!armed && getLastDisarmReason()==DISARM_REASON_INVERTED);
+	attitude=Quaternion();
     // A stale browser session present at arm time must not turn a serial/RC
     // zero-throttle arm into an immediate Web-RC-loss landing.
     armed=true; mode=STAB; thrustTarget=0.0f;
@@ -452,6 +471,13 @@ int main(){
     assert(loopStages[LOOP_STAGE_CONTROL_LAW].overBudget==0);
     nowMs=0; recordLoopTiming(.005001f); nowMs=10001; updateDiagnostics();
     assert(!(getActiveDiagnosticFaults() & DIAG_LOOP_OVERRUN));
+
+    const unsigned eventsBeforeHardStop=systemEventCount;
+    armed=true; motorCutoffLatched=true; motorCutoffReason=DISARM_REASON_LOOP_STALL;
+    failsafe();
+    assert(!armed && getLastDisarmReason()==DISARM_REASON_LOOP_STALL);
+    assert(systemEventCount==eventsBeforeHardStop+1);
+    motorCutoffLatched=false; motorCutoffReason=DISARM_REASON_UNKNOWN;
 
     clearDiagnosticHistory();
     armed=true;

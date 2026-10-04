@@ -1,8 +1,64 @@
 ESP32无人机飞控固件
 
+# 开发环境与编译
+
+本项目是 Arduino IDE/Arduino CLI 工程，不使用 PlatformIO、ESP-IDF 的 CMake 工程或 `platformio.ini`。固件源文件位于仓库根目录，主入口为 `CF-Drone.ino`。
+
+## 工具与依赖
+
+- **Arduino IDE 2.x 或 Arduino CLI**：负责预处理 `.ino` 文件、编译和链接固件。仓库的 `tools/build_esp32d.sh` 默认使用 Arduino IDE 自带的 CLI；也可以通过 `ARDUINO_CLI` 指定其他安装位置。
+- **Espressif Arduino-ESP32 开发板平台**：本次本机编译使用 `esp32:esp32` **3.3.8-cn**。板级支持包提供 ESP32/C3/S3 工具链以及 `WiFi`、`WebServer`、`Wire`、`SPI`、`Preferences` 等核心库。
+- **MAVLink Arduino 库**：固件依赖 `MAVLink` 库；本次编译解析到的版本为 **2.0.33**。需将其安装到 Arduino 库目录（Arduino IDE 的库管理器或手动安装均可）。
+- **主机回归（可选）**：运行 `tests/run_host_tests.py` 需要 Python 3 和支持 C++17 的 `clang++` 或 `g++`；网页脚本测试还需要 Node.js。固件编译本身不需要 Python 或 Node.js。
+
+首次配置时，在 Arduino IDE 的开发板管理器安装 Espressif ESP32 平台，并在库管理器安装 MAVLink。选择对应芯片板型后，确认 MAVLink 库可被 Arduino CLI 找到。项目没有将 Arduino 平台和 MAVLink 版本锁定在仓库配置文件中；上面的版本是本次验证环境的版本。
+
+## 编译固件
+
+在仓库根目录可以使用 Arduino CLI 编译。ESP32-D 使用 `min_spiffs` 分区方案，为当前固件留出足够的应用空间：
+
+```sh
+arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs .
+```
+
+其他板型：
+
+```sh
+# ESP32-C3
+arduino-cli compile --fqbn esp32:esp32:esp32c3 .
+
+# ESP32-S3；默认分区的应用空间不足，需选 min_spiffs
+arduino-cli compile --fqbn esp32:esp32:esp32s3:PartitionScheme=min_spiffs .
+```
+
+ESP32-D 也可使用仓库脚本，它会把构建产物放在临时目录：
+
+```sh
+./tools/build_esp32d.sh
+```
+
+脚本默认查找 `/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/arduino-cli`；其他安装路径可这样指定：
+
+```sh
+ARDUINO_CLI=/path/to/arduino-cli ./tools/build_esp32d.sh /tmp/cf-drone-build
+```
+
+## 当前编译验证
+
+2026-10-04 使用 Arduino-ESP32 **3.3.8-cn** 和 MAVLink **2.0.33** 对当前工作树进行编译：ESP32-D（`min_spiffs`）通过，Flash **1,390,311 B / 1,966,080 B**、静态 RAM **124,116 B / 327,680 B**；XIAO ESP32-S3（`default_8MB`）通过，Flash **1,349,663 B / 3,342,336 B**、静态 RAM **123,424 B / 327,680 B**。ESP32-C3 最近一次已记录验证为 Flash **545,582 B / 1,310,720 B**、静态 RAM **71,740 B / 327,680 B**；本次安全修复未改动 C3 飞行路径，未重复编译。
+
+这些是链接时的程序空间和静态 RAM 用量，不代表运行时堆余量或硬件飞行验证。板型和分区方案必须与实际硬件匹配；烧录验证也不等于带桨或飞行测试。
+
+主机回归可运行：
+
+```sh
+python3 tests/run_host_tests.py
+```
+
 # 开发文档
 
 * [Web API 接口文档](docs/web-api.md)
+* [飞行停机安全复核（2026-10-04）](docs/SAFETY_REVIEW_20261004.md)
 * [ESP32-D 实时隔离与分区方案](ESP32D_REALTIME_ISOLATION.md)
 * [ESP32-D 分区与实时隔离验收试验](ESP32D_ACCEPTANCE_TEST_PLAN.md)
 
@@ -127,7 +183,7 @@ Wi-Fi 配置在保存后会通过 NVS 读回验证；验证失败时网页会明
 
 串口每帧最多写 64 B，新命令或解锁会取消导出；Web CSV 在后台任务分行发送，页面检查行数，拒绝保存截断文件。MAVLink 日志 ID 0 使用前 35 列、小端 float32、140 B/行的虚拟字节流，按 `ofs/count` 每帧最多发一个 90 B 片段，支持非对齐读取、EOF 和 `LOG_REQUEST_END`；恢复采样会使旧批次的传输失效。MAVLink 控制台文本采用固定 1 KB 队列，溢出有计数提示。解锁或电机测试期间，大输出和参数修改命令被拒绝，短告警仅进入固定事件缓冲。
 
-自动下降（RC 失联、电池危急、网页迫降或路线结束）会持续保持水平姿态，并将推力平滑过渡到 `SF_DESCEND_THRUST`；`SF_DESCEND_TIME` 控制推力变化斜率。网页松开油门后 200 ms 内启动迫降时，固件从最近的有效动力推力接续（最高不超过悬停前馈），避免先归零再缓慢加推力；超过该窗口不会恢复旧推力。如果下降请求发生在零油门怠速，且 200 ms 内没有有效动力交接，固件会立即停机上锁，不会从零自行增加到下降推力。迫降入口数值会写入系统事件。BMP388 有效、新鲜且相对起飞面高度至少 1 m 时，若估计下降速度快于 0.4 m/s，固件最多增加 0.025 推力作为单向快速下降保护；传感器失效时平滑退回既有定推力值。当前实飞调校的悬停前馈为 0.48、迫降目标为 0.42。下降保持到飞手明确上锁。推力值是归一化电机指令，仍需在安全条件下按机体验证和调整。气压计不能可靠判断厘米级近地高度或触地，因此当前仍不自动停机，也不宣称完整匀速下降闭环。
+自动下降（RC 失联、电池危急、网页迫降或路线结束）会保持水平姿态，并将推力平滑过渡到 `SF_DESCEND_THRUST`；`SF_DESCEND_TIME` 控制推力变化斜率。网页松开油门后 200 ms 内启动迫降时，固件从最近的有效动力推力接续（最高不超过悬停前馈），避免先归零再缓慢加推力；超过该窗口不会恢复旧推力。如果下降请求发生在零油门怠速，且 200 ms 内没有有效动力交接，固件会立即停机上锁，不会从零自行增加到下降推力。迫降入口数值会写入系统事件。BMP388 有效、新鲜且相对起飞面高度至少 1 m 时，若估计下降速度快于 0.4 m/s，固件最多增加 0.025 推力作为单向快速下降保护；传感器失效时平滑退回既有定推力值。当前实飞调校的悬停前馈为 0.48、迫降目标为 0.42。迫降最长维持 8 秒，到期后由独立安全任务强制将四路输出写零；这是防止触地后持续堵转烧机的终止上限，高空失联时可能在未触地前停机。推力值是归一化电机指令，仍需在安全条件下按机体验证和调整。气压计不能可靠判断厘米级近地高度或触地，因此该 8 秒上限是安全截止，不是触地检测。
 
 网页左摇杆采用弹簧油门：页面刚打开时仍位于零油门，取得页面控制权本身不会发送摇杆包；飞手操作后松手，偏航回中，油门在约 300 ms 内平滑回到飞控按 `ALTHOLD_HOVER_THRUST`、当前 `MOT_THR_MIN/MAX` 和网页油门缩放反算的悬停基础档位。当前实飞调校值页面显示约 50%，对应归一化目标推力 0.48。油门缩放过低导致悬停推力不可达时，摇杆回到允许的最高油门并在页面提示。该档位只是悬停推力前馈，不会自动消除已有升降速度或保持高度；定高仍需要独立的高度闭环。
 
