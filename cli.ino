@@ -32,7 +32,16 @@ static ConsoleOutputQueue serialConsoleOutputQueue;
 static portMUX_TYPE serialConsoleOutputMux = portMUX_INITIALIZER_UNLOCKED;
 extern ImuCaptureBuffer imuCapture;
 
+static bool serialConsoleConnected() {
+#if defined(CONFIG_IDF_TARGET_ESP32S3) && ARDUINO_USB_CDC_ON_BOOT
+	return Serial.isPlugged() && Serial.isConnected();
+#else
+	return true;
+#endif
+}
+
 static void queueSerialConsoleOutput(const char *data, size_t length) {
+	if (!serialConsoleConnected()) return;
 	size_t offset = 0;
 	while (offset < length) {
 		const size_t chunk = min((size_t)64, length - offset);
@@ -48,6 +57,15 @@ static void queueSerialConsoleOutput(const char *data, size_t length) {
 }
 
 void serviceSerialConsoleOutput() {
+	if (!serialConsoleConnected()) {
+		// Drop any bytes queued immediately before a disconnect so reconnecting
+		// never replays stale calibration or command output into CDC RX.
+		char discarded[64];
+		portENTER_CRITICAL(&serialConsoleOutputMux);
+		serialConsoleOutputQueue.pop(discarded, sizeof(discarded));
+		portEXIT_CRITICAL(&serialConsoleOutputMux);
+		return;
+	}
 	// A 64-byte UART write can wait for the TX ring even after
 	// availableForWrite() reports space. Keep each write below 1 ms of
 	// wire time at 115200 baud, as the IMU capture exporter does.
@@ -451,7 +469,7 @@ void handleInput() {
 	// Calibration is controlled from the Web console on this carrier. Drop USB
 	// CDC bytes while sampling so host echo/noise cannot steal IMU loop time.
 	// Also ignore buffered CDC input when no USB host is attached.
-	if (isAccelCalibrationActive() || !Serial) {
+	if (isAccelCalibrationActive() || !serialConsoleConnected()) {
 		for (int budget = 64; budget > 0 && Serial.available(); --budget) Serial.read();
 		input.clear();
 		overflow = false;
