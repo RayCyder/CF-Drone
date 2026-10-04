@@ -421,6 +421,20 @@ void doCommand(String str, bool echo = false) {
 	} else if (command == "reboot") {
 		ESP.restart();
 	} else {
+		#if defined(CONFIG_IDF_TARGET_ESP32S3)
+		// On native USB CDC, a disconnected or echoing host can feed diagnostic
+		// output back into RX. Do not answer unknown serial text, otherwise the
+		// "Invalid command" response can recursively become another command.
+		if (echo) {
+			static uint32_t lastInvalidSerialEventMs = 0;
+			const uint32_t now = millis();
+			if ((uint32_t)(now - lastInvalidSerialEventMs) >= 1000U) {
+				recordSystemLogEvent("CLI_NOISE", "ignored invalid USB CDC input");
+				lastInvalidSerialEventMs = now;
+			}
+			return;
+		}
+		#endif
 		print("Invalid command: %s\n", command.c_str());
 	}
 }
@@ -429,6 +443,19 @@ void handleInput() {
 	static size_t motdOffset = 0;
 	static String input;
 	static bool overflow = false;
+
+	#if defined(CONFIG_IDF_TARGET_ESP32S3)
+	extern bool isAccelCalibrationActive();
+	// Calibration is controlled from the Web console on this carrier. Drop USB
+	// CDC bytes while sampling so host echo/noise cannot steal IMU loop time.
+	// Also ignore buffered CDC input when no USB host is attached.
+	if (isAccelCalibrationActive() || !Serial) {
+		for (int budget = 64; budget > 0 && Serial.available(); --budget) Serial.read();
+		input.clear();
+		overflow = false;
+		return;
+	}
+	#endif
 
 	if (showMotd && !armed && !motorsActive()) {
 		const size_t motdLength = strlen(motd);
@@ -447,7 +474,11 @@ void handleInput() {
 	for (int budget = 32; budget > 0 && Serial.available(); --budget) {
 		char c = Serial.read();
 		if (c == '\n') {
-            if (!overflow) doCommand(input);
+			#if defined(CONFIG_IDF_TARGET_ESP32S3)
+			if (!overflow) doCommand(input, true);
+			#else
+			if (!overflow) doCommand(input);
+			#endif
             else recordSystemLogEvent("CLI_DENIED", "command exceeds 192 bytes");
             input.clear(); overflow = false;
         } else if (c != '\r') {
