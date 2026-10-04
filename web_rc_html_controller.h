@@ -209,17 +209,27 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   .status-item{font-size:clamp(0.6rem,2.5vw,0.7rem);padding:2px 5px}
 }
 
-/*======== 小屏横屏自适应（高度≤420px）========*/
-@media (max-height:420px) and (orientation:landscape){
-  :root{--js-size:clamp(120px,min(42vw,44vh),240px);--knob-size:calc(var(--js-size)*0.25)}
-  .joystick-title{font-size:0.72rem}
-  .header h1{font-size:0.82rem}
-  .header{padding:3px 8px}
-  .header h1{margin-bottom:2px}
-  .status-bar{margin-top:2px;gap:4px}
-  .status-item{font-size:0.58rem;padding:2px 4px}
-  .button{font-size:0.68rem;padding:5px 3px}
-  .button-icon{font-size:0.88rem;margin-bottom:2px}
+/*======== 小屏横屏自适应（高度≤480px）========*/
+@media (max-height:480px) and (orientation:landscape){
+  :root{--js-size:clamp(88px,min(36vw,40dvh),240px);--knob-size:calc(var(--js-size)*0.25);--pad:clamp(3px,.9vmin,7px);--gap:clamp(3px,.9vmin,7px)}
+  .container{height:100dvh;min-height:0;overflow:hidden}
+  .header{flex:0 0 auto;padding:3px 6px}
+  .header h1{display:none}
+  .header-tools{gap:4px;flex-wrap:nowrap;margin:0 0 3px}
+  .header-tools .self-check-button{padding:3px 6px;font-size:.62rem}
+  .status-bar{margin-top:0;gap:3px;flex-wrap:nowrap;overflow:hidden}
+  .status-item{gap:2px;font-size:0.55rem;padding:1px 3px}
+  .content{min-height:0}
+  .joystick-container{min-width:0;min-height:0;padding:4px;border-radius:12px}
+  .joystick-title{font-size:0.62rem;white-space:nowrap}
+  .stick-readouts{gap:4px;margin-top:2px}
+  .stick-readout{padding:1px 4px;font-size:.58rem}
+  .joystick-wrapper{min-height:0;margin-top:2px}
+  .buttons-container{min-width:0;min-height:0;gap:4px;padding:5px;border-radius:12px}
+  .buttons-grid{min-height:0;gap:4px}
+  .button{min-height:0;font-size:0.62rem;padding:2px;border-radius:7px}
+  .button-icon{font-size:0.8rem;margin-bottom:0}
+  .footer{display:none}
   .console-window{padding:5px}
   .console-dialog{width:min(960px,98vw);height:96dvh;padding:7px;gap:5px}
   .console-panel{display:grid;grid-template-columns:minmax(220px,38%) minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;gap:6px;padding:6px}
@@ -290,7 +300,8 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
     <div class="console-tools">
       <div class="console-tools-row"><strong>调试工具</strong><button class="primary" onclick="openVibrationCalibrationFromConsole()">电机扰动检测</button><button class="primary" onclick="startAccelCalibrationFromConsole()">六面加速度计校准</button><button class="primary" onclick="openLevelCalibrationFromConsole()">机身水平校准</button></div>
       <div class="console-tools-row"><strong>常用命令</strong><button onclick="runConsoleCommand('diag brief')">快速预检</button><button onclick="runConsoleCommand('diag')">完整诊断</button><button onclick="runConsoleCommand('imu')">IMU</button><button onclick="runConsoleCommand('ps')">姿态</button><button onclick="runConsoleCommand('p CTL_TRIM_ROLL')">横滚配平值</button><button onclick="runConsoleCommand('p CTL_TRIM_PITCH')">俯仰配平值</button><button onclick="runConsoleCommand('rc')">遥控输入</button><button onclick="runConsoleCommand('mot')">电机输出</button><button onclick="runConsoleCommand('wifi')">Wi-Fi</button><button onclick="runConsoleCommand('time')">循环时间</button><button onclick="runConsoleCommand('sys')">系统任务</button><button onclick="runConsoleCommand('log status')">日志状态</button><button onclick="runConsoleCommand('p')">参数列表</button><button onclick="runConsoleCommand('help')">命令帮助</button></div>
-      <div class="console-tools-note">机身静置水平但姿态不为 0°：使用“机身水平校准”修正 IMU 安装角。只有实际飞行松杆后持续漂移时，才调整 CTL_TRIM_ROLL / CTL_TRIM_PITCH。</div>
+      <div class="console-tools-note">磁力计为可选传感器；未安装磁力计仍可进行六面加速度计校准和机身水平校准，仅磁航向与 magcal 不可用。机身静置水平但姿态不为 0°：使用“机身水平校准”修正 IMU 安装角。只有实际飞行松杆后持续漂移时，才调整 CTL_TRIM_ROLL / CTL_TRIM_PITCH。</div>
+      <div class="console-tools-note"><strong>PID 查看与调整：</strong>点击“参数列表”查看当前值，或输入 <code>p CTL_R_RATE_P</code> 查询单项；输入 <code>p CTL_R_RATE_P 0.06</code> 修改。仅允许在上锁且电机停止时执行，修改后自动进入参数保存队列。</div>
       <div id="console-status" class="console-status" role="status">打开后将主动确认飞控处于上锁状态。</div>
     </div>
     <div id="console-output" class="console-output"></div>
@@ -319,6 +330,10 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <div id="arm-readiness" class="diagnostic-summary offline">
         <strong>正在检查解锁条件…</strong>
         <small>此状态依据飞控当前实际解锁门槛。</small>
+      </div>
+      <div id="calibration-readiness" class="diagnostic-summary offline">
+        <strong>正在检查起飞前标定…</strong>
+        <small>检查陀螺静止校准、六面加速度计校准和机身水平校准。</small>
       </div>
       <div id="led-alert-reason" class="diagnostic-summary offline">
         <strong>正在读取蓝灯状态…</strong>
@@ -386,7 +401,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   <section id="level-calibration-page" class="vibration-calibration-page" aria-hidden="true">
     <div class="descent-calibration-shell">
       <div class="diagnostic-top"><h2>机身水平校准</h2><div class="diagnostic-actions"><button onclick="closeLevelCalibrationPage()">返回遥控器</button></div></div>
-      <div class="calibration-card"><strong>用机身基准面确认水平</strong><p>先上锁并停止全部电机，用水平仪将机身基准面放平、固定且保持静止。此功能采集约 1 秒 IMU 数据，检查重力模长与振动，再建议 IMU 安装横滚/俯仰角；不会修改六面加速度计偏置，也不能把空中悬停姿态当作水平基准。</p></div>
+      <div class="calibration-card"><strong>用机身基准面确认水平</strong><p>先上锁并停止全部电机，用水平仪将机身基准面放平、固定且保持静止。此功能只使用 IMU 的加速度计与陀螺仪，未安装磁力计也可正常完成。它采集约 1 秒 IMU 数据，检查重力模长与振动，再建议 IMU 安装横滚/俯仰角；不会修改六面加速度计偏置，也不能把空中悬停姿态当作水平基准。</p></div>
       <div id="level-calibration-live" class="route-status">正在读取估计姿态…</div>
       <div id="level-calibration-status" class="route-status" role="status">尚未采集。</div>
       <div class="calibration-actions"><button id="level-calibration-start" class="primary" onclick="startLevelCalibration()">采集水平基准</button><button id="level-calibration-apply" onclick="applyLevelCalibration()" disabled>确认保存安装角</button><button id="level-calibration-discard" onclick="discardLevelCalibration()">放弃建议</button></div>
@@ -458,7 +473,10 @@ document.addEventListener('click', event => {
 }, true);
 let webRCLeaseToken = '';
 let webRCStopToken = '';
-try { webRCStopToken = sessionStorage.getItem('cfDroneStopToken') || ''; } catch (_) {}
+try {
+  webRCStopToken = localStorage.getItem('cfDroneStopToken') ||
+    sessionStorage.getItem('cfDroneStopToken') || '';
+} catch (_) {}
 let webRCLeasePromise = null;
 let webRCLeaseBlocked = false;
 
@@ -876,7 +894,10 @@ async function refreshLevelCalibrationStatus(){
       const p=(Number(data.new_rot_pitch_rad)-Number(data.old_rot_pitch_rad))*180/Math.PI;
       detail+=`；采集前重力倾角 Roll ${Number(data.before_roll_deg).toFixed(2)}° / Pitch ${Number(data.before_pitch_deg).toFixed(2)}°；建议安装角变化 X ${r.toFixed(2)}° / Y ${p.toFixed(2)}°；加速度模长 ${Number(data.acc_norm).toFixed(3)} m/s²、最大轴向标准差 ${Number(data.acc_sd).toFixed(3)} m/s²`;
     }
-    if(data.state==='rejected')detail+=`（${data.reason}）；请确认机身静止、水平和 IMU 正常后重试`;
+    if(data.state==='rejected'){
+      const reasonNames={gravity_invalid:'重力数据无效',gravity_norm_out_of_range:'加速度模长偏离 1g，请先完成六面加速度计校准',accel_noise_too_high:'加速度波动过大，请固定机身后重试',gyro_noise_too_high:'陀螺仪波动过大，请固定机身后重试',gyro_rate_too_high:'检测到机身仍在转动，请完全静止后重试',not_stationary_or_gravity_invalid:'机体未保持静止，或重力模长不合理',mounting_offset_or_geometry_invalid:'安装偏角超过 15°，或校正几何检查失败',capture_timeout:'采集超时',capture_start_failed:'采集资源不可用',preflight_failed:'飞控状态不允许校准'};
+      detail+=`；${reasonNames[data.reason]||data.reason}；加速度波动 ${Number(data.acc_sd||0).toFixed(4)} m/s²，陀螺波动 ${Number(data.gyro_sd||0).toFixed(5)} rad/s，平均角速度 ${Number(data.gyro_mean_norm||0).toFixed(5)} rad/s`;
+    }
     if(data.state==='applied')detail+=data.persist_pending?'；等待参数写入，完成后必须重启飞控才能解锁':'；参数写入已完成，必须重启飞控才能解锁';
     if(data.pending&&data.state!=='applied')detail+='；请求已提交，等待飞控处理';
     status.textContent=detail;
@@ -1320,7 +1341,7 @@ function handleLeaseConflict(message) {
   webRCLeaseBlocked = true;
   if(routeRecording&&routeRecordStartedArmed)stopRouteRecording('页面失去遥控控制权，录制已安全停止。',true);
   updateConnectionStatus(false);
-  if (shouldNotify) showToast(message || '另一个遥控页面正在控制；关闭其他页面或等待 10 秒后重试');
+  if (shouldNotify) showToast(message || '此页面已被更新打开的遥控页面立即取代');
 }
 
 async function acquireControlLease() {
@@ -1332,13 +1353,18 @@ async function acquireControlLease() {
     .then(async response => {
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.lease) {
-        const retry = Number(data.retry_ms || 0);
-        handleLeaseConflict(retry > 0 ? `另一个遥控页面正在控制；约 ${Math.ceil(retry/1000)} 秒后刷新页面可接管` : '另一个遥控页面正在控制；刷新页面可重新申请');
+        const reason = data.error === 'web_rc_flight_takeover_forbidden'
+          ? '飞行中禁止其他页面抢占；请返回原控制浏览器'
+          : '控制权申请失败；上锁后刷新页面可立即重新申请';
+        handleLeaseConflict(reason);
         return false;
       }
       webRCLeaseToken = data.lease;
       webRCStopToken = data.stop || '';
-      try { sessionStorage.setItem('cfDroneStopToken', webRCStopToken); } catch (_) {}
+      try {
+        localStorage.setItem('cfDroneStopToken', webRCStopToken);
+        sessionStorage.setItem('cfDroneStopToken', webRCStopToken);
+      } catch (_) {}
       webRCLeaseBlocked = false;
       updateRouteControls();
       return true;
@@ -1541,6 +1567,17 @@ function renderSelfCheckStatus(data) {
     armReadiness.className = 'diagnostic-summary offline';
     armReadiness.innerHTML = '<strong>当前固件未提供解锁条件</strong><small>刷新或更新飞控固件后，页面才能显示具体解锁阻止原因。</small>';
   }
+  const calibrationReadiness = document.getElementById('calibration-readiness');
+  const calibrationChecks = [
+    {ok:data.gyro_bias_ready===true,name:'陀螺仪静止校准',action:'将机身保持静止约 3 秒'},
+    {ok:data.accel_calibration_stored===true,name:'六面加速度计校准',action:'在调试页面运行六面加速度计校准'},
+    {ok:data.level_calibration_stored===true,name:'机身水平校准',action:'在调试页面采集并保存水平基准'}
+  ];
+  const calibrationPending=calibrationChecks.filter(item=>!item.ok);
+  calibrationReadiness.className='diagnostic-summary '+(calibrationPending.length?'fault':'ok');
+  calibrationReadiness.innerHTML=calibrationPending.length
+    ? `<strong>起飞前标定未完成（${calibrationPending.length} 项）</strong><small>${calibrationChecks.map(item=>`${item.ok?'✓':'✗'} ${item.name}${item.ok?'':'：'+item.action}`).join('<br>')}</small>`
+    : `<strong>起飞前标定已完成</strong><small>${calibrationChecks.map(item=>`✓ ${item.name}`).join('<br>')}</small>`;
   const ledReason = document.getElementById('led-alert-reason');
   const blockingFaults = diagnosticChecks.filter(check =>
     [1, 2, 4, 8, 256].includes(check.bit) && (faults & check.bit) !== 0);
@@ -1766,7 +1803,7 @@ function openLevelCalibrationFromConsole(){
 }
 
 function startAccelCalibrationFromConsole(){
-  if(!window.confirm('六面校准需要依次按提示放稳机体的六个面，每面等待约 8 秒。校准成功后会自动保存加速度计偏置与比例参数。现在开始？'))return;
+  if(!window.confirm('六面校准只使用 IMU，不需要磁力计。请依次按提示放稳机体的六个面，每面等待约 8 秒；成功后会自动保存加速度计偏置与比例参数。现在开始？'))return;
   runConsoleCommand('ca');
 }
 

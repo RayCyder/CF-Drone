@@ -8,6 +8,7 @@
 #include "util.h"
 #include "board_config.h"
 #include "diagnostics.h"
+#include "calibration_sensor_policy.h"
 #include "imu_capture.h"
 #include "stationary_imu_detector.h"
 
@@ -27,6 +28,11 @@ Vector accBias;
 Vector accScale(1, 1, 1);
 Vector gyroBias;
 LowPassFilter<Vector> gyroBiasFilter(0.001); // 陀螺仪偏置低通估计滤波器
+static bool gyroBiasInitialized = false;
+
+bool gyroBiasReady() {
+	return gyroBiasInitialized;
+}
 
 static Vector calibrationRawAcc;
 static uint32_t calibrationRawAccSequence;
@@ -180,13 +186,18 @@ void readIMU() {
 }
 
 void calibrateGyroOnce(const Vector &rawGyroSensor, const Vector &rawAccSensor) {
-	static Delay landedDelay(2);
 	static StationaryImuDetector stationaryDetector;
-	static bool gyroBiasInitialized = false;
+	static uint8_t stationaryWindowCount = 0;
+	static constexpr uint8_t REQUIRED_STATIONARY_WINDOWS = 16; // 16 * 128 ms ~= 2.05 s
 	extern bool armed;
-	if (armed || !landed) {
+	extern bool motorsActive();
+	// Do not gate bootstrap calibration on the single-sample `landed` flag.
+	// An uncalibrated accelerometer can sit near that flag's gravity threshold
+	// and briefly cross it due to noise, endlessly resetting this detector. The
+	// block detector below already validates gravity mean, variance and rotation.
+	if (armed || motorsActive()) {
 		stationaryDetector.reset();
-		landedDelay.update(false);
+		stationaryWindowCount = 0;
 		gyroBiasFilter.reset();
 		return;
 	}
@@ -203,11 +214,12 @@ void calibrateGyroOnce(const Vector &rawGyroSensor, const Vector &rawAccSensor) 
 		gyroBiasResidual, rawAccSensor, stationaryGyroMean, maxGyroMean);
 	if (stationarity == StationaryImuDetector::WINDOW_COLLECTING) return;
 	if (stationarity != StationaryImuDetector::STATIONARY) {
-		landedDelay.update(false);
+		stationaryWindowCount = 0;
 		gyroBiasFilter.reset();
 		return;
 	}
-	if (!landedDelay.update(true)) return; // require 2 seconds of stable windows
+	if (stationaryWindowCount < REQUIRED_STATIONARY_WINDOWS) ++stationaryWindowCount;
+	if (stationaryWindowCount < REQUIRED_STATIONARY_WINDOWS) return;
 
 	// The detector returns residual rate relative to the current estimate.
 	// Integrate only the residual from a complete stationary window.
@@ -224,7 +236,8 @@ void calibrateAccel() {
 		print("六面校准已在进行中，请按当前提示操作。\n");
 		return;
 	}
-	#if defined(CONFIG_IDF_TARGET_ESP32S3)
+	const CalibrationSensorAvailability sensors = {imuOK, false};
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
 	if (armed) {
 		print("六面校准无法启动：飞控仍处于解锁状态。\n");
 		return;
@@ -233,16 +246,16 @@ void calibrateAccel() {
 		print("六面校准无法启动：电机输出尚未归零。\n");
 		return;
 	}
-	if (!imuOK) {
+	if (!accelCalibrationSensorsReady(sensors)) {
 		print("六面校准无法启动：IMU 未就绪，请先执行 imu 和 diag。\n");
 		return;
 	}
-	#else
-	if (armed || motorsActive() || !imuOK) {
+#else
+	if (armed || motorsActive() || !accelCalibrationSensorsReady(sensors)) {
 		print("电机必须停止且 IMU 正常，才能执行加速度计校准。\n");
 		return;
 	}
-	#endif
+#endif
 	if (!imu.setAccelRange(imu.ACCEL_RANGE_2G)) {
 		imuOK = configureIMU();
 		setDiagnosticFault(DIAG_IMU_INIT, !imuOK);

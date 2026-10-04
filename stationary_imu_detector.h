@@ -9,7 +9,10 @@ public:
 	enum Result : uint8_t { WINDOW_COLLECTING, NOT_STATIONARY, STATIONARY };
 	static constexpr uint16_t WINDOW_SAMPLES = 128;
 	static constexpr float MAX_GYRO_MEAN_RAD_S = 0.01f;
-	static constexpr float BOOTSTRAP_GYRO_MEAN_RAD_S = 0.05f;
+	// Some MPU-6500 units start with zero-rate offsets above 0.1 rad/s. This
+	// wider limit is used only before the first bias estimate, while disarmed,
+	// landed, and after the variance and gravity checks below pass.
+	static constexpr float BOOTSTRAP_GYRO_MEAN_RAD_S = 0.20f;
 	static constexpr float MAX_GYRO_VARIANCE = 0.0001f;
 	static constexpr float MAX_ACCEL_VARIANCE = 0.01f;
 	static constexpr float GRAVITY_M_S2 = 9.80665f;

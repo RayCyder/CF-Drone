@@ -6,6 +6,7 @@
 void setupExternalSensors();
 void updateExternalSensors();
 void printExternalSensorReadings(float rollRadians, float pitchRadians);
+bool compassAvailable();
 bool getBarometerEstimate(BarometerEstimate &estimate);
 void printMagCalibrationStatus();
 bool startMagCalibration();

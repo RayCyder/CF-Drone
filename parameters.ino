@@ -83,6 +83,7 @@ Parameter parameters[] = {
 	{"CTL_Y_RATE_P",  &yawRatePID.p},       // 偏航角速率 P 增益（偏航惯量小，通常需更大值）
 	{"CTL_Y_RATE_I",  &yawRatePID.i},       // 偏航角速率 I 增益
 	{"CTL_Y_RATE_D",  &yawRatePID.d},       // 偏航角速率 D 增益
+	{"CTL_Y_RATE_WU", &yawRatePID.windup},  // 偏航角速率积分限幅
 
 	// ===== 控制（角度外环 PID）=====
 	// 角度环将目标姿态角误差转换为角速率指令，输出给内环。
@@ -728,6 +729,19 @@ bool saveParameterNow(const char *name) {
 		return true;
 	}
 	return false;
+}
+
+bool accelCalibrationStored() {
+	if (!parameterStorageReady || !accBias.valid() || !accScale.valid()) return false;
+	return accBias.norm() > 0.0001f ||
+		fabsf(accScale.x - 1.0f) > 0.0001f ||
+		fabsf(accScale.y - 1.0f) > 0.0001f ||
+		fabsf(accScale.z - 1.0f) > 0.0001f;
+}
+
+bool levelCalibrationStored() {
+	return parameterStorageReady &&
+		(fabsf(imuRotation.x) > 0.0001f || fabsf(imuRotation.y) > 0.0001f);
 }
 
 void printParameters() {

@@ -16,8 +16,11 @@
 #include "web_rc_input.h"
 #include "open_loop_sequence.h"
 #include "descent_calibration.h"
+#include "calibration_sensor_policy.h"
+#include "external_sensors.h"
 #include "imu_capture.h"
 #include "level_calibration_state.h"
+#include "level_calibration_policy.h"
 #include "quaternion.h"
 #include "control.h"
 #include "flight_log.h"
@@ -140,6 +143,9 @@ extern bool imuOK;
 extern Quaternion attitude;
 extern bool isParameterDirty(const char *name);
 extern bool parameterPersistenceReady();
+extern bool gyroBiasReady();
+extern bool accelCalibrationStored();
+extern bool levelCalibrationStored();
 extern float webRCThrottleScale, webRCStickScale, webRCYawScale;
 extern float stickDeadzone, throttleDeadzone;
 
@@ -175,6 +181,7 @@ static float levelCalibrationBeforePitchDeg = 0.0f;
 static float levelCalibrationAccelNorm = 0.0f;
 static float levelCalibrationAccelSd = 0.0f;
 static float levelCalibrationGyroSd = 0.0f;
+static float levelCalibrationGyroMeanNorm = 0.0f;
 static uint32_t levelCalibrationStartedMs = 0;
 static bool levelCalibrationStartRequested = false;
 static bool levelCalibrationCancelRequested = false;
@@ -280,11 +287,13 @@ static void finishLevelCalibrationProcessing() {
     levelCalibrationAccelNorm = gravity.norm();
     levelCalibrationAccelSd = max(sd[0], max(sd[1], sd[2]));
     levelCalibrationGyroSd = max(sd[3], max(sd[4], sd[5]));
-    if (!gravity.valid() || !isfinite(levelCalibrationAccelNorm) ||
-        fabsf(levelCalibrationAccelNorm - ONE_G) > ONE_G * 0.05f ||
-        levelCalibrationAccelSd > 0.10f || levelCalibrationGyroSd > 0.01f ||
-        Vector(mean[3], mean[4], mean[5]).norm() > 0.03f) {
-        setLevelCalibrationState(LEVEL_REJECTED, "not_stationary_or_gravity_invalid");
+    levelCalibrationGyroMeanNorm = Vector(mean[3], mean[4], mean[5]).norm();
+    const LevelCalibrationSampleGate sampleGate = gravity.valid()
+        ? levelCalibrationSampleGate(levelCalibrationAccelNorm, levelCalibrationAccelSd,
+            levelCalibrationGyroSd, levelCalibrationGyroMeanNorm, ONE_G)
+        : LEVEL_SAMPLE_GRAVITY_INVALID;
+    if (sampleGate != LEVEL_SAMPLE_OK) {
+        setLevelCalibrationState(LEVEL_REJECTED, levelCalibrationSampleGateReason(sampleGate));
         return;
     }
     // rotateVector(v, q) applies the inverse of q. Undo the current sensor-to-body
@@ -356,7 +365,9 @@ static void serviceLevelCalibration() {
     }
     if (state == LEVEL_QUEUED && takeLevelCalibrationStartRequest()) {
         resetLevelCalibrationProcessing();
-        if (armed || motorsActive() || !imuOK || isAccelCalibrationActive() || motorTestActive ||
+        const CalibrationSensorAvailability sensors = {imuOK, compassAvailable()};
+        if (armed || motorsActive() || !levelCalibrationSensorsReady(sensors) ||
+            isAccelCalibrationActive() || motorTestActive ||
             vibrationRouteBusy() || vibrationCalibrationState == VIBRATION_BOOT_WAIT ||
             vibrationCalibrationState == VIBRATION_QUEUED ||
             vibrationCalibrationState == VIBRATION_BASELINE ||
@@ -1756,32 +1767,30 @@ void setupWebRC() {
 #endif
     webRCServer.on("/web_rc/lease", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
-        // Disarmed pages may take over only after the current lease expires.
-        // In flight, the previous stop token proves continuity after a reload.
+        // While disarmed, the newest page takes control immediately. In flight,
+        // only a browser carrying the existing continuity token may recover
+        // after a refresh; an unrelated page cannot replace the controller.
         const String requestedStopToken = webRCServer.arg("stop");
-        const bool continuityRecovery = armed && webRCStopTokenMatches(requestedStopToken.c_str());
-        if (armed && !continuityRecovery) {
-            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"web_rc_stop_token_required\"}");
+        const bool continuityRecovery = armed &&
+            webRCStopTokenMatches(requestedStopToken.c_str());
+        if (!webRCLeaseTakeoverAllowed(armed, continuityRecovery)) {
+            webRCServer.send(409, "application/json",
+                "{\"ok\":0,\"error\":\"web_rc_flight_takeover_forbidden\"}");
             return;
         }
         char token[WEB_RC_LEASE_TOKEN_CHARS + 1];
         makeWebRCLeaseToken(token, sizeof(token));
         bool ownerChanged = false;
         const uint32_t now = millis();
-        if (!webRCLease.acquire(now, WEB_RC_TIMEOUT_MS, token, &ownerChanged, continuityRecovery)) {
-            char response[128];
-            const uint32_t age = (uint32_t)(now - webRCLease.lastSeenMs);
-            snprintf(response, sizeof(response),
-                "{\"ok\":0,\"error\":\"web_rc_lease_in_use\",\"retry_ms\":%lu}",
-                (unsigned long)(age < WEB_RC_TIMEOUT_MS ? WEB_RC_TIMEOUT_MS - age : 0));
-            webRCServer.send(409, "application/json", response);
+        if (!webRCLease.acquire(now, WEB_RC_TIMEOUT_MS, token, &ownerChanged, true)) {
+            webRCServer.send(500, "application/json", "{\"ok\":0,\"error\":\"web_rc_lease_generation_failed\"}");
             return;
         }
         if (ownerChanged) clearWebRCQueuedInputAndButtons();
         char stopToken[WEB_RC_LEASE_TOKEN_CHARS + 1];
         if (continuityRecovery) {
-            strncpy(stopToken, requestedStopToken.c_str(), sizeof(stopToken) - 1);
-            stopToken[sizeof(stopToken) - 1] = '\0';
+            strncpy(stopToken, requestedStopToken.c_str(), WEB_RC_LEASE_TOKEN_CHARS);
+            stopToken[WEB_RC_LEASE_TOKEN_CHARS] = '\0';
         } else {
             makeWebRCLeaseToken(stopToken, sizeof(stopToken));
             publishWebRCStopToken(stopToken);
@@ -1930,7 +1939,9 @@ void setupWebRC() {
     webRCServer.on("/level-calibration/start", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
         if (!requireWebRCLease()) return;
-        if (webRCServer.arg("confirm") != "1" || armed || motorsActive() || !imuOK ||
+        const CalibrationSensorAvailability sensors = {imuOK, compassAvailable()};
+        if (webRCServer.arg("confirm") != "1" || armed || motorsActive() ||
+            !levelCalibrationSensorsReady(sensors) ||
             isAccelCalibrationActive() || motorTestActive || vibrationRouteBusy() ||
             vibrationCalibrationState == VIBRATION_BOOT_WAIT ||
             vibrationCalibrationState == VIBRATION_QUEUED || vibrationCalibrationState == VIBRATION_BASELINE ||
@@ -1956,13 +1967,14 @@ void setupWebRC() {
         snprintf(json, sizeof(json),
             "{\"state\":\"%s\",\"reason\":\"%s\",\"armed\":%s,\"roll_deg\":%.3f,\"pitch_deg\":%.3f,"
             "\"before_roll_deg\":%.3f,\"before_pitch_deg\":%.3f,\"acc_norm\":%.3f,"
-            "\"acc_sd\":%.4f,\"gyro_sd\":%.5f,\"old_rot_roll_rad\":%.6f,"
+            "\"acc_sd\":%.4f,\"gyro_sd\":%.5f,\"gyro_mean_norm\":%.5f,\"old_rot_roll_rad\":%.6f,"
             "\"old_rot_pitch_rad\":%.6f,\"new_rot_roll_rad\":%.6f,\"new_rot_pitch_rad\":%.6f,"
             "\"persist_pending\":%s,\"pending\":%s}",
             names[state], reason, armed ? "true" : "false",
             degrees(angles.x), degrees(angles.y),
             levelCalibrationBeforeRollDeg, levelCalibrationBeforePitchDeg,
             levelCalibrationAccelNorm, levelCalibrationAccelSd, levelCalibrationGyroSd,
+            levelCalibrationGyroMeanNorm,
             levelCalibrationBaseRotation.x, levelCalibrationBaseRotation.y,
             levelCalibrationProposedRotation.x, levelCalibrationProposedRotation.y,
             (isParameterDirty("IMU_ROT_ROLL") || isParameterDirty("IMU_ROT_PITCH")) ? "true" : "false",
@@ -1972,9 +1984,11 @@ void setupWebRC() {
     webRCServer.on("/level-calibration/apply", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
         if (!requireWebRCLease()) return;
+        const CalibrationSensorAvailability sensors = {imuOK, compassAvailable()};
         if (webRCServer.arg("confirm") != "1" || getLevelCalibrationState() != LEVEL_READY ||
             getLevelCalibrationCancelRequested() ||
-            armed || motorsActive() || !imuOK || motorTestActive || vibrationRouteBusy() ||
+            armed || motorsActive() || !levelCalibrationSensorsReady(sensors) ||
+            motorTestActive || vibrationRouteBusy() ||
             isAccelCalibrationActive() || !parameterPersistenceReady() ||
             isParameterDirty("IMU_ROT_ROLL") || isParameterDirty("IMU_ROT_PITCH") ||
             imuRotation.x != levelCalibrationBaseRotation.x ||
@@ -2346,7 +2360,7 @@ void setupWebRC() {
 #endif
         const WebRCHoverThrottleReturn hoverReturn =
             computeWebRCHoverThrottleReturn(hoverThrottleInput(), webRCThrottleScale);
-        char json[800];
+        char json[896];
         const char *armReason = armBlockReason();
         const bool armReady = armed || !armReason;
         snprintf(json, sizeof(json),
@@ -2359,6 +2373,9 @@ void setupWebRC() {
             "\"http_rc_max_request_us\":%lu,\"http_rc_slow_requests\":%lu,"
             "\"control_source\":%u,\"thrust_target\":%.3f,\"hover_throttle_pct\":%.1f,"
             "\"hover_throttle_reachable\":%s,"
+            "\"compass_available\":%s,"
+            "\"gyro_bias_ready\":%s,\"accel_calibration_stored\":%s,"
+            "\"level_calibration_stored\":%s,"
             "\"arm_ready\":%s,\"arm_reason\":\"%s\"}",
             armed ? "true" : "false",
             ledFastBlinkActive() ? "true" : "false",
@@ -2377,6 +2394,10 @@ void setupWebRC() {
             (unsigned long)webRCSlowRequests,
             (unsigned)getCurrentControlSource(), thrustTarget, hoverReturn.percent,
             hoverReturn.reachable ? "true" : "false",
+            compassAvailable() ? "true" : "false",
+            gyroBiasReady() ? "true" : "false",
+            accelCalibrationStored() ? "true" : "false",
+            levelCalibrationStored() ? "true" : "false",
             armReady ? "true" : "false", armed ? "飞控已解锁" :
                 (armReason ? armReason : "当前解锁条件已满足"));
         webRCServer.send(200, "application/json", json);

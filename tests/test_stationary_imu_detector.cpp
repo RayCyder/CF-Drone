@@ -29,7 +29,7 @@ int main() {
 	assert(!pushBlock(detector, Vector(0.02f, 0.0f, 0.0f), gravity));
 	assert(pushBlock(detector, stationaryGyro, gravity));
 	// Raw sensor bias can exceed the tight post-calibration gate during startup.
-	assert(pushBlock(detector, Vector(0.041f, 0.0f, 0.0f), gravity,
+	assert(pushBlock(detector, Vector(0.13f, 0.0f, 0.0f), gravity,
 		StationaryImuDetector::BOOTSTRAP_GYRO_MEAN_RAD_S));
 
 	// Reject angular vibration and translational acceleration by per-axis variance.

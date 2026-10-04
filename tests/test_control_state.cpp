@@ -41,6 +41,12 @@ uint16_t takeWebRCButtonPressEdges(uint16_t* buttons){*buttons=webEdges; const u
 void setWebRCWarn(const char*){} void clearWebRCWarn(){}
 void webRCLossFailsafe();
 bool motorOutputsOK=true;
+bool gyroBiasCalibrated=true;
+bool gyroBiasReady(){return gyroBiasCalibrated;}
+bool accelCalibrationPersisted=true;
+bool accelCalibrationStored(){return accelCalibrationPersisted;}
+bool levelCalibrationPersisted=true;
+bool levelCalibrationStored(){return levelCalibrationPersisted;}
 struct TestESP {unsigned getFreeHeap(){return 100000;}} ESP;
 bool batteryAlertActiveForFlight(bool){return false;}
 void printInvalidParameterValues(){}
@@ -122,6 +128,16 @@ int main(){
 	assert(!requestArm());
 	assert(motorCutoffClearCount==clearsBeforeBlockedArm);
 	controlThrottle=0.0f;
+	gyroBiasCalibrated=false;
+	assert(!requestArm());
+	assert(armBlockReason() != nullptr);
+	gyroBiasCalibrated=true;
+	accelCalibrationPersisted=false;
+	assert(!requestArm());
+	accelCalibrationPersisted=true;
+	levelCalibrationPersisted=false;
+	assert(!requestArm());
+	levelCalibrationPersisted=true;
     armed=false; mode=STAB; controlThrottle=0;
     motorTestActive=true; motors[MOTOR_FRONT_RIGHT]=.05f;
     const unsigned cancelsBefore=motorTestCancelCount, abortsBefore=vibrationAbortCount;

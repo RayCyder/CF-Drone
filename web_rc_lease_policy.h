@@ -39,3 +39,7 @@ struct WebRCLeasePolicy {
 static inline bool webRCLeaseAllowsEmergencyButtonOverride(int type, int buttonIndex) {
     return type == 2 && (buttonIndex == 1 || buttonIndex == 2 || buttonIndex == 3);
 }
+
+static inline bool webRCLeaseTakeoverAllowed(bool armed, bool continuityTokenMatches) {
+    return !armed || continuityTokenMatches;
+}

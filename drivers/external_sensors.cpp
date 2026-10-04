@@ -6,6 +6,7 @@
 #include <math.h>
 #include "board_config.h"
 #include "bmp388_compensation.h"
+#include "calibration_sensor_policy.h"
 #include "flight_sensor_interfaces.h"
 
 extern Preferences storage;
@@ -344,7 +345,9 @@ void updateExternalSensors() {
 }
 
 bool startMagCalibration() {
-	if (!qmcReady || armed || motorTestActive || motorsActive()) return false;
+	const CalibrationSensorAvailability sensors = {true, qmcReady};
+	if (!magneticHeadingCalibrationSensorsReady(sensors) ||
+		armed || motorTestActive || motorsActive()) return false;
 	for (int axis = 0; axis < 3; ++axis) {
 		magMinimum[axis] = INT16_MAX;
 		magMaximum[axis] = INT16_MIN;
@@ -362,7 +365,8 @@ void stopMagCalibration() {
 void printMagCalibrationStatus() {
 	float offsets[3], scales[3];
 	const bool candidateValid = calculateMagCalibration(offsets, scales);
-	Serial.printf("MAG_CAL state=%s samples=%lu saved=%u candidate=%s", magCalibrationActive ? "collecting" : "stopped",
+	Serial.printf("MAG_CAL available=%u state=%s samples=%lu saved=%u candidate=%s", qmcReady ? 1U : 0U,
+		magCalibrationActive ? "collecting" : "stopped",
 		(unsigned long)magCalibrationSamples, magCalibration.valid ? 1 : 0, candidateValid ? "ready" : "insufficient_coverage");
 	for (int axis = 0; axis < 3; ++axis) {
 		Serial.printf(" min%d=%d max%d=%d", axis, magMinimum[axis], axis, magMaximum[axis]);
@@ -417,7 +421,9 @@ bool resetMagCalibration() {
 }
 
 bool alignMagHeading(float knownHeadingDegrees, float rollRadians, float pitchRadians) {
-	if (!magCalibration.valid || !isfinite(knownHeadingDegrees) || knownHeadingDegrees < 0.0f || knownHeadingDegrees >= 360.0f ||
+	const CalibrationSensorAvailability sensors = {true, qmcReady};
+	if (!magneticHeadingCalibrationSensorsReady(sensors) || !magCalibration.valid ||
+		!isfinite(knownHeadingDegrees) || knownHeadingDegrees < 0.0f || knownHeadingDegrees >= 360.0f ||
 		!isfinite(rollRadians) || !isfinite(pitchRadians) || armed || motorTestActive || motorsActive()) return false;
 	int16_t x, y, z;
 	if (!readQmc5883p(x, y, z)) return false;
@@ -431,7 +437,6 @@ bool alignMagHeading(float knownHeadingDegrees, float rollRadians, float pitchRa
 }
 
 void printExternalSensorReadings(float rollRadians, float pitchRadians) {
-	if (!qmcReady && !bmpAddress) { Serial.println("EXT_SENSOR error=unavailable"); return; }
 	if (bmpAddress) {
 		BarometerEstimate estimate;
 		if (getBarometerEstimate(estimate) && estimate.sample.valid) {
@@ -464,6 +469,10 @@ void printExternalSensorReadings(float rollRadians, float pitchRadians) {
 	} else {
 		Serial.println("COMPASS qmc5883p=not_found");
 	}
+}
+
+bool compassAvailable() {
+	return qmcReady;
 }
 
 bool getBarometerEstimate(BarometerEstimate &estimate) {

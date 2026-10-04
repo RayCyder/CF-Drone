@@ -407,6 +407,12 @@ const char* armBlockReason() {
 	if (imuRotationRestartPending()) return "IMU 安装角已改变，重启飞控后才可解锁";
 	if (controlThrottle > ARM_THROTTLE_LIMIT) return "油门高于解锁上限 5%";
 	if (!imuOK) return "IMU 未就绪";
+	extern bool gyroBiasReady();
+	if (!gyroBiasReady()) return "陀螺仪静止校准尚未完成，请将机身静置约 3 秒";
+	extern bool accelCalibrationStored();
+	if (!accelCalibrationStored()) return "尚未完成六面加速度计校准，请在调试页面运行校准";
+	extern bool levelCalibrationStored();
+	if (!levelCalibrationStored()) return "尚未完成机身水平校准，请在调试页面采集并保存水平基准";
 	if (batteryBlocksArming()) return "电池电压低于解锁门槛 3.5 V";
 	if (hasBlockingDiagnosticFault()) return "存在阻止解锁的诊断故障，请查看 diag";
 	if (parameterPersistencePending()) return "参数尚未写入闪存，暂不可解锁";
