@@ -58,15 +58,16 @@
 #elif defined(CONFIG_IDF_TARGET_ESP32S3)
 // ---------------------- ESP32S3 -------------------------
 
-// ---- 电机引脚：GPIO4-7，远离 FSPI 区（GPIO10-13），无 Strapping 约束 ----
-#define BOARD_MOTOR_PINS   {4, 5, 6, 7}    // RL=GPIO4, RR=GPIO5, FR=GPIO6, FL=GPIO7
+// ---- 电机引脚（原理图网络：PWM3/PWM2/PWM1/PWM4）----
+// 四路 AO3416 为低边 N-MOS，栅极均有 10k 下拉：高电平/PWM 导通，低电平关闭。
+#define BOARD_MOTOR_PINS   {2, 3, 6, 8}    // RL=PWM3/GPIO2, RR=PWM2/GPIO3, FR=PWM1/GPIO6, FL=PWM4/GPIO8
 
 // ---- 电池 ADC：GPIO1（ADC1_CH0，S3 的 ADC1 范围为 GPIO1-10）----
 #define BOARD_VBAT_ADC_PIN 1
 
-// ---- RC 串口（CRSF/ELRS 默认）：GPIO8，与 FSPI/UART0 无冲突 ----
+// ---- RC 串口（CRSF/ELRS 默认）：原理图 IO4 ----
 #define BOARD_RC_SERIAL    Serial2
-#define BOARD_RC_RX_PIN    8
+#define BOARD_RC_RX_PIN    4
 #define BOARD_RC_TX_PIN    -1
 #define BOARD_RC_PROTOCOL  1
 #define BOARD_RC_BAUD      420000
@@ -82,10 +83,13 @@
 #define BOARD_I2C_SDA          35          // GPIO35
 #define BOARD_I2C_SCL          36          // GPIO36
 
-// ---- LED：新 PCB 接 GPIO2 普通 LED，驱动方式与 ESP32 相同 ----
-#define BOARD_LED_ENABLED  1
-#define BOARD_LED_PIN      2
+// ---- LED：原理图没有独立的 MCU 状态灯；GPIO2 是后左电机 PWM3 ----
+#define BOARD_LED_ENABLED  0
+#define BOARD_LED_PIN      (-1)
 #define BOARD_LED_INVERTED 0
+
+// S3 开机执行拆桨电机自检；测试时必须固定机体并拆除桨叶。
+#define CF_DRONE_ENABLE_BOOT_MOTOR_SELF_CHECK 1
 
 // ---- 性能与资源配置（S3 标准）----
 #define BOARD_VBAT_ADC_SAMPLES       16 // 每次电压均值样本数；样本分散到多个主循环

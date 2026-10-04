@@ -37,6 +37,14 @@ static int calibrationSampleCount;
 static uint32_t calibrationLastSequence;
 static uint32_t calibrationPhaseStarted;
 static bool calibrationProgressShown;
+static const int ACCEL_CAL_TARGET_SAMPLES = 1000;
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+static const int ACCEL_CAL_MIN_SAMPLES = 500;
+static const uint32_t ACCEL_CAL_SAMPLE_TIMEOUT_MS = 5000;
+#else
+static const int ACCEL_CAL_MIN_SAMPLES = 950;
+static const uint32_t ACCEL_CAL_SAMPLE_TIMEOUT_MS = 2500;
+#endif
 enum AccelCalibrationPhase { CAL_IDLE, CAL_SETTLE, CAL_SAMPLE, CAL_GAP };
 static AccelCalibrationPhase calibrationPhase = CAL_IDLE;
 static const char *calibrationInstructions[6] = {
@@ -216,10 +224,25 @@ void calibrateAccel() {
 		print("六面校准已在进行中，请按当前提示操作。\n");
 		return;
 	}
+	#if defined(CONFIG_IDF_TARGET_ESP32S3)
+	if (armed) {
+		print("六面校准无法启动：飞控仍处于解锁状态。\n");
+		return;
+	}
+	if (motorsActive()) {
+		print("六面校准无法启动：电机输出尚未归零。\n");
+		return;
+	}
+	if (!imuOK) {
+		print("六面校准无法启动：IMU 未就绪，请先执行 imu 和 diag。\n");
+		return;
+	}
+	#else
 	if (armed || motorsActive() || !imuOK) {
 		print("电机必须停止且 IMU 正常，才能执行加速度计校准。\n");
 		return;
 	}
+	#endif
 	if (!imu.setAccelRange(imu.ACCEL_RANGE_2G)) {
 		imuOK = configureIMU();
 		setDiagnosticFault(DIAG_IMU_INIT, !imuOK);
@@ -326,17 +349,19 @@ void updateAccelCalibration() {
 			if (calibrationRawAcc.valid()) {
 				calibrationSum = calibrationSum + calibrationRawAcc;
 				++calibrationSampleCount;
-				if (!calibrationProgressShown && calibrationSampleCount >= 500) {
-					print("第%d面采样进度：%d/1000。\n", calibrationFace + 1, calibrationSampleCount);
+				if (!calibrationProgressShown && calibrationSampleCount >= ACCEL_CAL_TARGET_SAMPLES / 2) {
+					print("第%d面采样进度：%d/%d。\n", calibrationFace + 1,
+						calibrationSampleCount, ACCEL_CAL_TARGET_SAMPLES);
 					calibrationProgressShown = true;
 				}
 			}
 		}
-		if (calibrationSampleCount >= 1000 || (uint32_t)(now - calibrationPhaseStarted) >= 2500) {
-			if (calibrationSampleCount < 950) {
+		if (calibrationSampleCount >= ACCEL_CAL_TARGET_SAMPLES ||
+			(uint32_t)(now - calibrationPhaseStarted) >= ACCEL_CAL_SAMPLE_TIMEOUT_MS) {
+			if (calibrationSampleCount < ACCEL_CAL_MIN_SAMPLES) {
 				char reason[64];
-				snprintf(reason, sizeof(reason), "第%d面有效样本不足（%d/1000）",
-					calibrationFace + 1, calibrationSampleCount);
+				snprintf(reason, sizeof(reason), "第%d面有效样本不足（%d/%d）",
+					calibrationFace + 1, calibrationSampleCount, ACCEL_CAL_MIN_SAMPLES);
 				abortAccelCalibration(reason);
 				return;
 			}

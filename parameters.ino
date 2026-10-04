@@ -363,6 +363,47 @@ static void migrateEstimatorAccelerationDefault() {
 	}
 }
 
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+static void migrateS3PinMapDefaults() {
+	if (!parameterStorageReady) return;
+	static const char *versionKey = "S3_PINMAP_VER";
+	static const uint8_t version = 1;
+	if (storage.getUChar(versionKey, 0) == version) return;
+
+	static const char *motorKeys[] = {"MOT_PIN_RL", "MOT_PIN_RR", "MOT_PIN_FR", "MOT_PIN_FL"};
+	static const int oldPins[] = {4, 5, 6, 7};
+	static const int schematicPins[] = {2, 3, 6, 8};
+	bool compatibleWithOldDefault = true;
+	for (int i = 0; i < 4; ++i) {
+		if (!storage.isKey(motorKeys[i])) continue;
+		const int stored = (int)storage.getFloat(motorKeys[i], oldPins[i]);
+		if (stored != oldPins[i] && stored != schematicPins[i]) compatibleWithOldDefault = false;
+	}
+
+	bool ready = true;
+	if (compatibleWithOldDefault) {
+		for (int i = 0; i < 4; ++i) {
+			if (storage.putFloat(motorKeys[i], (float)schematicPins[i]) != sizeof(float) ||
+				(int)storage.getFloat(motorKeys[i], -1) != schematicPins[i]) ready = false;
+		}
+		if (storage.isKey("RC_RX_PIN") && (int)storage.getFloat("RC_RX_PIN", 8) == 8) {
+			if (storage.putFloat("RC_RX_PIN", 4.0f) != sizeof(float) ||
+				(int)storage.getFloat("RC_RX_PIN", -1) != 4) ready = false;
+		}
+	}
+
+	if (ready && storage.putUChar(versionKey, version) == sizeof(uint8_t) &&
+		storage.getUChar(versionKey, 0) == version) {
+		print("S3_PINMAP_MIGRATION motors=%s rc_default=GPIO4 result=OK\n",
+			compatibleWithOldDefault ? "GPIO2,3,6,8" : "custom-preserved");
+		recordSystemLogEvent("PARAM_MIG", compatibleWithOldDefault ?
+			"S3 pins RL2 RR3 FR6 FL8 RC4" : "S3 custom pins preserved");
+	} else {
+		print("[参数迁移] S3 引脚映射迁移未完成；下次启动重试。\n");
+	}
+}
+#endif
+
 static void recoverLevelRotationTransaction() {
 	if (!parameterStorageReady || !storage.isKey(level_rotation::KEY)) return;
 	if (!level_rotation::recover(storage)) {
@@ -454,6 +495,9 @@ void setupParameters() {
 	}
 #endif
 	migrateEstimatorAccelerationDefault();
+	#if defined(CONFIG_IDF_TARGET_ESP32S3)
+	migrateS3PinMapDefaults();
+	#endif
 	// Read parameters from storage
 	for (auto &parameter : parameters) {
 		const char *storageKey = parameterStorageKey(parameter.name);
