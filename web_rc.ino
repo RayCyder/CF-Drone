@@ -107,7 +107,6 @@ static bool vibrationBaselineComplete = false;
 static VibrationMotorResult vibrationBaseline = {};
 static volatile const char *vibrationCalibrationReason = "empty";
 static VibrationMotorResult vibrationCalibrationResults[4] = {};
-static bool vibrationBootSelfCheckActive = false;
 static const int vibrationMotorIds[4] = {MOTOR_FRONT_RIGHT, MOTOR_FRONT_LEFT, MOTOR_REAR_RIGHT, MOTOR_REAR_LEFT};
 static const char *vibrationMotorNames[4] = {"FR", "FL", "RR", "RL"};
 
@@ -144,16 +143,16 @@ extern bool parameterPersistenceReady();
 extern float webRCThrottleScale, webRCStickScale, webRCYawScale;
 extern float stickDeadzone, throttleDeadzone;
 
-static bool bootSelfCheckMayIgnoreLowBattery() {
+static bool vibrationSelfCheckMayIgnoreLowBattery() {
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
-    return vibrationBootSelfCheckActive;
+    return true;
 #else
     return false;
 #endif
 }
 
 static bool vibrationBatteryBlocksTest() {
-    return batteryBlocksArming() && !bootSelfCheckMayIgnoreLowBattery();
+    return batteryBlocksArming() && !vibrationSelfCheckMayIgnoreLowBattery();
 }
 extern WebServer &webRCServer;
 #if WIFI_ENABLED
@@ -615,7 +614,7 @@ static void serviceVibrationCalibration() {
         }
         if (!startMotorTest(vibrationMotorIds[vibrationCalibrationIndex],
                 VIBRATION_TEST_OUTPUT, VIBRATION_TEST_MS,
-                bootSelfCheckMayIgnoreLowBattery())) {
+                vibrationSelfCheckMayIgnoreLowBattery())) {
             imuCapture.stop();
             imuCapture.release();
             setVibrationCalibrationState(VIBRATION_ABORTED, "motor_test_rejected");
@@ -690,7 +689,6 @@ static void serviceVibrationCalibration() {
 
 void runBootMotorSelfCheckBeforeWiFi() {
 #if CF_DRONE_ENABLE_BOOT_MOTOR_SELF_CHECK
-    vibrationBootSelfCheckActive = true;
     portENTER_CRITICAL(&vibrationCalibrationMux);
     vibrationCalibrationIndex = 0;
     vibrationBaselineComplete = false;
@@ -733,7 +731,6 @@ void runBootMotorSelfCheckBeforeWiFi() {
         delay(0);
     }
     if (motorTestActive) cancelMotorTest();
-    vibrationBootSelfCheckActive = false;
     const bool complete = vibrationCalibrationState == VIBRATION_COMPLETE;
     print("MOTOR_SELF_CHECK state=%s phase=pre_wifi step=%u reason=%s\n",
         complete ? "COMPLETE" : "ABORTED", (unsigned)vibrationCalibrationIndex,
@@ -2040,7 +2037,7 @@ void setupWebRC() {
         portEXIT_CRITICAL(&vibrationCalibrationMux);
         if (active || armed || motorsActive() || !motorOutputsOK || isAccelCalibrationActive() ||
             isLevelCalibrationActive() ||
-            batteryBlocksArming() || hasBlockingDiagnosticFault() || vibrationRouteBusy() ||
+            vibrationBatteryBlocksTest() || hasBlockingDiagnosticFault() || vibrationRouteBusy() ||
             imuCapture.state() != IMU_CAPTURE_IDLE) {
             webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires_disarmed_ready_motors_idle_imu_and_no_faults\"}");
             return;

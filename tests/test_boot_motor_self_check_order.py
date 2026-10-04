@@ -54,10 +54,10 @@ for state_guard in (
     assert state_guard in web, f"motor self-check lost armed-state abort: {state_guard}"
 
 assert "#if defined(CONFIG_IDF_TARGET_ESP32S3)" in web
-assert "return vibrationBootSelfCheckActive;" in web
+assert "static bool vibrationSelfCheckMayIgnoreLowBattery()" in web
+assert "return true;" in web
 assert "return false;" in web
-assert "vibrationBootSelfCheckActive = true;" in runner
-assert "vibrationBootSelfCheckActive = false;" in runner
+assert "batteryBlocksArming() && !vibrationSelfCheckMayIgnoreLowBattery()" in web
 
 baseline_save = web.index("const VibrationMotorResult baseline = saveVibrationBaselineCapture()")
 baseline_reject = web.index("baseline.samples < VIBRATION_RESPONSE_MIN_BASELINE_SAMPLES", baseline_save)
