@@ -255,6 +255,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <button id="route-page-button" class="self-check-button" onclick="openRoutePage()">开环序列</button>
       <button id="descent-calibration-button" class="self-check-button" onclick="handleDescentCalibrationEntry()">迫降标定</button>
       <button id="console-open-button" class="self-check-button" onclick="toggleConsole()">调试</button>
+      <button id="wifi-settings-button" class="self-check-button" onclick="openWifiSettings()">Wi-Fi 配置</button>
     </nav>
     <div class="status-bar">
       <div class="status-item"><span class="status-dot" id="status-dot"></span><span id="connection-text">连接中...</span></div>
@@ -299,7 +300,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <div id="console-panel" class="console-panel">
     <div class="console-tools">
       <div class="console-tools-row"><strong>调试工具</strong><button class="primary" onclick="openVibrationCalibrationFromConsole()">电机扰动检测</button><button class="primary" onclick="startAccelCalibrationFromConsole()">六面加速度计校准</button><button class="primary" onclick="openLevelCalibrationFromConsole()">机身水平校准</button></div>
-      <div class="console-tools-row"><strong>常用命令</strong><button onclick="runConsoleCommand('diag brief')">快速预检</button><button onclick="runConsoleCommand('diag')">完整诊断</button><button onclick="runConsoleCommand('imu')">IMU</button><button onclick="runConsoleCommand('ps')">姿态</button><button onclick="runConsoleCommand('p CTL_TRIM_ROLL')">横滚配平值</button><button onclick="runConsoleCommand('p CTL_TRIM_PITCH')">俯仰配平值</button><button onclick="runConsoleCommand('rc')">遥控输入</button><button onclick="runConsoleCommand('mot')">电机输出</button><button onclick="runConsoleCommand('wifi')">Wi-Fi</button><button onclick="runConsoleCommand('time')">循环时间</button><button onclick="runConsoleCommand('sys')">系统任务</button><button onclick="runConsoleCommand('log status')">日志状态</button><button onclick="runConsoleCommand('p')">参数列表</button><button onclick="runConsoleCommand('help')">命令帮助</button></div>
+      <div class="console-tools-row"><strong>常用命令</strong><button onclick="runConsoleCommand('diag brief')">快速预检</button><button onclick="runConsoleCommand('diag')">完整诊断</button><button onclick="runConsoleCommand('imu')">IMU</button><button onclick="runConsoleCommand('ps')">姿态</button><button onclick="runConsoleCommand('p CTL_TRIM_ROLL')">横滚配平值</button><button onclick="runConsoleCommand('p CTL_TRIM_PITCH')">俯仰配平值</button><button onclick="runConsoleCommand('rc')">遥控输入</button><button onclick="runConsoleCommand('mot')">电机输出</button><button onclick="runConsoleCommand('wifi')">Wi-Fi</button><button onclick="runConsoleCommand('time')">循环时间</button><button onclick="runConsoleCommand('sys')">系统任务</button><button onclick="runConsoleCommand('log status')">日志状态</button><button onclick="runConsoleCommand('p')">参数列表</button><button onclick="runConsoleCommand('help')">命令帮助</button><button onclick="restartFromConsole()">重启</button></div>
       <div class="console-tools-note">磁力计为可选传感器；未安装磁力计仍可进行六面加速度计校准和机身水平校准，仅磁航向与 magcal 不可用。机身静置水平但姿态不为 0°：使用“机身水平校准”修正 IMU 安装角。只有实际飞行松杆后持续漂移时，才调整 CTL_TRIM_ROLL / CTL_TRIM_PITCH。</div>
       <div class="console-tools-note"><strong>PID 查看与调整：</strong>点击“参数列表”查看当前值，或输入 <code>p CTL_R_RATE_P</code> 查询单项；输入 <code>p CTL_R_RATE_P 0.06</code> 修改。仅允许在上锁且电机停止时执行，修改后自动进入参数保存队列。</div>
       <div id="console-status" class="console-status" role="status">打开后将主动确认飞控处于上锁状态。</div>
@@ -409,7 +410,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
     </div>
   </section>
   <!-- 版权页脚 -->
-  <div class="footer"><a href="/wifi">Wi-Fi 设置</a> · <a href="/telemetry">实时日志</a> · <a href="https://oshwhub.com/songge8/project_qqqyfdkm" target="_blank">琛光无人机开源项目</a></div>
+  <div class="footer"><a href="/telemetry">实时日志</a> · <a href="https://oshwhub.com/songge8/project_qqqyfdkm" target="_blank">琛光无人机开源项目</a></div>
 </div>
 
 <script>
@@ -479,6 +480,15 @@ try {
 } catch (_) {}
 let webRCLeasePromise = null;
 let webRCLeaseBlocked = false;
+
+function openWifiSettings() {
+  if (currentArmed) {
+    showToast('请先上锁，再进入 Wi-Fi 配置');
+    return;
+  }
+  const message = 'Wi-Fi 配置是可选功能。未配置时，设备使用 Drone_WiFi，访问 192.168.4.1 即可控制。配置后设备将关闭 Drone_WiFi，仅连接所选网络，需要使用路由器分配的地址访问。现在进入配置页面？';
+  if (window.confirm(message)) location.href = '/wifi';
+}
 
 let buttonStates     = new Array(16).fill(false);
 let lastButtonStates = new Array(16).fill(false);
@@ -1805,6 +1815,13 @@ function openLevelCalibrationFromConsole(){
 function startAccelCalibrationFromConsole(){
   if(!window.confirm('六面校准只使用 IMU，不需要磁力计。请依次按提示放稳机体的六个面，每面等待约 8 秒；成功后会自动保存加速度计偏置与比例参数。现在开始？'))return;
   runConsoleCommand('ca');
+}
+
+function restartFromConsole(){
+  if(currentArmed){showToast('请先上锁并停止电机，再重启飞控');return;}
+  if(!window.confirm('确认重启飞控？重启会中断当前网页连接，并清空尚未导出的 RAM 飞行日志。'))return;
+  runConsoleCommand('reboot');
+  setTimeout(()=>setConsoleStatus('重启命令已提交，等待飞控重新上线…','busy'),250);
 }
 
 document.getElementById('console-window').addEventListener('click',event=>{

@@ -92,6 +92,9 @@ float hoverThrottleInput() {
 #define AUTO_QUAT_NORM_MIN 0.5f
 #define AUTO_QUAT_NORM_MAX 1.5f
 #define MANUAL_SOURCE_ARBITRATION_MS 250UL
+static constexpr uint32_t LANDING_MANUAL_TAKEOVER_HOLD_MS = 300;
+static constexpr float LANDING_MANUAL_TAKEOVER_AXIS = 0.15f;
+static constexpr float LANDING_MANUAL_TAKEOVER_THROTTLE = 0.10f;
 
 static AutoTargetKind autoTargetKind = AUTO_TARGET_NONE;
 static AutoAttitudeCommand autoAttitudeCommand;
@@ -198,6 +201,31 @@ static bool manualInputFresh(uint32_t timestampMs, uint32_t nowMs) {
 		(uint32_t)(nowMs - timestampMs) <= MANUAL_SOURCE_ARBITRATION_MS;
 }
 
+static bool landingManualInputFresh(ControlSource source, uint32_t nowMs) {
+	if (source == CONTROL_SOURCE_PHYSICAL_RC)
+		return manualInputFresh(physicalRCManualInputMs, nowMs);
+	if (source == CONTROL_SOURCE_MAVLINK_MANUAL)
+		return manualInputFresh(mavlinkManualInputMs, nowMs);
+#if WEB_RC_ENABLED
+	if (source == CONTROL_SOURCE_WEB_RC) {
+		extern unsigned long webRCLastStickUpdate;
+		const uint32_t lastStickMs = __atomic_load_n(&webRCLastStickUpdate, __ATOMIC_ACQUIRE);
+		return manualInputFresh(lastStickMs, nowMs);
+	}
+#endif
+	return false;
+}
+
+static bool landingManualTakeoverRequested(ControlSource source, uint32_t nowMs) {
+	if (!landingManualInputFresh(source, nowMs)) return false;
+	if (!isfinite(controlRoll) || !isfinite(controlPitch) ||
+		!isfinite(controlYaw) || !isfinite(controlThrottle)) return false;
+	return controlThrottle >= LANDING_MANUAL_TAKEOVER_THROTTLE ||
+		fabsf(controlRoll) >= LANDING_MANUAL_TAKEOVER_AXIS ||
+		fabsf(controlPitch) >= LANDING_MANUAL_TAKEOVER_AXIS ||
+		fabsf(controlYaw) >= LANDING_MANUAL_TAKEOVER_AXIS;
+}
+
 static ControlSource selectedManualControlSource() {
 #if WEB_RC_ENABLED
 	if (isUsingWebRC()) return CONTROL_SOURCE_WEB_RC;
@@ -210,7 +238,9 @@ static ControlSource selectedManualControlSource() {
 }
 
 bool canAcceptMavlinkManualControl() {
-	if (mode == AUTO || isControlledLandingActive()) return false;
+	// Fresh manual packets may take over a controlled landing after the same
+	// sustained-input gate used by physical and Web RC.
+	if (mode == AUTO && !isControlledLandingActive()) return false;
 #if WEB_RC_ENABLED
 	extern bool isLocalSequenceRunning();
 	if (isLocalSequenceRunning()) return false;
@@ -569,6 +599,31 @@ void interpretControls() {
 	} // Local sequence values must not trigger RC mode changes or arm gestures.
 #endif
 
+	static uint32_t landingManualTakeoverStartedMs = 0;
+	if (isControlledLandingActive()) {
+		const uint32_t nowMs = millis();
+		const ControlSource takeoverSource = selectedManualControlSource();
+		if (landingManualTakeoverRequested(takeoverSource, nowMs)) {
+			if (!landingManualTakeoverStartedMs)
+				landingManualTakeoverStartedMs = nowMs ? nowMs : 1;
+			if ((uint32_t)(nowMs - landingManualTakeoverStartedMs) >=
+				LANDING_MANUAL_TAKEOVER_HOLD_MS) {
+				char event[56];
+				snprintf(event, sizeof(event), "source=%u hold_ms=%lu",
+					(unsigned)takeoverSource,
+					(unsigned long)(nowMs - landingManualTakeoverStartedMs));
+				recordSystemLogEvent("LANDING_EXIT", event);
+				setFlightMode(STAB);
+				setCurrentControlSource(takeoverSource);
+				landingManualTakeoverStartedMs = 0;
+				print("持续人工输入已接管，退出自动迫降\n");
+			}
+		} else {
+			landingManualTakeoverStartedMs = 0;
+		}
+	} else {
+		landingManualTakeoverStartedMs = 0;
+	}
 	if ((mode == AUTO && !localSequenceRunning) || isControlledLandingActive()) return;
 
 #if WEB_RC_ENABLED

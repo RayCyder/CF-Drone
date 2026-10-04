@@ -1024,12 +1024,8 @@ static String wifiJsonQuote(const char *value) {
 #endif
 
 static bool rejectFlightApiInConfigPortal() {
-#if WIFI_ENABLED
-    if (!WifiRecoveryPolicy::flightApiAllowed(isWiFiConfigPortalActive())) {
-        webRCServer.send(403, "application/json", "{\"ok\":0,\"error\":\"flight_api_disabled_in_wifi_config_portal\"}");
-        return true;
-    }
-#endif
+    // Drone_WiFi is a normal control network. Its AP being active must not
+    // disable the flight UI or API at 192.168.4.1.
     return false;
 }
 
@@ -1609,21 +1605,6 @@ void setupWebRC() {
     lastValidThrottle = THROTTLE_MIN;
     lastValidRoll = lastValidPitch = lastValidYaw = 0.0f;
 
-#if WIFI_ENABLED
-    // Apply the portal policy before route dispatch, including read/export
-    // endpoints and any future routes added to this server.
-    webRCServer.addMiddleware([](WebServer &server, Middleware::Callback next) {
-        const HTTPMethod method = server.method();
-        if (isWiFiConfigPortalActive() &&
-            !WifiRecoveryPolicy::portalHttpAllowed(server.uri().c_str(),
-                method == HTTP_GET, method == HTTP_POST)) {
-            server.send(403, "application/json", "{\"ok\":0,\"error\":\"endpoint_disabled_in_wifi_config_portal\"}");
-            return true;
-        }
-        return next();
-    });
-#endif
-
     webRCServer.addMiddleware([](WebServer &server, Middleware::Callback next) {
         const HTTPMethod method = server.method();
         if ((armed || motorsActive()) && !webArmedRouteAllowed(server.uri().c_str(),
@@ -1635,12 +1616,6 @@ void setupWebRC() {
     });
 
     webRCServer.on("/", HTTP_GET, []() {
-#if WIFI_ENABLED
-        if (isWiFiConfigPortalActive()) {
-            webRCServer.send_P(200, "text/html; charset=utf-8", wifiConfigHtml);
-            return;
-        }
-#endif
         // send_P performs one large write for this 100+ KiB page and ignores
         // a short write. A truncated response leaves later JS functions
         // undefined in the browser. Send bounded pieces and account for every
@@ -1769,7 +1744,11 @@ void setupWebRC() {
             webRCServer.send(500, "application/json", json);
             return;
         }
-        webRCServer.send(200, "application/json", "{\"ok\":1,\"message\":\"已删除网络配置。\"}");
+        const bool apOnly = getWiFiProfileCount() == 0;
+        webRCServer.send(200, "application/json", apOnly
+            ? "{\"ok\":1,\"message\":\"已删除最后一个网络；飞控即将重启并启用 Drone_WiFi，可通过 192.168.4.1 访问。\"}"
+            : "{\"ok\":1,\"message\":\"已删除网络配置；飞控即将重启并连接剩余的优先网络。\"}");
+        scheduleWiFiRestart();
     });
 #endif
     webRCServer.on("/web_rc/lease", HTTP_POST, []() {
@@ -2795,13 +2774,6 @@ void setupWebRC() {
     });
 
     webRCServer.onNotFound([]() {
-#if WIFI_ENABLED
-        if (isWiFiConfigPortalActive()) {
-            webRCServer.sendHeader("Location", "/wifi", true);
-            webRCServer.send(302, "text/plain", "Wi-Fi configuration");
-            return;
-        }
-#endif
         webRCServer.send(404, "text/plain", "Not found");
     });
 

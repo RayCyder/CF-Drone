@@ -17,7 +17,13 @@ ImuCaptureBuffer imuCapture;
 
 bool imuOK = false; // IMU 初始化是否成功；false 时禁止解锁，readIMU() 跳过等待
 bool imuSampleValid = false; // 当前主循环是否发布了新的有效 IMU 样本
+static uint32_t imuLastValidSampleMs = 0;
 extern bool saveParameterNow(const char *name);
+
+uint32_t imuValidSampleAgeMs(uint32_t nowMs) {
+	const uint32_t lastMs = __atomic_load_n(&imuLastValidSampleMs, __ATOMIC_ACQUIRE);
+	return lastMs ? (uint32_t)(nowMs - lastMs) : UINT32_MAX;
+}
 
 // IMU 安装方向（欧拉角，单位 rad）。默认值 (0, 0, -PI/2) 对应本 PCB 的安装方式：
 // 芯片正面朝上，X 丝印→飞行器右侧，Y 丝印→飞行器前方 → 转换公式 Vector(data.y, -data.x, data.z)
@@ -172,6 +178,8 @@ void readIMU() {
 	++calibrationRawAccSequence;
 	gyro = bodyGyro;
 	acc = bodyAcc;
+	const uint32_t sampleMs = millis();
+	__atomic_store_n(&imuLastValidSampleMs, sampleMs ? sampleMs : 1, __ATOMIC_RELEASE);
 	imuSampleValid = true;
 	if (consecutiveGoodFrames < 100) ++consecutiveGoodFrames;
 	if (consecutiveGoodFrames >= 100) {

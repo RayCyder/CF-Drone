@@ -404,7 +404,7 @@ static void stopWiFiConfigPortalForRetry(const char *reason) {
 	configPortalSSID = "";
 	wifiAPRetryAtMs = millis() + WIFI_AP_RETRY_DELAY_MS;
 	if (wifiMode == W_STA) {
-		WiFi.mode(WIFI_STA);
+		WiFi.mode(activeWifiProfileCount ? WIFI_STA : WIFI_AP);
 		wifiSTAReconnectAtMs = millis();
 		wifiSTARetryResetPending = false;
 	} else {
@@ -415,12 +415,11 @@ static void stopWiFiConfigPortalForRetry(const char *reason) {
 	recordSystemLogEvent("WIFI_AP", eventMessage);
 }
 
-static void startWiFiConfigPortal(bool keepStation) {
+static void startWiFiConfigPortal() {
 	if (configPortalActive || configPortalStarting ||
 		!WifiRecoveryPolicy::portalStartAllowed(armed, motorsActive())) return;
 	__atomic_store_n(&wifiAPEventStarted, false, __ATOMIC_RELEASE);
-	const wifi_mode_t requestedMode = keepStation ? WIFI_AP_STA : WIFI_AP;
-	const bool modeReady = WiFi.mode(requestedMode);
+	const bool modeReady = WiFi.mode(WIFI_AP);
 	String ssid = storage.getString("WIFI_AP_SSID", "Drone_WiFi");
 	String password = storage.getString("WIFI_AP_PASS", "");
 	if (ssid.isEmpty()) ssid = "Drone_WiFi";
@@ -500,12 +499,12 @@ void setupWiFi() {
 	}
 
 	if (wifiMode == W_AP) {
-		startWiFiConfigPortal(false);
+		startWiFiConfigPortal();
 	} else {
 		if (!activeWifiProfileCount) {
-			print("WIFI_STATE state=NO_CREDENTIALS action=START_CONFIG_AP\n");
-			recordSystemLogEvent("WIFI", "state=NO_CREDENTIALS");
-			startWiFiConfigPortal(false);
+			startWiFiConfigPortal();
+			print("WIFI_STATE state=AP_CONTROL_ONLY reason=NO_STA_CREDENTIALS\n");
+			recordSystemLogEvent("WIFI", "state=AP_CONTROL_ONLY");
 		} else {
 			char ssid[33], password[64];
 			wifiProfileStrings(activeWifiProfiles[0], ssid, sizeof(ssid), password, sizeof(password));
@@ -594,15 +593,13 @@ void serviceWiFi() {
 			print("WIFI_CONFIG_AP state=LOST expected_ssid=%s actual_ssid=%s ip=%s action=RESTART\n",
 				configPortalSSID.c_str(), activeSSID.c_str(), activeAPIP.toString().c_str());
 			stopWiFiConfigPortalForRetry("health_lost");
-		} else if (WifiRecoveryPolicy::apRefreshDue(true, WiFi.softAPgetStationNum() > 0,
-			now, wifiAPActiveSinceMs)) {
-			print("WIFI_CONFIG_AP state=NO_CLIENT action=REFRESH\n");
-			stopWiFiConfigPortalForRetry("no_client_refresh");
 		}
 	}
-	if (wifiMode == W_AP && !configPortalActive && !configPortalStarting &&
+	const bool apControlMode = wifiMode == W_AP ||
+		(wifiMode == W_STA && activeWifiProfileCount == 0);
+	if (apControlMode && !configPortalActive && !configPortalStarting &&
 		(!wifiAPRetryAtMs || WifiRecoveryPolicy::deadlineReached(now, wifiAPRetryAtMs))) {
-		startWiFiConfigPortal(false);
+		startWiFiConfigPortal();
 	}
 	if (wifiMode != W_STA) return;
 
@@ -613,16 +610,6 @@ void serviceWiFi() {
 			// Avoid String allocation and network-stack queries in the 1 kHz
 			// control loop. Detailed link information remains available via `wifi`.
 			recordSystemLogEvent("WIFI", "state=CONNECTED");
-		}
-		if (configPortalActive || configPortalStarting) {
-			wifiDnsServer.stop();
-			WiFi.softAPdisconnect(false);
-			WiFi.mode(WIFI_STA);
-			__atomic_store_n(&wifiAPEventStarted, false, __ATOMIC_RELEASE);
-			configPortalActive = false;
-			configPortalStarting = false;
-			configPortalSSID = "";
-			recordSystemLogEvent("WIFI_CONFIG_AP", "state=CLOSED reason=station_connected");
 		}
 		return;
 	}
@@ -665,7 +652,7 @@ void serviceWiFi() {
 		wifiProfileAttempt = (uint8_t)((wifiProfileAttempt + 1) % activeWifiProfileCount);
 		char ssid[33], password[64];
 		wifiProfileStrings(activeWifiProfiles[wifiProfileAttempt], ssid, sizeof(ssid), password, sizeof(password));
-		WiFi.mode(WIFI_AP_STA);
+		WiFi.mode(WIFI_STA);
 		WiFi.setAutoReconnect(true);
 		WiFi.begin(ssid, password);
 		wifiSTARetryResetPending = false;
@@ -691,12 +678,11 @@ void serviceWiFi() {
 			recordSystemLogEvent("WIFI", eventMessage.c_str());
 			return;
 		}
-		print("WIFI_STATE state=CONNECT_TIMEOUT action=SWITCH_TO_CONFIG_AP\n");
-		recordSystemLogEvent("WIFI", "state=CONNECT_TIMEOUT action=SWITCH_TO_CONFIG_AP");
-		WiFi.setAutoReconnect(true);
+		print("WIFI_STATE state=CONNECT_TIMEOUT action=KEEP_STA_RETRY\n");
+		recordSystemLogEvent("WIFI", "state=CONNECT_TIMEOUT action=KEEP_STA_RETRY");
+		wifiConnectStartedMs = millis();
 		wifiSTAReconnectAtMs = millis();
 		wifiSTARetryResetPending = false;
-		startWiFiConfigPortal(true);
 	}
 }
 

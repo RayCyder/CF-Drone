@@ -88,7 +88,7 @@
 #define BOARD_LED_PIN      (-1)
 #define BOARD_LED_INVERTED 0
 
-// S3 开机执行拆桨电机自检；测试时必须固定机体并拆除桨叶。
+// S3 开机执行低功率电机响应自检；每路输出均受独立停止定时器约束。
 #define CF_DRONE_ENABLE_BOOT_MOTOR_SELF_CHECK 1
 
 // ---- 性能与资源配置（S3 标准）----
@@ -166,9 +166,8 @@
 #ifndef CF_DRONE_ENABLE_MAVLINK
 #define CF_DRONE_ENABLE_MAVLINK 1
 #endif
-// Automatically run the low-power motor response check after boot. The flight
-// controller can enforce electrical/software gates but cannot detect installed
-// propellers or people near the aircraft.
+// Automatically run the bounded low-power motor response check after boot.
+// This is the only controlled exception to normal disarmed zero-output policy.
 #ifndef CF_DRONE_ENABLE_BOOT_MOTOR_SELF_CHECK
 #define CF_DRONE_ENABLE_BOOT_MOTOR_SELF_CHECK 1
 #endif

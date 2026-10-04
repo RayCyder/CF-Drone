@@ -22,10 +22,11 @@ float batteryVoltage=4.1f;
 Vector rates,gyro,acc(0,0,9.80665f);
 Quaternion attitude;
 float motors[4]={};
-bool motorTestActive=false,motorTestArmInhibit=false,imuOK=true;
+bool motorTestActive=false,motorTestArmInhibit=false,imuOK=true,imuSampleValid=true;
 const int MOTOR_REAR_LEFT=0,MOTOR_REAR_RIGHT=1,MOTOR_FRONT_RIGHT=2,MOTOR_FRONT_LEFT=3;
 uint32_t nowMs=1000;
 uint32_t millis(){return nowMs;}
+uint32_t imuValidSampleAgeMs(uint32_t){return imuSampleValid?0:UINT32_MAX;}
 uint32_t micros(){return nowMs*1000;}
 bool webRCEnabled=false,useWebRC=false;
 bool webRCFastStopReady(){return true;}
@@ -242,13 +243,14 @@ int main(){
     descend();
     assert(thrustTarget<.01f);
     disarm();
-	armed=true;
+	armed=true; thrustTarget=.5f;
 	attitude=Quaternion::fromEuler(Vector((float)M_PI,0,0));
 	invertedFailsafe();
 	assert(armed && isInverted);
 	nowMs+=INVERTED_TIMEOUT_MS+1;
 	invertedFailsafe();
-	assert(!armed && getLastDisarmReason()==DISARM_REASON_INVERTED);
+	assert(armed && isControlledLandingActive());
+	disarm();
 	attitude=Quaternion();
     // A stale browser session present at arm time must not turn a serial/RC
     // zero-throttle arm into an immediate Web-RC-loss landing.

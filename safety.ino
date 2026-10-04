@@ -28,6 +28,9 @@ static constexpr uint32_t CONTROLLED_LANDING_MAX_MS = 8000;
 static constexpr uint32_t WEB_RC_HARD_STOP_TIMEOUT_MS =
 	WEB_RC_LOSS_TIMEOUT_MS + CONTROLLED_LANDING_MAX_MS;
 static constexpr uint32_t MOTOR_OUTPUT_STALE_TIMEOUT_MS = 250;
+static constexpr uint32_t IMU_LOSS_LANDING_TIMEOUT_MS = 100;
+static const float FREE_FALL_ACCEL_THRESHOLD = ONE_G * 0.30f;
+static constexpr uint32_t FREE_FALL_CONFIRM_MS = 50;
 
 // 倒置保护参数
 #define INVERTED_COS_THRESHOLD -0.7f   // cos(134°)，倾角超过134°视为倒置（留出陀螺漂移裕量）
@@ -35,8 +38,10 @@ static constexpr uint32_t MOTOR_OUTPUT_STALE_TIMEOUT_MS = 250;
 
 RTC_DATA_ATTR static uint32_t controlledLandingStartedMs = 0;
 RTC_DATA_ATTR static uint32_t landingHardStopDeadlineMs = 0;
-RTC_DATA_ATTR static uint32_t invertedHardStopDeadlineMs = 0;
 RTC_DATA_ATTR static uint32_t webRcHardStopIssuedForUpdateMs = 0;
+RTC_DATA_ATTR static uint32_t loopStallFailsafeRequested = 0;
+RTC_DATA_ATTR static uint32_t loopStallFailsafeIssued = 0;
+RTC_DATA_ATTR static uint32_t loopStallHardStopDeadlineMs = 0;
 #if defined(ARDUINO_ARCH_ESP32)
 RTC_DATA_ATTR static bool safetyHardStopTaskReady = false;
 #else
@@ -54,8 +59,10 @@ extern bool armed;
 bool setupSafetyHardStopTask() {
 	controlledLandingStartedMs = 0;
 	landingHardStopDeadlineMs = 0;
-	invertedHardStopDeadlineMs = 0;
 	webRcHardStopIssuedForUpdateMs = 0;
+	loopStallFailsafeRequested = 0;
+	loopStallFailsafeIssued = 0;
+	loopStallHardStopDeadlineMs = 0;
 	safetyHardStopTaskReady = false;
 #if defined(ARDUINO_ARCH_ESP32)
 	extern void latchMotorEmergencyCutoff(DisarmReason reason);
@@ -66,8 +73,8 @@ bool setupSafetyHardStopTask() {
 			const uint32_t nowMs = millis();
 			if (armed && takeExpiredSafetyDeadline(&landingHardStopDeadlineMs, nowMs))
 				latchMotorEmergencyCutoff(DISARM_REASON_LANDING_TIMEOUT);
-			if (armed && takeExpiredSafetyDeadline(&invertedHardStopDeadlineMs, nowMs))
-				latchMotorEmergencyCutoff(DISARM_REASON_INVERTED);
+			if (armed && takeExpiredSafetyDeadline(&loopStallHardStopDeadlineMs, nowMs))
+				latchMotorEmergencyCutoff(DISARM_REASON_LOOP_STALL);
 #if WEB_RC_ENABLED
 			extern bool useWebRC;
 			extern unsigned long webRCLastUpdate;
@@ -81,9 +88,21 @@ bool setupSafetyHardStopTask() {
 				webRcHardStopIssuedForUpdateMs = 0;
 			}
 #endif
-			if (armed && !motorEmergencyCutoffLatched() &&
-				motorOutputRefreshExpired(nowMs, MOTOR_OUTPUT_STALE_TIMEOUT_MS))
-				latchMotorEmergencyCutoff(DISARM_REASON_LOOP_STALL);
+			const bool outputStale = armed && !motorEmergencyCutoffLatched() &&
+				motorOutputRefreshExpired(nowMs, MOTOR_OUTPUT_STALE_TIMEOUT_MS);
+			if (outputStale) {
+				if (__atomic_exchange_n(&loopStallFailsafeIssued, 1, __ATOMIC_ACQ_REL) == 0) {
+					__atomic_store_n(&loopStallFailsafeRequested, 1, __ATOMIC_RELEASE);
+					__atomic_store_n(&loopStallHardStopDeadlineMs,
+						nowMs + CONTROLLED_LANDING_MAX_MS, __ATOMIC_RELEASE);
+				}
+			} else if (!armed) {
+				__atomic_store_n(&loopStallFailsafeRequested, 0, __ATOMIC_RELEASE);
+				__atomic_store_n(&loopStallFailsafeIssued, 0, __ATOMIC_RELEASE);
+				__atomic_store_n(&loopStallHardStopDeadlineMs, 0, __ATOMIC_RELEASE);
+			} else {
+				__atomic_store_n(&loopStallFailsafeIssued, 0, __ATOMIC_RELEASE);
+			}
 			vTaskDelay(pdMS_TO_TICKS(5));
 		}
 	}, "flight_hard_stop", 2048, nullptr, 3, nullptr, 0);
@@ -101,7 +120,13 @@ bool safetyHardStopReady() {
 
 void clearSafetyHardStopDeadlines() {
 	__atomic_store_n(&landingHardStopDeadlineMs, 0, __ATOMIC_RELEASE);
-	__atomic_store_n(&invertedHardStopDeadlineMs, 0, __ATOMIC_RELEASE);
+	__atomic_store_n(&loopStallFailsafeRequested, 0, __ATOMIC_RELEASE);
+	__atomic_store_n(&loopStallFailsafeIssued, 0, __ATOMIC_RELEASE);
+	__atomic_store_n(&loopStallHardStopDeadlineMs, 0, __ATOMIC_RELEASE);
+}
+
+static bool takeLoopStallFailsafeRequest() {
+	return __atomic_exchange_n(&loopStallFailsafeRequested, 0, __ATOMIC_ACQ_REL) != 0;
 }
 
 extern double controlTime;
@@ -129,6 +154,9 @@ extern PID rollRatePID, pitchRatePID, yawRatePID;  // control.ino
 extern PID rollPID, pitchPID, yawPID;              // control.ino
 extern float motThrMin;        // control.ino
 
+void freeFallFailsafe();
+void imuLossFailsafe();
+
 void failsafe() {
 	extern bool motorEmergencyCutoffLatched();
 	if (armed && motorEmergencyCutoffLatched()) {
@@ -138,6 +166,16 @@ void failsafe() {
 		print("独立安全停机已触发，reason=%u，飞控状态同步上锁\n", (unsigned)reason);
 		return;
 	}
+	if (armed && takeLoopStallFailsafeRequest()) {
+		recordSystemLogEvent("LOOP_STALL", "main_loop_resumed_controlled_landing");
+		print("主循环停顿后恢复，进入受控迫降\n");
+		descend();
+		// descend() has installed its own independent maximum-duration cutoff.
+		// Cancel the fallback used only while the main loop remained frozen.
+		if (armed && controlledLandingActive)
+			__atomic_store_n(&loopStallHardStopDeadlineMs, 0, __ATOMIC_RELEASE);
+		if (!armed) return;
+	}
 	// Keep the last powered command briefly so releasing the Web throttle to
 	// press Land cannot make the landing ramp start from zero.
 	if (armed && !controlledLandingActive && isfinite(thrustTarget) &&
@@ -146,21 +184,69 @@ void failsafe() {
 		recentPoweredAtMs = millis();
 	}
 	updateDiagnostics();
-	if (armed && (getActiveDiagnosticFaults() &
-		(DIAG_IMU_INIT | DIAG_IMU_TIMEOUT | DIAG_IMU_INVALID | DIAG_MOTOR_INIT))) {
-		// 关键传感器或输出异常时立即停止输出，不能继续依赖常规控制计算。
+	const uint32_t activeFaults = getActiveDiagnosticFaults();
+	if (armed && (activeFaults & (DIAG_IMU_INIT | DIAG_MOTOR_INIT))) {
+		// 初始化能力或电机输出层失效时无法执行受控动作。
 		disarm(DISARM_REASON_CRITICAL_FAULT);
-		extern float motors[4];
-		print("严重故障，立即停机；运行 diag 查看原因。\n");
+		print("IMU初始化或电机输出故障，立即停机；运行 diag 查看原因。\n");
+		return;
 	}
+	imuLossFailsafe();
 	rcLossFailsafe();
 #if WEB_RC_ENABLED
 	webRCLossFailsafe();
 #endif
 	autoFailsafe();
+	freeFallFailsafe();
 	invertedFailsafe();
 	batteryFailsafe();
 	if (armed && controlledLandingActive) descend();
+}
+
+void imuLossFailsafe() {
+	if (!armed) return;
+	extern uint32_t imuValidSampleAgeMs(uint32_t nowMs);
+	const uint32_t ageMs = imuValidSampleAgeMs(millis());
+	if (ageMs < IMU_LOSS_LANDING_TIMEOUT_MS) return;
+	if (!controlledLandingActive) {
+		char event[40];
+		snprintf(event, sizeof(event), "sample_age_ms=%lu", (unsigned long)ageMs);
+		recordSystemLogEvent("IMU_LOSS", event);
+		print("IMU有效样本持续中断，进入有时限迫降\n");
+	}
+	descend();
+}
+
+// Near-zero specific force means the airframe is in ballistic motion. Require
+// a short continuous window to reject isolated IMU samples, then immediately
+// hand control to the existing bounded landing path.
+void freeFallFailsafe() {
+	static uint32_t freeFallStartedMs = 0;
+	extern Vector acc;
+	extern bool imuSampleValid;
+	if (!armed || controlledLandingActive || !imuSampleValid || !acc.valid()) {
+		freeFallStartedMs = 0;
+		return;
+	}
+	const float acceleration = acc.norm();
+	if (!isfinite(acceleration) || acceleration > FREE_FALL_ACCEL_THRESHOLD) {
+		freeFallStartedMs = 0;
+		return;
+	}
+	const uint32_t nowMs = millis();
+	if (!freeFallStartedMs) {
+		freeFallStartedMs = nowMs ? nowMs : 1;
+		return;
+	}
+	if ((uint32_t)(nowMs - freeFallStartedMs) < FREE_FALL_CONFIRM_MS) return;
+	char event[48];
+	snprintf(event, sizeof(event), "accel_milli=%d confirm_ms=%lu",
+		(int)(acceleration * 1000.0f),
+		(unsigned long)(nowMs - freeFallStartedMs));
+	recordSystemLogEvent("FREE_FALL", event);
+	print("检测到自由落体，进入受控迫降\n");
+	freeFallStartedMs = 0;
+	descend();
 }
 
 // RC loss failsafe
@@ -381,34 +467,37 @@ void webRCLossFailsafe() {
 }
 #endif
 
-// 倒置保护：机体Z轴与世界Z轴夹角超过120°持续1.5秒则停机
+// 倒置保护：持续倒置后请求水平恢复和有时限迫降，不在空中直接停桨。
 void invertedFailsafe() {
+	static uint32_t invertedStartedMs = 0;
+	static bool invertedActionLogged = false;
 	if (!armed) {
 		isInverted = false;
+		invertedStartedMs = 0;
+		invertedActionLogged = false;
 		return;
 	}
 
 	// 取机体Z轴在世界系的Z分量：正立时≈+1，倒置时≈-1
 	Vector worldUp = Quaternion::rotateVector(Vector(0, 0, 1), attitude);
 
-	static uint32_t invertedStartedMs = 0;
 	if (worldUp.z < INVERTED_COS_THRESHOLD) {
 		isInverted = true;
 		if (invertedStartedMs == 0) {
 			invertedStartedMs = millis() ? millis() : 1;
-			__atomic_store_n(&invertedHardStopDeadlineMs,
-				invertedStartedMs + INVERTED_TIMEOUT_MS, __ATOMIC_RELEASE);
 		}
 		if ((uint32_t)(millis() - invertedStartedMs) >= INVERTED_TIMEOUT_MS) {
-			disarm(DISARM_REASON_INVERTED);
-			invertedStartedMs = 0;
-			__atomic_store_n(&invertedHardStopDeadlineMs, 0, __ATOMIC_RELEASE);
-			print("倒置保护：停机\n");
+			if (!invertedActionLogged) {
+				recordSystemLogEvent("INVERTED", "controlled_landing");
+				print("持续倒置，尝试水平恢复并进入迫降\n");
+				invertedActionLogged = true;
+			}
+			if (!controlledLandingActive) descend();
 		}
 	} else {
 		isInverted = false;
 		invertedStartedMs = 0;
-		__atomic_store_n(&invertedHardStopDeadlineMs, 0, __ATOMIC_RELEASE);
+		invertedActionLogged = false;
 	}
 }
 

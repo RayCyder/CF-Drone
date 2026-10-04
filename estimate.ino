@@ -126,32 +126,35 @@ static void resetEstimatorFiniteState() {
 	accelerationFusionFilter.reset();
 }
 
-static void reportEstimatorInvalidState() {
+static void reportEstimatorInvalidState(bool unrecoverable) {
 	ESTIMATOR_REPORT_IMU_INVALID(true);
-	if (armed) ESTIMATOR_DISARM_CRITICAL();
+	// A missed IMU frame is recoverable: keep the last finite estimator state so
+	// the safety layer can debounce the outage and enter bounded landing. Only
+	// corrupted estimator state is allowed to request an immediate motor stop.
+	if (unrecoverable && armed) ESTIMATOR_DISARM_CRITICAL();
 }
 
 void estimate() {
 	if (!ESTIMATOR_IMU_SAMPLE_VALID()) {
-		reportEstimatorInvalidState();
+		reportEstimatorInvalidState(false);
 		accelCorrectionConfidence = 0.0f;
 		landed = false;
 		return;
 	}
 	if (!gyro.valid() || !acc.valid() || !isfinite(dt) || dt <= 0.0f) {
-		reportEstimatorInvalidState();
+		reportEstimatorInvalidState(true);
 		resetEstimatorFiniteState();
 		return;
 	}
 	if (!attitudeStateUsable(attitude)) {
-		reportEstimatorInvalidState();
+		reportEstimatorInvalidState(true);
 		resetEstimatorFiniteState();
 		return;
 	} else if (fabsf(attitude.norm() - 1.0f) > 1e-3f) {
 		attitude.normalize();
 	}
 	if (!rates.valid()) {
-		reportEstimatorInvalidState();
+		reportEstimatorInvalidState(true);
 		rates = Vector();
 		ratesFilter.reset();
 		return;

@@ -42,6 +42,10 @@ motor_start = motors[motors.index("bool startMotorTest(") : motors.index("void t
 assert "if (armed || motorTestActive" in motor_start, (
     "motor pulses must be rejected whenever the flight controller is armed"
 )
+send_start = motors[motors.index("void sendMotors()") : motors.index("void serviceMotorTest()")]
+assert "const bool outputPermitted = (armed || motorTestActive)" in send_start, (
+    "only the bounded motor test may bypass normal disarmed zero output"
+)
 assert "(!allowLowBattery && batteryBlocksArming())" in motor_start
 assert "startMotorTest(n, 0.3f, MOTOR_TEST_DURATION_MS, false)" in motors, (
     "manual motor tests must retain the low-battery interlock"

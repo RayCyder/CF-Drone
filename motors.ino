@@ -139,7 +139,12 @@ DisarmReason getMotorEmergencyCutoffReason() {
 bool motorOutputRefreshExpired(uint32_t nowMs, uint32_t timeoutMs) {
 	if (!__atomic_load_n(&motorOutputWasNonzero, __ATOMIC_ACQUIRE)) return false;
 	const uint32_t refreshedMs = __atomic_load_n(&motorOutputRefreshedMs, __ATOMIC_ACQUIRE);
-	return refreshedMs && (uint32_t)(nowMs - refreshedMs) >= timeoutMs;
+	if (!refreshedMs) return false;
+	// The safety task may capture nowMs immediately before this task publishes a
+	// newer refresh time. Treat that small future timestamp as fresh instead of
+	// letting unsigned subtraction wrap into an apparent multi-day timeout.
+	const int32_t ageMs = (int32_t)(nowMs - refreshedMs);
+	return ageMs >= 0 && (uint32_t)ageMs >= timeoutMs;
 }
 
 void latchMotorEmergencyCutoff(DisarmReason reason) {
@@ -184,22 +189,28 @@ bool clearMotorEmergencyCutoffIfAcknowledged() {
 }
 
 void sendMotors() {
+	extern bool armed;
 	const bool cutoff = motorEmergencyCutoffLatched();
 	const bool expiredTest = __atomic_load_n(&motorTestActive, __ATOMIC_ACQUIRE) &&
 		motorTestDeadlineReached(millis(), motorTestDeadlineMs);
+	// Normal flight output requires `armed`. The bounded motor self-check is the
+	// only disarmed exception and is protected by its independent stop timer.
+	const bool outputPermitted = (armed || motorTestActive) && !cutoff && !expiredTest;
 	for (int i = 0; i < 4; i++) {
-		ledcWrite(motorPins[i], getDutyCycle((cutoff || expiredTest) ? 0.0f : motors[i]));
+		ledcWrite(motorPins[i], getDutyCycle(outputPermitted ? motors[i] : 0.0f));
 	}
 	bool nonzero = false;
-	if (!cutoff && !expiredTest) {
+	if (outputPermitted) {
 		for (int i = 0; i < 4; ++i) nonzero = nonzero || motors[i] > 0.0f;
 	}
-	__atomic_store_n(&motorOutputWasNonzero, nonzero, __ATOMIC_RELEASE);
 	const uint32_t refreshedMs = millis();
 	__atomic_store_n(&motorOutputRefreshedMs, refreshedMs ? refreshedMs : 1, __ATOMIC_RELEASE);
+	// Publish the timestamp before the flag. An acquire load that observes a
+	// nonzero output must also observe the corresponding refresh timestamp.
+	__atomic_store_n(&motorOutputWasNonzero, nonzero, __ATOMIC_RELEASE);
 	// Close races where a cutoff or the motor-test deadline arrives between the
 	// first check and the final motor write. The last writer is a zero-duty pass.
-	if ((!cutoff && motorEmergencyCutoffLatched()) ||
+	if ((!cutoff && motorEmergencyCutoffLatched()) || (!armed && !motorTestActive) ||
 		(!expiredTest && __atomic_load_n(&motorTestActive, __ATOMIC_ACQUIRE) &&
 		 motorTestDeadlineReached(millis(), motorTestDeadlineMs))) writeMotorStopOutputs();
 }
