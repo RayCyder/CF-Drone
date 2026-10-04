@@ -5,6 +5,7 @@
 #include <Wire.h>
 #include <math.h>
 #include "board_config.h"
+#include "bmp388_compensation.h"
 #include "flight_sensor_interfaces.h"
 
 extern Preferences storage;
@@ -20,6 +21,9 @@ constexpr uint8_t BMP388_CHIP_ID = 0x50;
 constexpr uint8_t QMC5883P_ADDR = 0x2C;
 constexpr uint8_t QMC5883P_CHIP_ID = 0x80;
 constexpr uint32_t MAG_SAMPLE_INTERVAL_MS = 20;
+constexpr uint32_t BARO_SAMPLE_INTERVAL_MS = 50;
+constexpr uint32_t BARO_MAX_SAMPLE_AGE_US = 250000;
+constexpr uint32_t BARO_BASELINE_SAMPLES = 25;
 constexpr uint32_t MAG_CAL_MAGIC = 0x4D414731; // MAG1
 
 struct MagCalibration {
@@ -47,8 +51,17 @@ struct MagRuntimeState {
 	uint8_t barometerAddress = 0;
 };
 
+struct Bmp388RuntimeState {
+	Bmp388Calibration calibration = {};
+	BarometerEstimate estimate;
+	bool calibrationReady = false;
+};
+
 static_assert(sizeof(MagRuntimeState) <= 64, "Magnetometer runtime RAM budget");
 MagRuntimeState magRuntime;
+Bmp388RuntimeState bmpRuntime;
+portMUX_TYPE bmpSampleMux = portMUX_INITIALIZER_UNLOCKED;
+SemaphoreHandle_t externalSensorI2cMutex = nullptr;
 #define magCalibration (magRuntime.calibration)
 #define magMinimum (magRuntime.minimum)
 #define magMaximum (magRuntime.maximum)
@@ -58,29 +71,33 @@ MagRuntimeState magRuntime;
 #define qmcReady (magRuntime.compassReady)
 #define bmpAddress (magRuntime.barometerAddress)
 
-struct Bmp388Calibration {
-	double t1, t2, t3;
-	double p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11;
-};
-
 bool readRegisters(uint8_t address, uint8_t reg, uint8_t *data, size_t length) {
+	if (externalSensorI2cMutex && xSemaphoreTake(externalSensorI2cMutex, pdMS_TO_TICKS(20)) != pdTRUE) return false;
 	Wire.beginTransmission(address);
 	Wire.write(reg);
-	if (Wire.endTransmission(false) != 0) return false;
+	if (Wire.endTransmission(false) != 0) {
+		if (externalSensorI2cMutex) xSemaphoreGive(externalSensorI2cMutex);
+		return false;
+	}
 	const size_t received = Wire.requestFrom((int)address, (int)length, (int)true);
 	if (received != length) {
 		while (Wire.available()) Wire.read();
+		if (externalSensorI2cMutex) xSemaphoreGive(externalSensorI2cMutex);
 		return false;
 	}
 	for (size_t i = 0; i < length; ++i) data[i] = (uint8_t)Wire.read();
+	if (externalSensorI2cMutex) xSemaphoreGive(externalSensorI2cMutex);
 	return true;
 }
 
 bool writeRegister(uint8_t address, uint8_t reg, uint8_t value) {
+	if (externalSensorI2cMutex && xSemaphoreTake(externalSensorI2cMutex, pdMS_TO_TICKS(20)) != pdTRUE) return false;
 	Wire.beginTransmission(address);
 	Wire.write(reg);
 	Wire.write(value);
-	return Wire.endTransmission() == 0;
+	const bool ok = Wire.endTransmission() == 0;
+	if (externalSensorI2cMutex) xSemaphoreGive(externalSensorI2cMutex);
+	return ok;
 }
 
 uint16_t readU16(const uint8_t *p) {
@@ -102,50 +119,90 @@ bool beginBmp388(uint8_t &address) {
 	if (!address) return false;
 	if (!writeRegister(address, 0x7E, 0xB6)) return false; // soft reset
 	delay(10);
-	// Pressure x4, temperature x2, normal mode, 50 Hz output data rate.
+	uint8_t calibration[21];
+	if (!readRegisters(address, 0x31, calibration, sizeof(calibration))) return false;
+	bmpRuntime.calibration = bmp388DecodeCalibration(calibration);
+	bmpRuntime.calibrationReady = true;
+	// Pressure x4, temperature x2, normal mode, 25 Hz output data rate.
 	if (!writeRegister(address, 0x1C, 0x0A) || !writeRegister(address, 0x1D, 0x03) ||
+		!writeRegister(address, 0x1F, 0x06) || // IIR coefficient 7
 		!writeRegister(address, 0x1B, 0x33)) return false;
 	delay(50);
 	return true;
 }
 
 bool readBmp388(uint8_t address, BarometerSample &sample) {
+	if (!bmpRuntime.calibrationReady) return false;
+	uint8_t status = 0;
+	if (!readRegisters(address, 0x03, &status, 1) || (status & 0x60) != 0x60) return false;
 	uint8_t raw[6];
 	if (!readRegisters(address, 0x04, raw, sizeof(raw))) return false;
-	uint8_t calib[21];
-	if (!readRegisters(address, 0x31, calib, sizeof(calib))) return false;
-	Bmp388Calibration c;
-	c.t1 = (double)readU16(calib + 0) * 0.00390625; // 2^-8
-	c.t2 = (double)readU16(calib + 2) * 0.000000000931322574615478515625; // 2^-30
-	c.t3 = (double)(int8_t)calib[4] * 0.000000000000003552713678800500929355621337890625; // 2^-48
-	c.p1 = ((double)readS16(calib + 5) - 16384.0) * 0.00000095367431640625; // 2^-20
-	c.p2 = ((double)readS16(calib + 7) - 16384.0) * 0.00000000186264514923095703125; // 2^-29
-	c.p3 = (double)(int8_t)calib[9] * 0.00000000023283064365386962890625; // 2^-32
-	c.p4 = (double)(int8_t)calib[10] * 0.0000000000072759576141834259033203125; // 2^-37
-	c.p5 = (double)readU16(calib + 11) * 8.0;
-	c.p6 = (double)readU16(calib + 13) * 0.015625; // 2^-6
-	c.p7 = (double)(int8_t)calib[15] * 0.00390625; // 2^-8
-	c.p8 = (double)(int8_t)calib[16] * 0.000030517578125; // 2^-15
-	c.p9 = (double)readS16(calib + 17) * 0.000000000000003552713678800500929355621337890625; // 2^-48
-	c.p10 = (double)(int8_t)calib[19] * 0.000000000000003552713678800500929355621337890625; // 2^-48
-	c.p11 = (double)(int8_t)calib[20] * 0.00000000000000000002710505431213761091814151071071624755859375; // 2^-65
 	const uint32_t pressureRaw = (uint32_t)raw[0] | ((uint32_t)raw[1] << 8) | ((uint32_t)raw[2] << 16);
 	const uint32_t temperatureRaw = (uint32_t)raw[3] | ((uint32_t)raw[4] << 8) | ((uint32_t)raw[5] << 16);
-	const double t = (double)temperatureRaw;
-	const double tLin = c.t1 + t * (c.t2 + t * c.t3);
-	const double pressure = c.p5 + c.p6 * tLin +
-		c.p7 * tLin * tLin + c.p8 * tLin * tLin * tLin +
-		(double)pressureRaw * (c.p1 + c.p2 * tLin +
-		c.p3 * tLin * tLin + c.p4 * tLin * tLin * tLin) +
-		(double)pressureRaw * (double)pressureRaw * (c.p9 + c.p10 * tLin) +
-		(double)pressureRaw * (double)pressureRaw * (double)pressureRaw * c.p11;
-	if (!isfinite(pressure) || pressure < 30000.0 || pressure > 120000.0 || !isfinite(tLin)) return false;
+	double pressure = 0.0;
+	double temperature = 0.0;
+	if (!bmp388Compensate(pressureRaw, temperatureRaw, bmpRuntime.calibration,
+		pressure, temperature)) return false;
 	sample.pressurePa = (float)pressure;
-	sample.temperatureC = (float)tLin;
+	sample.temperatureC = (float)temperature;
 	sample.altitudeMeters = 44330.0f * (1.0f - powf(sample.pressurePa / 101325.0f, 0.19029495f));
 	sample.timestampUs = micros();
 	sample.valid = isfinite(sample.altitudeMeters);
 	return sample.valid;
+}
+
+void externalSensorTask(void *) {
+	TickType_t wake = xTaskGetTickCount();
+	float filteredAltitude = NAN;
+	float filteredVelocity = 0.0f;
+	float baselineSum = 0.0f;
+	float baselineAltitude = NAN;
+	uint32_t baselineCount = 0;
+	uint32_t lastSampleUs = 0;
+	for (;;) {
+		vTaskDelayUntil(&wake, pdMS_TO_TICKS(BARO_SAMPLE_INTERVAL_MS));
+		if (!bmpAddress) continue;
+		BarometerSample sample;
+		if (!readBmp388(bmpAddress, sample)) {
+			portENTER_CRITICAL(&bmpSampleMux);
+			++bmpRuntime.estimate.failureCount;
+			portEXIT_CRITICAL(&bmpSampleMux);
+			continue;
+		}
+		if (!isfinite(filteredAltitude)) filteredAltitude = sample.altitudeMeters;
+		const uint32_t elapsedUs = lastSampleUs ? sample.timestampUs - lastSampleUs : 0;
+		lastSampleUs = sample.timestampUs;
+		const float previousAltitude = filteredAltitude;
+		filteredAltitude += 0.20f * (sample.altitudeMeters - filteredAltitude);
+		if (elapsedUs >= 20000 && elapsedUs <= 100000) {
+			const float instantaneousVelocity = (filteredAltitude - previousAltitude) /
+				((float)elapsedUs * 1e-6f);
+			filteredVelocity += 0.15f * (instantaneousVelocity - filteredVelocity);
+		}
+		if (baselineCount < BARO_BASELINE_SAMPLES) {
+			baselineSum += filteredAltitude;
+			++baselineCount;
+			if (baselineCount == BARO_BASELINE_SAMPLES)
+				baselineAltitude = baselineSum / (float)BARO_BASELINE_SAMPLES;
+		}
+		// Track the launch surface while disarmed, then freeze the reference at
+		// arming so carrying the aircraft after boot cannot create a false height.
+		if (isfinite(baselineAltitude) && !__atomic_load_n(&armed, __ATOMIC_RELAXED))
+			baselineAltitude = filteredAltitude;
+		BarometerEstimate next;
+		portENTER_CRITICAL(&bmpSampleMux);
+		next = bmpRuntime.estimate;
+		portEXIT_CRITICAL(&bmpSampleMux);
+		next.sample = sample;
+		next.relativeAltitudeMeters = isfinite(baselineAltitude) ?
+			filteredAltitude - baselineAltitude : 0.0f;
+		next.verticalSpeedMps = filteredVelocity;
+		++next.sampleCount;
+		next.valid = isfinite(baselineAltitude) && next.sampleCount >= BARO_BASELINE_SAMPLES;
+		portENTER_CRITICAL(&bmpSampleMux);
+		bmpRuntime.estimate = next;
+		portEXIT_CRITICAL(&bmpSampleMux);
+	}
 }
 
 bool beginQmc5883p() {
@@ -232,6 +289,7 @@ void setupExternalSensors() {
 	return;
 #endif
 #if BOARD_I2C_SDA >= 0 && BOARD_I2C_SCL >= 0
+	externalSensorI2cMutex = xSemaphoreCreateMutex();
 	const bool i2cReady = Wire.begin(BOARD_I2C_SDA, BOARD_I2C_SCL, 100000);
 #else
 	const bool i2cReady = false;
@@ -257,6 +315,11 @@ void setupExternalSensors() {
 	Serial.printf("EXT_SENSOR bus=ready sda=%d scl=%d bmp388=%s addr=0x%02X qmc5883p=%s addr=0x%02X\n",
 		BOARD_I2C_SDA, BOARD_I2C_SCL, bmpReady ? "ready" : "not_found", bmpAddress,
 		qmcReady ? "ready" : "not_found", qmcReady ? QMC5883P_ADDR : 0);
+	if (bmpReady && xTaskCreatePinnedToCore(externalSensorTask, "barometer", 3072,
+		nullptr, 1, nullptr, 0) != pdPASS) {
+		bmpAddress = 0;
+		Serial.println("BARO bmp388 task=start_failed");
+	}
 }
 
 void updateExternalSensors() {
@@ -370,10 +433,14 @@ bool alignMagHeading(float knownHeadingDegrees, float rollRadians, float pitchRa
 void printExternalSensorReadings(float rollRadians, float pitchRadians) {
 	if (!qmcReady && !bmpAddress) { Serial.println("EXT_SENSOR error=unavailable"); return; }
 	if (bmpAddress) {
-		BarometerSample sample;
-		if (readBmp388(bmpAddress, sample)) {
-			Serial.printf("BARO bmp388 pressure_pa=%.2f temperature_c=%.2f altitude_m=%.2f\n",
-				sample.pressurePa, sample.temperatureC, sample.altitudeMeters);
+		BarometerEstimate estimate;
+		if (getBarometerEstimate(estimate) && estimate.sample.valid) {
+			const uint32_t ageMs = (micros() - estimate.sample.timestampUs) / 1000;
+			Serial.printf("BARO bmp388 pressure_pa=%.2f temperature_c=%.2f altitude_m=%.2f relative_altitude_m=%.2f vertical_speed_mps=%.2f age_ms=%lu samples=%lu failures=%lu ready=%u\n",
+				estimate.sample.pressurePa, estimate.sample.temperatureC, estimate.sample.altitudeMeters,
+				estimate.relativeAltitudeMeters, estimate.verticalSpeedMps, (unsigned long)ageMs,
+				(unsigned long)estimate.sampleCount, (unsigned long)estimate.failureCount,
+				barometerEstimateUsable(estimate, micros(), BARO_MAX_SAMPLE_AGE_US) ? 1U : 0U);
 		} else {
 			Serial.println("BARO bmp388 read=not_ready_or_invalid");
 		}
@@ -397,4 +464,11 @@ void printExternalSensorReadings(float rollRadians, float pitchRadians) {
 	} else {
 		Serial.println("COMPASS qmc5883p=not_found");
 	}
+}
+
+bool getBarometerEstimate(BarometerEstimate &estimate) {
+	portENTER_CRITICAL(&bmpSampleMux);
+	estimate = bmpRuntime.estimate;
+	portEXIT_CRITICAL(&bmpSampleMux);
+	return estimate.sampleCount > 0;
 }

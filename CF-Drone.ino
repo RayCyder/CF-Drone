@@ -105,7 +105,7 @@ void setup() {
 	setLED(true); // 点亮LED，提示正在初始化
 	setupIMU(); // 电机加电自检依赖IMU采样，必须先于WiFi初始化
 	initializeDiagnostics();
-	setupExternalSensors(); // H6 I2C barometer/compass probe; readings stay diagnostic-only
+	setupExternalSensors(); // H6 barometer feeds the bounded landing guard; compass remains calibration/diagnostic input
 	runBootMotorSelfCheckBeforeWiFi(); // 保存结果供稍后启动的Web只读展示
 #if WIFI_ENABLED
 	setupWiFi(); // 初始化WiFi（用于Web遥控/MAVLink等）

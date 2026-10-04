@@ -13,6 +13,18 @@ int main() {
 	barometer.pressurePa = NAN;
 	assert(!barometerSampleUsable(barometer, 0x10u, 32u));
 
+	BarometerEstimate estimate;
+	estimate.sample.pressurePa = 100800.0f;
+	estimate.sample.altitudeMeters = 12.5f;
+	estimate.sample.timestampUs = 1000;
+	estimate.sample.valid = true;
+	estimate.relativeAltitudeMeters = 1.2f;
+	estimate.verticalSpeedMps = -0.5f;
+	estimate.valid = true;
+	assert(barometerEstimateUsable(estimate, 1100, 200));
+	estimate.verticalSpeedMps = NAN;
+	assert(!barometerEstimateUsable(estimate, 1100, 200));
+
 	DownwardRangeSample range;
 	range.distanceMeters = 0.42f;
 	range.quality = 80;

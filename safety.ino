@@ -3,13 +3,15 @@
 
 #include "diagnostics.h"
 #include "control.h"
+#include "external_sensors.h"
+#include "landing_barometer_guard.h"
 #include "system_log.h"
 
 bool isInverted = false;  // 当前机身是否处于倒置（Z轴cos < INVERTED_COS_THRESHOLD）
 
 float rcLossTimeout = 1;        // RC丢失超时时间（秒），可通过参数 SF_RC_LOSS_TIME 配置
 float descendTime = 3;          // 过渡到目标下降推力的时间（秒）
-float descendThrust = 0.35f;     // 自动下降目标推力（归一化指令，需按机体实测调整）
+float descendThrust = 0.42f;     // 自动下降目标推力；按实飞将悬停推力缺口约减半
 static bool controlledLandingActive = false;
 static double lastDescendUpdateTime = NAN;
 static float recentPoweredThrust = NAN;
@@ -118,8 +120,8 @@ void rcLossFailsafe() {
 	descend();
 }
 
-// Smooth descend on RC lost. Without a height/vertical-speed sensor this is
-// only a conservative fixed-thrust descent, not closed-loop speed control.
+// Smooth descend on RC loss. Fixed thrust remains the fallback; fresh
+// barometer feedback can only add a small, bounded fast-descent correction.
 void descend() {
 	const bool firstLandingFrame = !controlledLandingActive;
 	if (firstLandingFrame) {
@@ -151,6 +153,17 @@ void descend() {
 			restored ? 1U : 0U,
 			(unsigned long)(restored ? handoffAgeMs : 0));
 		recordSystemLogEvent("LANDING", event);
+		BarometerEstimate landingEstimate;
+		const bool haveLandingEstimate = getBarometerEstimate(landingEstimate);
+		char barometerEvent[44];
+		snprintf(barometerEvent, sizeof(barometerEvent), "ready=%u rel_cm=%d vz_cms=%d",
+			haveLandingEstimate && barometerEstimateUsable(landingEstimate, micros(),
+				LANDING_BARO_MAX_AGE_US) ? 1U : 0U,
+			haveLandingEstimate && isfinite(landingEstimate.relativeAltitudeMeters) ?
+				(int)(landingEstimate.relativeAltitudeMeters * 100.0f) : 0,
+			haveLandingEstimate && isfinite(landingEstimate.verticalSpeedMps) ?
+				(int)(landingEstimate.verticalSpeedMps * 100.0f) : 0);
+		recordSystemLogEvent("LAND_BARO", barometerEvent);
 		// 首次进入：保持当前偏航（仅强制机体水平），清零速率前馈，重置PID积分
 		float currentYaw = attitude.getYaw();
 		attitudeTarget = Quaternion::fromEuler(Vector(0, 0, currentYaw));
@@ -170,6 +183,11 @@ void descend() {
 	lastDescendUpdateTime = t;
 
 	float targetThrust = max(motThrMin, min(descendThrust, ALTHOLD_HOVER_THRUST));
+	BarometerEstimate barometerEstimate;
+	if (getBarometerEstimate(barometerEstimate)) {
+		targetThrust = min(ALTHOLD_HOVER_THRUST, targetThrust +
+			landingBarometerThrustCorrection(barometerEstimate, micros()));
+	}
 	float maxStep = dt / max(descendTime, 0.1f) * ALTHOLD_HOVER_THRUST;
 	if (thrustTarget > targetThrust) thrustTarget = max(targetThrust, thrustTarget - maxStep);
 	else if (thrustTarget < targetThrust) thrustTarget = min(targetThrust, thrustTarget + maxStep);

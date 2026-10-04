@@ -7,7 +7,7 @@ namespace WifiRecoveryPolicy {
 
 static constexpr uint32_t AP_START_TIMEOUT_MS = 3000;
 static constexpr uint32_t AP_NO_CLIENT_REFRESH_MS = 60000;
-static constexpr uint32_t STA_RETRY_INTERVAL_MS = 10000;
+static constexpr uint32_t STA_RETRY_INTERVAL_MS = 3000;
 static constexpr uint32_t STA_RETRY_RESET_DELAY_MS = 250;
 
 enum StaRetryAction : uint8_t {
@@ -36,9 +36,12 @@ inline bool apRefreshDue(bool active, bool hasClients, uint32_t now, uint32_t ac
     return active && !hasClients && elapsed(now, activeSince, AP_NO_CLIENT_REFRESH_MS);
 }
 
-inline bool staRetryDue(bool staConfigured, bool connected, bool portalOpen,
+inline bool staRetryDue(bool staConfigured, bool connected, bool /*portalOpen*/,
     uint32_t now, uint32_t retryAt) {
-    return staConfigured && !connected && portalOpen && deadlineReached(now, retryAt);
+    // Retry the station link directly even before a configuration portal is
+    // allowed. During flight the portal is intentionally disabled, so tying
+    // retries to it can leave Web RC offline indefinitely after one bad join.
+    return staConfigured && !connected && deadlineReached(now, retryAt);
 }
 
 inline StaRetryAction staRetryAction(bool staConfigured, bool connected, bool portalOpen,

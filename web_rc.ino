@@ -24,6 +24,7 @@
 #include "wifi_recovery_policy.h"
 #include "web_rc_lease_policy.h"
 #include "web_rc_fast_stop_policy.h"
+#include "web_rc_hover_throttle.h"
 #include "web_armed_route_policy.h"
 #include "vibration_motor_result.h"
 
@@ -1739,25 +1740,13 @@ void setupWebRC() {
 #endif
     webRCServer.on("/web_rc/lease", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
-        // A fresh page may take control while disarmed. In flight, only the
-        // current page's stop token can renew an expired lease.
-        if (armed && !webRCStopTokenMatches(webRCServer.arg("stop").c_str())) {
-            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"web_rc_stop_token_required\"}");
-            return;
-        }
+        // A newly opened page takes over immediately. Replacing the token
+        // invalidates every older page's queued and future control requests.
         char token[WEB_RC_LEASE_TOKEN_CHARS + 1];
         makeWebRCLeaseToken(token, sizeof(token));
         bool ownerChanged = false;
         const uint32_t now = millis();
-        if (!webRCLease.acquire(now, WEB_RC_TIMEOUT_MS, token, &ownerChanged)) {
-            char response[128];
-            const uint32_t age = (uint32_t)(now - webRCLease.lastSeenMs);
-            snprintf(response, sizeof(response),
-                "{\"ok\":0,\"error\":\"web_rc_lease_in_use\",\"retry_ms\":%lu}",
-                (unsigned long)(age < WEB_RC_TIMEOUT_MS ? WEB_RC_TIMEOUT_MS - age : 0));
-            webRCServer.send(409, "application/json", response);
-            return;
-        }
+        webRCLease.acquire(now, token, &ownerChanged);
         if (ownerChanged) clearWebRCQueuedInputAndButtons();
         char stopToken[WEB_RC_LEASE_TOKEN_CHARS + 1];
         makeWebRCLeaseToken(stopToken, sizeof(stopToken));
@@ -2320,7 +2309,9 @@ void setupWebRC() {
         wifiDisconnects = getWiFiDisconnectCount();
         wifiLastDisconnectMs = getWiFiLastDisconnectMs();
 #endif
-        char json[704];
+        const WebRCHoverThrottleReturn hoverReturn =
+            computeWebRCHoverThrottleReturn(hoverThrottleInput(), webRCThrottleScale);
+        char json[800];
         const char *armReason = armBlockReason();
         const bool armReady = armed || !armReason;
         snprintf(json, sizeof(json),
@@ -2331,7 +2322,8 @@ void setupWebRC() {
             "\"stick_age_ms\":%ld,\"packet_age_ms\":%ld,\"http_idle_drops\":%lu,"
             "\"http_max_handle_us\":%lu,\"http_slow_handles\":%lu,"
             "\"http_rc_max_request_us\":%lu,\"http_rc_slow_requests\":%lu,"
-            "\"control_source\":%u,\"thrust_target\":%.3f,"
+            "\"control_source\":%u,\"thrust_target\":%.3f,\"hover_throttle_pct\":%.1f,"
+            "\"hover_throttle_reachable\":%s,"
             "\"arm_ready\":%s,\"arm_reason\":\"%s\"}",
             armed ? "true" : "false",
             ledFastBlinkActive() ? "true" : "false",
@@ -2348,7 +2340,8 @@ void setupWebRC() {
             (unsigned long)responsiveWebRCServer.slowHandleCount(),
             (unsigned long)webRCMaxRequestUs,
             (unsigned long)webRCSlowRequests,
-            (unsigned)getCurrentControlSource(), thrustTarget,
+            (unsigned)getCurrentControlSource(), thrustTarget, hoverReturn.percent,
+            hoverReturn.reachable ? "true" : "false",
             armReady ? "true" : "false", armed ? "飞控已解锁" :
                 (armReason ? armReason : "当前解锁条件已满足"));
         webRCServer.send(200, "application/json", json);

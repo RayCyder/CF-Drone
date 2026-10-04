@@ -43,7 +43,7 @@ extern bool imuRotationRestartPending();
 #define ROLLRATE_MAX radians(360)
 #define YAWRATE_MAX radians(300) // 偏航转速稍低
 #define TILT_MAX radians(30) // 最大倾斜角30°
-#define ALTHOLD_HOVER_THRUST 0.5f   // 定高悬停基础推力（stub，待气压计实现后替换）
+#define ALTHOLD_HOVER_THRUST 0.48f  // 实飞松杆后约上升0.10~0.20m/s，保守下调悬停前馈
 #define ARM_THROTTLE_LIMIT   0.05f  // 解锁油门上限（归一化后 0~1），5%，超过此值禁止解锁
 #define RATES_D_LPF_ALPHA 0.2 // cutoff frequency ~ 40 Hz
 
@@ -74,6 +74,15 @@ Vector ratesExtra; // feedforward rates
 Vector torqueTarget;
 float thrustTarget;
 float motorMixScale = 1.0f;
+
+float hoverThrottleInput() {
+	const float thrustSpan = motThrMax - motThrMin;
+	if (!isfinite(thrustSpan) || thrustSpan <= 0.0001f) return 0.5f;
+	// Invert the manual throttle mapping used by interpretControls():
+	// [0.05, 1.0] input -> [motThrMin, motThrMax] thrust.
+	return constrain(0.05f + (ALTHOLD_HOVER_THRUST - motThrMin) /
+		thrustSpan * 0.95f, 0.05f, 1.0f);
+}
 
 #define AUTO_TARGET_TIMEOUT_MS 500UL
 #define AUTO_TARGET_READY_MS 100UL
@@ -623,12 +632,13 @@ void controlTorque() {
 		memset(motors, 0, sizeof(motors)); // stop motors if disarmed
 		return;
 	}
-	if (!torqueTarget.valid()) return; // skip torque control
-
-	if (thrustTarget < motThrMin) {
+	// Armed zero-throttle is a distinct idle state. Attitude/rate control keeps
+	// torqueTarget invalid here, so idle output must be applied before that guard.
+	if (getCurrentControlSource() != CONTROL_SOURCE_EXTERNAL_MOTORS && thrustTarget < motThrMin) {
 		for (int i = 0; i < 4; i++) motors[i] = motThrMin; // idle thrust
 		return;
 	}
+	if (!torqueTarget.valid()) return; // skip torque control
 
 	motors[MOTOR_FRONT_LEFT] = thrustTarget + torqueTarget.x - torqueTarget.y + torqueTarget.z;
 	motors[MOTOR_FRONT_RIGHT] = thrustTarget - torqueTarget.x - torqueTarget.y - torqueTarget.z;

@@ -23,14 +23,14 @@ int main() {
 
     assert(staRetryDue(true, false, true, 10000, 10000));
     assert(!staRetryDue(true, true, true, 10000, 10000));
-    assert(!staRetryDue(true, false, false, 10000, 10000));
+    assert(staRetryDue(true, false, false, 10000, 10000));
     assert(!staRetryDue(false, false, true, 10000, 10000));
     assert(staRetryDue(true, false, true, 0x00000010U, 0xfffffff0U));
     assert(staRetryAction(true, false, true, false, 10000, 10000) == STA_RETRY_RESET);
     assert(staRetryAction(true, false, true, true, 10249, 10250) == STA_RETRY_WAIT);
     assert(staRetryAction(true, false, true, true, 10250, 10250) == STA_RETRY_BEGIN);
     assert(staRetryAction(true, true, true, true, 10250, 10250) == STA_RETRY_WAIT);
-    assert(staRetryAction(true, false, false, true, 10250, 10250) == STA_RETRY_WAIT);
+    assert(staRetryAction(true, false, false, true, 10250, 10250) == STA_RETRY_BEGIN);
     assert(maintenanceAllowed(false, false));
     assert(!maintenanceAllowed(true, false));
     assert(!maintenanceAllowed(false, true));

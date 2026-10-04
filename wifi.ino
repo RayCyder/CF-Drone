@@ -391,7 +391,7 @@ static void wifiServiceTask(void *argument) {
 	}
 }
 
-static const uint32_t WIFI_CONNECT_TIMEOUT_MS = 20000;
+static const uint32_t WIFI_CONNECT_TIMEOUT_MS = 8000;
 static const uint32_t WIFI_RESTART_DELAY_MS = 1500;
 static const uint32_t WIFI_AP_RETRY_DELAY_MS = 5000;
 
@@ -514,6 +514,7 @@ void setupWiFi() {
 			WiFi.setAutoReconnect(true);
 			WiFi.begin(ssid, password);
 			wifiConnectStartedMs = millis();
+			wifiSTAReconnectAtMs = wifiConnectStartedMs + WifiRecoveryPolicy::STA_RETRY_INTERVAL_MS;
 			print("WIFI_STATE state=CONNECTING profile=1/%u ssid=%s timeout_ms=%lu\n",
 				(unsigned)activeWifiProfileCount, ssid, (unsigned long)WIFI_CONNECT_TIMEOUT_MS);
 			String eventMessage = "state=CONNECTING profile=1/" + String(activeWifiProfileCount) + " ssid=" + ssid;
@@ -635,6 +636,7 @@ void serviceWiFi() {
 		wifiConnectStartedMs = millis();
 		wifiProfileAttempt = 0;
 		wifiSTARetryResetPending = false;
+		wifiSTAReconnectAtMs = now + WifiRecoveryPolicy::STA_RETRY_INTERVAL_MS;
 		if (activeWifiProfileCount) {
 			char ssid[33], password[64];
 			wifiProfileStrings(activeWifiProfiles[0], ssid, sizeof(ssid), password, sizeof(password));
@@ -657,8 +659,8 @@ void serviceWiFi() {
 		WiFi.disconnect(false, false);
 		wifiSTARetryResetPending = true;
 		wifiSTAReconnectAtMs = now + WifiRecoveryPolicy::STA_RETRY_RESET_DELAY_MS;
-		print("WIFI_STATE state=PORTAL_STA_RESET\n");
-		recordSystemLogEvent("WIFI", "state=PORTAL_STA_RESET");
+		print("WIFI_STATE state=STA_RETRY_RESET\n");
+		recordSystemLogEvent("WIFI", "state=STA_RETRY_RESET");
 	} else if (retryAction == WifiRecoveryPolicy::STA_RETRY_BEGIN) {
 		wifiProfileAttempt = (uint8_t)((wifiProfileAttempt + 1) % activeWifiProfileCount);
 		char ssid[33], password[64];
@@ -668,9 +670,9 @@ void serviceWiFi() {
 		WiFi.begin(ssid, password);
 		wifiSTARetryResetPending = false;
 		wifiSTAReconnectAtMs = now + WifiRecoveryPolicy::STA_RETRY_INTERVAL_MS;
-		print("WIFI_STATE state=PORTAL_STA_RETRY profile=%u/%u ssid=%s\n",
+		print("WIFI_STATE state=STA_RETRY_BEGIN profile=%u/%u ssid=%s\n",
 			(unsigned)(wifiProfileAttempt + 1), (unsigned)activeWifiProfileCount, ssid);
-		recordSystemLogEvent("WIFI", "state=PORTAL_STA_RETRY");
+		recordSystemLogEvent("WIFI", "state=STA_RETRY_BEGIN");
 	}
 	if (!configPortalActive && (uint32_t)(millis() - wifiConnectStartedMs) >= WIFI_CONNECT_TIMEOUT_MS &&
 		!configPortalStarting && WifiRecoveryPolicy::portalStartAllowed(armed, motorsActive()) &&

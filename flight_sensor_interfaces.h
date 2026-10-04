@@ -14,6 +14,15 @@ struct BarometerSample {
 	bool valid = false;
 };
 
+struct BarometerEstimate {
+	BarometerSample sample;
+	float relativeAltitudeMeters = 0.0f;
+	float verticalSpeedMps = 0.0f; // positive upward
+	uint32_t sampleCount = 0;
+	uint32_t failureCount = 0;
+	bool valid = false;
+};
+
 struct DownwardRangeSample {
 	float distanceMeters = 0.0f;
 	uint8_t quality = 0;
@@ -29,6 +38,12 @@ inline bool barometerSampleUsable(const BarometerSample &sample, uint32_t nowUs,
 	uint32_t maxAgeUs) {
 	return sample.valid && isfinite(sample.pressurePa) && sample.pressurePa > 0.0f &&
 		isfinite(sample.altitudeMeters) && sensorSampleFresh(nowUs, sample.timestampUs, maxAgeUs);
+}
+
+inline bool barometerEstimateUsable(const BarometerEstimate &estimate, uint32_t nowUs,
+	uint32_t maxAgeUs) {
+	return estimate.valid && barometerSampleUsable(estimate.sample, nowUs, maxAgeUs) &&
+		isfinite(estimate.relativeAltitudeMeters) && isfinite(estimate.verticalSpeedMps);
 }
 
 inline bool downwardRangeSampleUsable(const DownwardRangeSample &sample, uint32_t nowUs,

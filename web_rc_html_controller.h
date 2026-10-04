@@ -175,8 +175,10 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
 .console-tools-row strong{font-size:.72rem;color:#c4e6ff;margin-right:2px}
 .console-tools button{border:1px solid #526b7d;border-radius:6px;background:#263640;color:#e9f6ff;padding:5px 8px;font-size:.68rem;cursor:pointer;touch-action:manipulation}
 .console-tools button.primary{background:#1c5e8d;border-color:#58a9df}
+.console-tools-note{font-size:.64rem;line-height:1.35;color:#aebdca}
 .console-status{min-height:1.1em;font-size:.66rem;color:#9ab0bf}
 .console-status.ok{color:#62d895}.console-status.error{color:#ff8a8a}.console-status.busy{color:#ffd166}
+.console-command-row{display:flex;gap:6px;touch-action:pan-y}
 
 /*======== 动画 ========*/
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(67,97,238,.7)}70%{box-shadow:0 0 0 12px rgba(67,97,238,0)}100%{box-shadow:0 0 0 0 rgba(67,97,238,0)}}
@@ -218,6 +220,14 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   .status-item{font-size:0.58rem;padding:2px 4px}
   .button{font-size:0.68rem;padding:5px 3px}
   .button-icon{font-size:0.88rem;margin-bottom:2px}
+  .console-window{padding:5px}
+  .console-dialog{width:min(960px,98vw);height:96dvh;padding:7px;gap:5px}
+  .console-panel{display:grid;grid-template-columns:minmax(220px,38%) minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;gap:6px;padding:6px}
+  .console-tools{grid-column:1;grid-row:1/3;min-height:0;overflow-y:auto;padding:6px}
+  .console-output{grid-column:2;grid-row:1;min-width:0;min-height:0}
+  .console-command-row{grid-column:2;grid-row:2;min-width:0}
+  .console-dialog-header h2{font-size:.85rem}
+  .console-dialog-header button{padding:4px 9px}
 }
 /*======== 版权页脚 ========*/
 .footer{text-align:center;font-size:0.5rem;color:rgba(255,255,255,.25);padding:0;flex-shrink:0;line-height:0.8;}
@@ -250,7 +260,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   <div class="content">
     <!-- 左摇杆 -->
     <div class="joystick-container">
-      <div class="joystick-title">左摇杆 (油门/偏航；松手保持油门，需手动下推减油)</div>
+      <div class="joystick-title">左摇杆 (油门/偏航；松手回悬停油门 <span id="hover-throttle-label">50</span>%)</div>
       <div class="stick-readouts" role="group" aria-label="左摇杆输入值"><span class="stick-readout">油门 <strong id="left-y">0</strong>%</span><span class="stick-readout">偏航 <strong id="left-x">0</strong></span></div>
       <div class="joystick-wrapper">
         <div class="joystick" id="joystick-left"><div class="joystick-knob" id="knob-left"></div></div>
@@ -278,12 +288,13 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <div class="console-dialog-header"><h2 id="console-title">调试控制台</h2><button id="console-close-button" type="button" onclick="toggleConsole()">关闭</button></div>
       <div id="console-panel" class="console-panel">
     <div class="console-tools">
-      <div class="console-tools-row"><strong>调试工具</strong><button class="primary" onclick="openVibrationCalibrationFromConsole()">电机扰动检测</button></div>
-      <div class="console-tools-row"><strong>常用命令</strong><button onclick="runConsoleCommand('diag brief')">快速预检</button><button onclick="runConsoleCommand('diag')">完整诊断</button><button onclick="runConsoleCommand('imu')">IMU</button><button onclick="runConsoleCommand('ps')">姿态</button><button onclick="runConsoleCommand('rc')">遥控输入</button><button onclick="runConsoleCommand('mot')">电机输出</button><button onclick="runConsoleCommand('wifi')">Wi-Fi</button><button onclick="runConsoleCommand('time')">循环时间</button><button onclick="runConsoleCommand('sys')">系统任务</button><button onclick="runConsoleCommand('log status')">日志状态</button><button onclick="runConsoleCommand('p')">参数列表</button><button onclick="runConsoleCommand('help')">命令帮助</button></div>
+      <div class="console-tools-row"><strong>调试工具</strong><button class="primary" onclick="openVibrationCalibrationFromConsole()">电机扰动检测</button><button class="primary" onclick="startAccelCalibrationFromConsole()">六面加速度计校准</button><button class="primary" onclick="openLevelCalibrationFromConsole()">机身水平校准</button></div>
+      <div class="console-tools-row"><strong>常用命令</strong><button onclick="runConsoleCommand('diag brief')">快速预检</button><button onclick="runConsoleCommand('diag')">完整诊断</button><button onclick="runConsoleCommand('imu')">IMU</button><button onclick="runConsoleCommand('ps')">姿态</button><button onclick="runConsoleCommand('p CTL_TRIM_ROLL')">横滚配平值</button><button onclick="runConsoleCommand('p CTL_TRIM_PITCH')">俯仰配平值</button><button onclick="runConsoleCommand('rc')">遥控输入</button><button onclick="runConsoleCommand('mot')">电机输出</button><button onclick="runConsoleCommand('wifi')">Wi-Fi</button><button onclick="runConsoleCommand('time')">循环时间</button><button onclick="runConsoleCommand('sys')">系统任务</button><button onclick="runConsoleCommand('log status')">日志状态</button><button onclick="runConsoleCommand('p')">参数列表</button><button onclick="runConsoleCommand('help')">命令帮助</button></div>
+      <div class="console-tools-note">机身静置水平但姿态不为 0°：使用“机身水平校准”修正 IMU 安装角。只有实际飞行松杆后持续漂移时，才调整 CTL_TRIM_ROLL / CTL_TRIM_PITCH。</div>
       <div id="console-status" class="console-status" role="status">打开后将主动确认飞控处于上锁状态。</div>
     </div>
     <div id="console-output" class="console-output"></div>
-    <div style="display:flex;gap:6px;touch-action:pan-y">
+    <div class="console-command-row">
       <input id="console-input" placeholder="输入命令 (diag brief / imu / rc / help)..."
         style="flex:1;background:rgba(0,0,0,.6);border:1px solid rgba(100,100,100,.5);border-radius:6px;color:#0f8;padding:4px 8px;font-size:0.7rem;font-family:'Courier New',monospace;touch-action:auto">
       <button onclick="downloadConsoleLogs()" style="background:#444;border:1px solid #777;border-radius:6px;color:#fff;padding:4px 8px;font-size:0.7rem;cursor:pointer;touch-action:manipulation;white-space:nowrap">下载日志</button>
@@ -383,7 +394,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
     </div>
   </section>
   <!-- 版权页脚 -->
-  <div class="footer"><a href="/wifi">Wi-Fi 设置</a> · <a href="/telemetry">实时日志</a> · <a href="#" onclick="openLevelCalibrationPage();return false">水平校准</a> · <a href="https://oshwhub.com/songge8/project_qqqyfdkm" target="_blank">琛光无人机开源项目</a></div>
+  <div class="footer"><a href="/wifi">Wi-Fi 设置</a> · <a href="/telemetry">实时日志</a> · <a href="https://oshwhub.com/songge8/project_qqqyfdkm" target="_blank">琛光无人机开源项目</a></div>
 </div>
 
 <script>
@@ -405,6 +416,11 @@ const stickReadoutElements = {
 const touches = new Map();
 let leftStick  = {x:0, y:0, rawX:0, rawY:-100};
 let rightStick = {x:0, y:0, rawX:0, rawY:0};
+let hoverThrottleRaw = 0; // 后端按悬停推力和 MOT_THR_MIN/MAX 反算；断线时回中为 50%
+let hoverThrottleReachable = true;
+let hoverThrottleWarningShown = false;
+let stickInputActivated = false;
+let leftThrottleReturnGeneration = 0;
 
 let lastSentValues = { throttle:0, roll:0, pitch:0, yaw:0 };
 let lastForceSentTime = 0; // 上次强制重发的时间戳（performance.now()）
@@ -454,6 +470,7 @@ let consoleLastTotal    = 0;   // 增量拉取游标：已展示到第 N 行
 let consoleFetchInFlight = false; // 防并发：上次 fetch 未返回时跳过本次
 let consolePanelOpen = false;
 let consoleCommandPending = false;
+let consoleReadFailureCount = 0;
 function setArmedState(armed) {
   const wasArmed = currentArmed;
   currentArmed = !!armed;
@@ -487,7 +504,7 @@ const ROUTE_RECORD_MAX_DURATION_MS=1800000;
 const CONSOLE_BASE_POLL_MS = 500;
 const CONSOLE_CATCHUP_POLL_MS = 80;
 const CONSOLE_PAGE_LIMIT = 20;
-const CONSOLE_REQUEST_TIMEOUT_MS = 3000;
+const CONSOLE_REQUEST_TIMEOUT_MS = 8000;
 
 /*======================== 按钮配置（2×3 六宫格）========================*/
 const buttonConfigs = [
@@ -501,6 +518,9 @@ const buttonConfigs = [
 
 /*======================== 初始化 ========================*/
 function init() {
+  // Opening a page immediately makes it the active controller. The device
+  // replaces the prior lease token, so stale tabs can no longer send input.
+  acquireControlLease();
   initButtons();
   initNetwork();
   initPointerEvents();
@@ -1171,7 +1191,7 @@ function checkAndSendChanges() {
   if(flightRouteRunning||routeHold)return;
   const now = performance.now();
   // 有变化立即发；或超过强制重发间隔时也发一次（保持飞控侧数据新鲜，避免超时断连）
-  if (hasSignificantChange(currentValues) || (now - lastForceSentTime >= FORCE_SEND_INTERVAL)) {
+  if (stickInputActivated && (hasSignificantChange(currentValues) || (now - lastForceSentTime >= FORCE_SEND_INTERVAL))) {
     sendJoystickData();
     lastForceSentTime = now;
   }
@@ -1185,10 +1205,12 @@ function checkAndSendChanges() {
 
 /*======================== 数据发送函数 ========================*/
 function sendJoystickData() {
-  sendToESP('/web_rc', { t:1, th:Math.round(currentValues.throttle), r:Math.round(currentValues.roll),
+  if (!stickInputActivated) return Promise.resolve(false);
+  const request=sendToESP('/web_rc', { t:1, th:Math.round(currentValues.throttle), r:Math.round(currentValues.roll),
     p:Math.round(currentValues.pitch), y:Math.round(currentValues.yaw), ts:performance.now() });
   lastSentValues = {...currentValues};
   packetStats.sent++;
+  return request;
 }
 
 function sendButtonData(buttonIndex, state) {
@@ -1215,6 +1237,8 @@ function updateDisplayAll() {
 /*======================== Pointer Events 处理 ========================*/
 function handlePointerStart(e, side) {
   if(flightRouteRunning||routeHold){showToast('请先点击接管摇杆，再操作摇杆');return;}
+  stickInputActivated=true;
+  if(side==='left')leftThrottleReturnGeneration++;
   touches.set(e.pointerId, side);
   document.getElementById(`joystick-${side}`).classList.add('active');
   updateJoystickPosition(side, e.clientX, e.clientY);
@@ -1227,20 +1251,46 @@ function handlePointerMove(e, side) {
 function handlePointerEnd(e, side) {
   if (touches.get(e.pointerId) !== side) return;
   touches.delete(e.pointerId);
-  const knob     = document.getElementById(`knob-${side}`);
   const joystick = document.getElementById(`joystick-${side}`);
   joystick.classList.remove('active');
-  // 虚拟油门松手保持最后值；偏航和右侧姿态轴回中。
-  const targetRawY = side === 'left' ? leftStick.rawY : 0;
-  const radius = joystick.getBoundingClientRect().width / 2 - 10;
-  const targetDy = -targetRawY / 100 * radius;
-  knob.style.transition = 'transform 0.2s ease-out';
-  knob.style.transform  = `translate(calc(-50% + 0px), calc(-50% + ${targetDy}px))`;
-  setTimeout(() => { knob.style.transition = ''; }, 200);
-  if (side === 'left')  leftStick  = {x:0, y:leftStick.y, rawX:0, rawY: targetRawY};
-  else                  rightStick = {x:0, y:0, rawX:0, rawY:0};
-  processJoystickInput();
-  sendJoystickData();
+  if(side==='left'){
+    returnLeftStickToHover();
+  }else{
+    const knob=document.getElementById('knob-right');
+    knob.style.transition='transform 0.2s ease-out';
+    knob.style.transform='translate(-50%,-50%)';
+    setTimeout(()=>{knob.style.transition='';},200);
+    rightStick={x:0,y:0,rawX:0,rawY:0};
+    processJoystickInput();
+    sendJoystickData();
+  }
+}
+
+function returnLeftStickToHover(){
+  const generation=++leftThrottleReturnGeneration;
+  const startRawY=leftStick.rawY;
+  const started=performance.now();
+  const duration=300;
+  leftStick.rawX=0;
+  if(!hoverThrottleReachable&&!hoverThrottleWarningShown){
+    hoverThrottleWarningShown=true;
+    showToast('油门缩放不足，悬停推力不可达；已回到允许的最高油门');
+  }
+  function step(now){
+    if(generation!==leftThrottleReturnGeneration)return;
+    const progress=Math.min(1,(now-started)/duration);
+    const eased=1-Math.pow(1-progress,3);
+    leftStick.rawY=startRawY+(hoverThrottleRaw-startRawY)*eased;
+    leftStick.y=leftStick.rawY;
+    const joystick=document.getElementById('joystick-left');
+    const radius=joystick.getBoundingClientRect().width/2-10;
+    const dy=-leftStick.rawY/100*radius;
+    document.getElementById('knob-left').style.transform=`translate(calc(-50% + 0px), calc(-50% + ${dy}px))`;
+    processJoystickInput();
+    if(progress<1)requestAnimationFrame(step);
+    else sendJoystickData();
+  }
+  requestAnimationFrame(step);
 }
 
 function updateJoystickPosition(side, clientX, clientY) {
@@ -1322,7 +1372,7 @@ function isEmergencyButtonData(data) {
 function sendToESP(url, data) {
   const t0 = performance.now();
   const emergencyOverride = isEmergencyButtonData(data);
-  (emergencyOverride ? Promise.resolve(true) : acquireControlLease()).then(ok => {
+  return (emergencyOverride ? Promise.resolve(true) : acquireControlLease()).then(ok => {
     if (!ok) return null;
     if (emergencyOverride) data.stop = webRCStopToken;
     else data.lease = webRCLeaseToken;
@@ -1381,9 +1431,11 @@ function sendToESP(url, data) {
       }
       // 心跳包携带的系统警告（低电自动上锁等），不与按钮 toast 冲突
       if (resp.rt === 4 && resp.warn) showToast('⚠️ ' + resp.warn);
+      return true;
     })
     .catch(() => {
       if (++consecutiveFails >= 3) updateConnectionStatus(false);
+      return false;
     });
 }
 
@@ -1449,6 +1501,14 @@ function loadSelfCheckStatus(showLoading) {
   }).then(data => {
     if (requestId !== selfCheckRequestSequence) return;
     if (typeof data.faults !== 'number') throw new Error('diagnostics unsupported');
+    const hoverPercent=Number(data.hover_throttle_pct);
+    if(Number.isFinite(hoverPercent)){
+      const bounded=Math.max(0,Math.min(100,hoverPercent));
+      hoverThrottleRaw=bounded*2-100;
+      hoverThrottleReachable=data.hover_throttle_reachable!==false;
+      if(hoverThrottleReachable)hoverThrottleWarningShown=false;
+      document.getElementById('hover-throttle-label').textContent=Math.round(bounded);
+    }
     if (typeof data.armed === 'boolean') setArmedState(data.armed);
     selfCheckHasData = true;
     renderSelfCheckStatus(data);
@@ -1579,7 +1639,7 @@ function resetLeftStick(targetRawY) {
   sendJoystickData();
 }
 /*======================== 按钮处理 ========================*/
-function handleButton(idx) {
+async function handleButton(idx) {
   if (idx === 5) { toggleRouteRecordingMain(); return; }
   if (idx === 4) {
     // 六轴模式循环：自稳(2) ↔ 特技(1)
@@ -1603,6 +1663,22 @@ function handleButton(idx) {
     return;
   }
   if (idx === 0 || idx === 1 || idx === 2) {
+    if(idx===0&&!currentArmed){
+      leftThrottleReturnGeneration++;
+      stickInputActivated=true;
+      leftStick.rawX=0;
+      leftStick.rawY=-100;
+      const joystick=document.getElementById('joystick-left');
+      const radius=joystick.getBoundingClientRect().width/2-10;
+      document.getElementById('knob-left').style.transform=
+        `translate(calc(-50% + 0px), calc(-50% + ${radius}px))`;
+      processJoystickInput();
+      updateDisplayAll();
+      if(!await sendJoystickData()){
+        showToast('零油门确认失败，未发送解锁');
+        return;
+      }
+    }
     if (idx === 0)      showToast('🔓 解锁中...');
     else if (idx === 1) showToast('🔒 上锁中...');
     else if (idx === 2) showToast('🛑 急停指令发送中...');
@@ -1654,6 +1730,7 @@ async function openConsole() {
     document.getElementById('console-close-button').focus();
     document.getElementById('console-output').innerHTML = '';
     consoleLastTotal = 0;
+    consoleReadFailureCount = 0;
     setConsoleStatus('控制台已连接，可输入命令或使用快捷按钮。','ok');
     fetchConsoleLogs();
   }catch(error){
@@ -1681,6 +1758,16 @@ function toggleConsole(){consolePanelOpen?closeConsole():openConsole();}
 function openVibrationCalibrationFromConsole(){
   closeConsole();
   openVibrationCalibrationPage();
+}
+
+function openLevelCalibrationFromConsole(){
+  closeConsole();
+  openLevelCalibrationPage();
+}
+
+function startAccelCalibrationFromConsole(){
+  if(!window.confirm('六面校准需要依次按提示放稳机体的六个面，每面等待约 8 秒。校准成功后会自动保存加速度计偏置与比例参数。现在开始？'))return;
+  runConsoleCommand('ca');
 }
 
 document.getElementById('console-window').addEventListener('click',event=>{
@@ -1747,7 +1834,7 @@ function fetchConsoleLogs() {
     {signal:controller.signal, cache:'no-store'}).then(r=>{
       if (!r.ok) throw new Error('console log request failed');
       return r.json();
-    }).then(data => {
+  }).then(data => {
     const out = document.getElementById('console-output');
     if (data.lines && data.lines.length > 0) {
       const stickToBottom = out.scrollTop + out.clientHeight >= out.scrollHeight - 12;
@@ -1766,9 +1853,16 @@ function fetchConsoleLogs() {
     if (typeof data.next === 'number') consoleLastTotal = data.next;
     else if (typeof data.total === 'number') consoleLastTotal = data.total;
 
+    if(consoleReadFailureCount>0)setConsoleStatus('控制台连接已恢复。','ok');
+    consoleReadFailureCount=0;
     nextPollDelay = data.has_more ? CONSOLE_CATCHUP_POLL_MS : CONSOLE_BASE_POLL_MS;
   }).catch(error=>{
-    setConsoleStatus(error.name==='AbortError'?'控制台读取超时，正在重试…':'控制台输出读取失败，正在重试…','error');
+    consoleReadFailureCount++;
+    const timedOut=error.name==='AbortError';
+    const message=consoleReadFailureCount===1
+      ? (timedOut?'控制台响应较慢，正在重试…':'控制台输出暂时不可用，正在重试…')
+      : (timedOut?'控制台连续读取超时，正在重试…':'控制台输出连续读取失败，正在重试…');
+    setConsoleStatus(message,consoleReadFailureCount===1?'busy':'error');
     nextPollDelay = CONSOLE_BASE_POLL_MS;
   }).finally(() => {
     clearTimeout(requestTimeout);

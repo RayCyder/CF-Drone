@@ -12,6 +12,7 @@ using portMUX_TYPE = int;
 #include "../diagnostics.h"
 #include "../task_switch_trace_runtime.h"
 #include "../level_calibration_state.h"
+#include "../flight_sensor_interfaces.h"
 
 double t=1,controlTime=0;
 float dt=.001f,loopRate=1000;
@@ -59,6 +60,8 @@ void cancelMotorTest() {++motorTestCancelCount;motorTestActive=false;}
 void abortVibrationCalibrationForDisarm() {++vibrationAbortCount;}
 unsigned systemEventCount=0;
 void recordSystemLogEvent(const char*,const char*) {++systemEventCount;}
+BarometerEstimate testBarometerEstimate;
+bool getBarometerEstimate(BarometerEstimate &estimate) { estimate=testBarometerEstimate; return estimate.sampleCount>0; }
 unsigned flightLogTriggerCount=0;
 void triggerFlightLog(uint32_t) {++flightLogTriggerCount;}
 bool tryArmWithSystemLog();
@@ -86,6 +89,30 @@ void rcLossFailsafe();void autoFailsafe();void invertedFailsafe();void batteryFa
 #include "../slow_loop_retention.cpp"
 bool tryArmWithSystemLog(){armed=true;return true;}
 int main(){
+	assert(fabsf(hoverThrottleInput()-0.50125f)<1e-6f);
+	const float savedMin=motThrMin,savedMax=motThrMax;
+	motThrMin=0.05f;motThrMax=0.85f;
+	assert(fabsf(hoverThrottleInput()-0.560625f)<1e-6f);
+	motThrMin=savedMin;motThrMax=savedMax;
+	// Arming at the required zero throttle must still command uniform motor
+	// idle, even though the attitude/rate controllers intentionally have no
+	// valid torque target in this state.
+	armed=true; thrustTarget=0.0f; torqueTarget.invalidate();
+	for(float &motor:motors)motor=0.0f;
+	controlTorque();
+	for(float motor:motors)assert(fabsf(motor-motThrMin)<1e-6f);
+	// Direct external actuator commands own each motor value and must not be
+	// replaced by uniform idle when their average is below motThrMin.
+	setCurrentControlSource(CONTROL_SOURCE_EXTERNAL_MOTORS);
+	thrustTarget=0.05f; torqueTarget.invalidate();
+	motors[0]=0.01f; motors[1]=0.02f; motors[2]=0.03f; motors[3]=0.04f;
+	controlTorque();
+	assert(fabsf(motors[0]-0.01f)<1e-6f && fabsf(motors[1]-0.02f)<1e-6f &&
+		fabsf(motors[2]-0.03f)<1e-6f && fabsf(motors[3]-0.04f)<1e-6f);
+	setCurrentControlSource(CONTROL_SOURCE_PHYSICAL_RC);
+	armed=false;
+	controlTorque();
+	for(float motor:motors)assert(motor==0.0f);
     armed=false; mode=STAB; controlThrottle=0;
     motorTestActive=true; motors[MOTOR_FRONT_RIGHT]=.05f;
     const unsigned cancelsBefore=motorTestCancelCount, abortsBefore=vibrationAbortCount;
@@ -142,13 +169,32 @@ int main(){
     thrustTarget=0.0f;
     nowMs+=100;
     descend();
-    assert(thrustTarget>.49f && thrustTarget<=ALTHOLD_HOVER_THRUST);
+    assert(thrustTarget>.47f && thrustTarget<=ALTHOLD_HOVER_THRUST);
     const float first=thrustTarget;
     descend(); assert(thrustTarget==first); // idempotent within one frame
     controlMode=0; controlThrottle=.7625f; // stale RC selector must not overwrite LAND
     for(int i=0;i<3000;++i){ t+=dt; ++nowMs; control(); }
     assert(isControlledLandingActive() && armed);
     assert(fabsf(thrustTarget-descendThrust)<.001f);
+	// A fresh high-altitude fast-descent estimate can only add the bounded
+	// guard correction; invalid feedback falls back to fixed landing thrust.
+	testBarometerEstimate.sample.pressurePa=101000.0f;
+	testBarometerEstimate.sample.altitudeMeters=10.0f;
+	testBarometerEstimate.sample.valid=true;
+	testBarometerEstimate.relativeAltitudeMeters=2.0f;
+	testBarometerEstimate.verticalSpeedMps=-2.0f;
+	testBarometerEstimate.sampleCount=25;
+	testBarometerEstimate.valid=true;
+	for(int i=0;i<500;++i){
+		testBarometerEstimate.sample.timestampUs=micros();
+		t+=dt; ++nowMs; control();
+	}
+	assert(thrustTarget>descendThrust);
+	assert(thrustTarget<=descendThrust+LANDING_BARO_MAX_THRUST_CORRECTION+1e-6f);
+	testBarometerEstimate.valid=false;
+	for(int i=0;i<500;++i){ t+=dt; ++nowMs; control(); }
+	assert(fabsf(thrustTarget-descendThrust)<.001f);
+	testBarometerEstimate=BarometerEstimate();
     assert(!(getActiveDiagnosticFaults() & DIAG_AUTO_TARGET_TIMEOUT)); // manual descent isn't an external timeout
     disarm(); assert(!isControlledLandingActive() && !armed);
     for(float m:motors) assert(m==0);

@@ -94,6 +94,7 @@ void markManualControlInput(ControlSource source);
 bool canAcceptMavlinkManualControl();
 Vector constrainRatesToConfiguredLimits(const Vector& rates);
 bool ratesWithinConfiguredLimits(const Vector& rates);
+float hoverThrottleInput();
 
 // 外部函数声明
 bool isUsingWebRC();
