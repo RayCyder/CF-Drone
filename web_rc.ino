@@ -107,6 +107,7 @@ static bool vibrationBaselineComplete = false;
 static VibrationMotorResult vibrationBaseline = {};
 static volatile const char *vibrationCalibrationReason = "empty";
 static VibrationMotorResult vibrationCalibrationResults[4] = {};
+static bool vibrationBootSelfCheckActive = false;
 static const int vibrationMotorIds[4] = {MOTOR_FRONT_RIGHT, MOTOR_FRONT_LEFT, MOTOR_REAR_RIGHT, MOTOR_REAR_LEFT};
 static const char *vibrationMotorNames[4] = {"FR", "FL", "RR", "RL"};
 
@@ -120,7 +121,7 @@ extern bool batteryBlocksArming();
 extern bool hasBlockingDiagnosticFault();
 extern bool isAccelCalibrationActive();
 extern void testMotor(int n);
-extern bool startMotorTest(int n, float output, uint32_t durationMs);
+extern bool startMotorTest(int n, float output, uint32_t durationMs, bool allowLowBattery);
 extern void cancelMotorTest();
 extern ImuCaptureBuffer imuCapture;
 extern const int MOTOR_REAR_LEFT, MOTOR_REAR_RIGHT, MOTOR_FRONT_RIGHT, MOTOR_FRONT_LEFT;
@@ -142,6 +143,18 @@ extern bool isParameterDirty(const char *name);
 extern bool parameterPersistenceReady();
 extern float webRCThrottleScale, webRCStickScale, webRCYawScale;
 extern float stickDeadzone, throttleDeadzone;
+
+static bool bootSelfCheckMayIgnoreLowBattery() {
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+    return vibrationBootSelfCheckActive;
+#else
+    return false;
+#endif
+}
+
+static bool vibrationBatteryBlocksTest() {
+    return batteryBlocksArming() && !bootSelfCheckMayIgnoreLowBattery();
+}
 extern WebServer &webRCServer;
 #if WIFI_ENABLED
 extern uint32_t getWiFiDisconnectCount();
@@ -554,7 +567,7 @@ static void serviceVibrationCalibration() {
         if ((uint32_t)(millis() - vibrationPhaseStartedMs) < VIBRATION_BOOT_DELAY_MS) return;
         if (armed || motorsActive() || !imuOK || !motorOutputsOK || controlThrottle > 0.01f ||
             isAccelCalibrationActive() || isLevelCalibrationActive() || motorTestActive ||
-            batteryBlocksArming() || hasBlockingDiagnosticFault() || vibrationRouteBusy() ||
+            vibrationBatteryBlocksTest() || hasBlockingDiagnosticFault() || vibrationRouteBusy() ||
             !parameterPersistenceReady() || imuCapture.state() != IMU_CAPTURE_IDLE) {
             setVibrationCalibrationState(VIBRATION_ABORTED, "boot_preflight_failed");
             recordSystemLogEvent("MOTOR_SELF_CHECK", "boot_preflight_failed");
@@ -582,7 +595,7 @@ static void serviceVibrationCalibration() {
         vibrationCalibrationStartRequested = false;
         if (armed || motorsActive() || !motorOutputsOK || isAccelCalibrationActive() ||
             isLevelCalibrationActive() || motorTestActive ||
-            batteryBlocksArming() || hasBlockingDiagnosticFault() || vibrationRouteBusy() ||
+            vibrationBatteryBlocksTest() || hasBlockingDiagnosticFault() || vibrationRouteBusy() ||
             imuCapture.state() != IMU_CAPTURE_IDLE) {
             setVibrationCalibrationState(VIBRATION_ABORTED, "preflight_failed");
             return;
@@ -601,7 +614,8 @@ static void serviceVibrationCalibration() {
             return;
         }
         if (!startMotorTest(vibrationMotorIds[vibrationCalibrationIndex],
-                VIBRATION_TEST_OUTPUT, VIBRATION_TEST_MS)) {
+                VIBRATION_TEST_OUTPUT, VIBRATION_TEST_MS,
+                bootSelfCheckMayIgnoreLowBattery())) {
             imuCapture.stop();
             imuCapture.release();
             setVibrationCalibrationState(VIBRATION_ABORTED, "motor_test_rejected");
@@ -612,7 +626,7 @@ static void serviceVibrationCalibration() {
         return;
     }
     if (vibrationCalibrationState == VIBRATION_BASELINE) {
-        if (armed || motorsActive() || batteryBlocksArming() || hasBlockingDiagnosticFault()) {
+        if (armed || motorsActive() || vibrationBatteryBlocksTest() || hasBlockingDiagnosticFault()) {
             imuCapture.stop();
             imuCapture.release();
             setVibrationCalibrationState(VIBRATION_ABORTED, "baseline_safety_state_changed");
@@ -637,7 +651,7 @@ static void serviceVibrationCalibration() {
         return;
     }
     if (vibrationCalibrationState != VIBRATION_RUNNING) return;
-    if (armed || batteryBlocksArming() || hasBlockingDiagnosticFault()) {
+    if (armed || vibrationBatteryBlocksTest() || hasBlockingDiagnosticFault()) {
         imuCapture.stop();
         saveCurrentVibrationMotorCapture();
         imuCapture.release();
@@ -676,6 +690,7 @@ static void serviceVibrationCalibration() {
 
 void runBootMotorSelfCheckBeforeWiFi() {
 #if CF_DRONE_ENABLE_BOOT_MOTOR_SELF_CHECK
+    vibrationBootSelfCheckActive = true;
     portENTER_CRITICAL(&vibrationCalibrationMux);
     vibrationCalibrationIndex = 0;
     vibrationBaselineComplete = false;
@@ -718,6 +733,7 @@ void runBootMotorSelfCheckBeforeWiFi() {
         delay(0);
     }
     if (motorTestActive) cancelMotorTest();
+    vibrationBootSelfCheckActive = false;
     const bool complete = vibrationCalibrationState == VIBRATION_COMPLETE;
     print("MOTOR_SELF_CHECK state=%s phase=pre_wifi step=%u reason=%s\n",
         complete ? "COMPLETE" : "ABORTED", (unsigned)vibrationCalibrationIndex,

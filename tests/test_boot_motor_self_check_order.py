@@ -41,13 +41,23 @@ motor_start = motors[motors.index("bool startMotorTest(") : motors.index("void t
 assert "if (armed || motorTestActive" in motor_start, (
     "motor pulses must be rejected whenever the flight controller is armed"
 )
+assert "(!allowLowBattery && batteryBlocksArming())" in motor_start
+assert "startMotorTest(n, 0.3f, MOTOR_TEST_DURATION_MS, false)" in motors, (
+    "manual motor tests must retain the low-battery interlock"
+)
 for state_guard in (
     "if (armed || motorsActive() || !imuOK || !motorOutputsOK || controlThrottle > 0.01f",
     "if (armed || motorsActive() || !motorOutputsOK || isAccelCalibrationActive()",
-    "if (armed || motorsActive() || batteryBlocksArming() || hasBlockingDiagnosticFault())",
-    "if (armed || batteryBlocksArming() || hasBlockingDiagnosticFault())",
+    "if (armed || motorsActive() || vibrationBatteryBlocksTest() || hasBlockingDiagnosticFault())",
+    "if (armed || vibrationBatteryBlocksTest() || hasBlockingDiagnosticFault())",
 ):
     assert state_guard in web, f"motor self-check lost armed-state abort: {state_guard}"
+
+assert "#if defined(CONFIG_IDF_TARGET_ESP32S3)" in web
+assert "return vibrationBootSelfCheckActive;" in web
+assert "return false;" in web
+assert "vibrationBootSelfCheckActive = true;" in runner
+assert "vibrationBootSelfCheckActive = false;" in runner
 
 baseline_save = web.index("const VibrationMotorResult baseline = saveVibrationBaselineCapture()")
 baseline_reject = web.index("baseline.samples < VIBRATION_RESPONSE_MIN_BASELINE_SAMPLES", baseline_save)

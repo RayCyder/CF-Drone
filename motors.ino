@@ -172,7 +172,7 @@ bool motorsActive() {
 	return motors[0] != 0 || motors[1] != 0 || motors[2] != 0 || motors[3] != 0;
 }
 
-bool startMotorTest(int n, float output, uint32_t durationMs) {
+bool startMotorTest(int n, float output, uint32_t durationMs, bool allowLowBattery) {
 	extern bool armed;
 	extern bool isAccelCalibrationActive();
 	extern bool batteryBlocksArming();
@@ -183,7 +183,7 @@ bool startMotorTest(int n, float output, uint32_t durationMs) {
 		return false;
 	}
 	if (armed || motorTestActive || isAccelCalibrationActive() ||
-		batteryBlocksArming() || hasBlockingDiagnosticFault()) {
+		(!allowLowBattery && batteryBlocksArming()) || hasBlockingDiagnosticFault()) {
 		print("电机测试仅允许在已上锁时执行；当前状态不安全，拒绝测试。\n");
 		return false;
 	}
@@ -203,5 +203,5 @@ bool startMotorTest(int n, float output, uint32_t durationMs) {
 }
 
 void testMotor(int n) {
-	startMotorTest(n, 0.3f, MOTOR_TEST_DURATION_MS);
+	startMotorTest(n, 0.3f, MOTOR_TEST_DURATION_MS, false);
 }
