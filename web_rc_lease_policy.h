@@ -15,8 +15,9 @@ struct WebRCLeasePolicy {
         return token[0] != '\0' && (uint32_t)(nowMs - lastSeenMs) < timeoutMs;
     }
 
-    bool acquire(uint32_t nowMs, const char *newToken, bool *ownerChanged) {
+    bool acquire(uint32_t nowMs, uint32_t timeoutMs, const char *newToken, bool *ownerChanged) {
         if (!newToken || !*newToken || strlen(newToken) != WEB_RC_LEASE_TOKEN_CHARS) return false;
+        if (active(nowMs, timeoutMs)) return false;
         const bool changed = strcmp(token, newToken) != 0;
         strncpy(token, newToken, WEB_RC_LEASE_TOKEN_CHARS);
         token[WEB_RC_LEASE_TOKEN_CHARS] = '\0';

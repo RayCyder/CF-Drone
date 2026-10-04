@@ -917,6 +917,7 @@ WebRCFastStopAction consumeWebRCFastStop() {
 }
 
 static void serviceFastStopClient() {
+    extern void latchMotorEmergencyCutoff();
     static WiFiClient client;
     static uint32_t acceptedAtMs = 0;
     static char requestLine[48];
@@ -950,6 +951,8 @@ static void serviceFastStopClient() {
         uint8_t old = __atomic_load_n(&pendingFastStop, __ATOMIC_RELAXED);
         if ((uint8_t)action > old)
             __atomic_store_n(&pendingFastStop, (uint8_t)action, __ATOMIC_RELEASE);
+        if (action == WEB_RC_FAST_STOP_LOCK || action == WEB_RC_FAST_STOP_KILL)
+            latchMotorEmergencyCutoff();
     }
     client.print(action != WEB_RC_FAST_STOP_NONE
         ? "HTTP/1.1 204 No Content\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
@@ -1740,13 +1743,25 @@ void setupWebRC() {
 #endif
     webRCServer.on("/web_rc/lease", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
-        // A newly opened page takes over immediately. Replacing the token
-        // invalidates every older page's queued and future control requests.
+        // Disarmed pages may take over only after the current lease expires.
+        // In flight, the previous stop token proves continuity after a reload.
+        if (armed && !webRCStopTokenMatches(webRCServer.arg("stop").c_str())) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"web_rc_stop_token_required\"}");
+            return;
+        }
         char token[WEB_RC_LEASE_TOKEN_CHARS + 1];
         makeWebRCLeaseToken(token, sizeof(token));
         bool ownerChanged = false;
         const uint32_t now = millis();
-        webRCLease.acquire(now, token, &ownerChanged);
+        if (!webRCLease.acquire(now, WEB_RC_TIMEOUT_MS, token, &ownerChanged)) {
+            char response[128];
+            const uint32_t age = (uint32_t)(now - webRCLease.lastSeenMs);
+            snprintf(response, sizeof(response),
+                "{\"ok\":0,\"error\":\"web_rc_lease_in_use\",\"retry_ms\":%lu}",
+                (unsigned long)(age < WEB_RC_TIMEOUT_MS ? WEB_RC_TIMEOUT_MS - age : 0));
+            webRCServer.send(409, "application/json", response);
+            return;
+        }
         if (ownerChanged) clearWebRCQueuedInputAndButtons();
         char stopToken[WEB_RC_LEASE_TOKEN_CHARS + 1];
         makeWebRCLeaseToken(stopToken, sizeof(stopToken));

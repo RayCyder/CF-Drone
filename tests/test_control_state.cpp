@@ -54,6 +54,7 @@ bool isLevelCalibrationActive(){return levelCalibrationBlocksArming(levelCalibra
 bool parameterPersistencePending(){return parameterWritePending;}
 bool imuRotationRestartPending(){return rotationRestartPending;}
 void sendMotors() {}
+bool clearMotorEmergencyCutoffIfAcknowledged() { return true; }
 bool motorsActive(){for(float m:motors)if(m!=0)return true;return false;}
 unsigned motorTestCancelCount=0,vibrationAbortCount=0;
 void cancelMotorTest() {++motorTestCancelCount;motorTestActive=false;}

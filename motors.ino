@@ -30,6 +30,10 @@ bool motorTestArmInhibit = false;
 static uint32_t motorTestDeadlineMs = 0;
 static bool motorTestVerbose = false;
 static const uint32_t MOTOR_TEST_DURATION_MS = 3000;
+static constexpr uint32_t MOTOR_CUTOFF_LATCHED = 0x80000000UL;
+static constexpr uint32_t MOTOR_CUTOFF_GENERATION_MASK = 0x7FFFFFFFUL;
+static uint32_t motorEmergencyCutoffState = 0;
+static uint32_t motorEmergencyCutoffAcknowledgedGeneration = 0;
 
 // Motors array indexes:
 const int MOTOR_REAR_LEFT = 0;
@@ -83,10 +87,60 @@ int getDutyCycle(float value) {
 	return motorPwmDutyFromValue(value, pwmFrequency, pwmResolution, pwmStop, pwmMin, pwmMax);
 }
 
-void sendMotors() {
-	for (int i = 0; i < 4; i++) {
-		ledcWrite(motorPins[i], getDutyCycle(motors[i]));
+static void writeMotorStopOutputs() {
+	const int stopDuty = getDutyCycle(0.0f);
+	for (int i = 0; i < 4; ++i) ledcWrite(motorPins[i], stopDuty);
+}
+
+bool motorEmergencyCutoffLatched() {
+	return (__atomic_load_n(&motorEmergencyCutoffState, __ATOMIC_ACQUIRE) & MOTOR_CUTOFF_LATCHED) != 0;
+}
+
+uint32_t motorEmergencyCutoffGeneration() {
+	return __atomic_load_n(&motorEmergencyCutoffState, __ATOMIC_ACQUIRE) & MOTOR_CUTOFF_GENERATION_MASK;
+}
+
+void latchMotorEmergencyCutoff() {
+	uint32_t oldState = __atomic_load_n(&motorEmergencyCutoffState, __ATOMIC_RELAXED);
+	for (;;) {
+		uint32_t generation = (oldState & MOTOR_CUTOFF_GENERATION_MASK) + 1;
+		generation &= MOTOR_CUTOFF_GENERATION_MASK;
+		if (generation == 0) generation = 1;
+		const uint32_t newState = MOTOR_CUTOFF_LATCHED | generation;
+		if (__atomic_compare_exchange_n(&motorEmergencyCutoffState, &oldState, newState,
+			false, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) break;
 	}
+	// This runs on the independent fast-stop task, so a stalled flight loop
+	// cannot delay the physical zero-duty writes.
+	writeMotorStopOutputs();
+}
+
+void acknowledgeMotorEmergencyCutoff(uint32_t generation) {
+	const uint32_t state = __atomic_load_n(&motorEmergencyCutoffState, __ATOMIC_ACQUIRE);
+	if ((state & MOTOR_CUTOFF_LATCHED) &&
+		(state & MOTOR_CUTOFF_GENERATION_MASK) == generation) {
+		__atomic_store_n(&motorEmergencyCutoffAcknowledgedGeneration, generation, __ATOMIC_RELEASE);
+	}
+}
+
+bool clearMotorEmergencyCutoffIfAcknowledged() {
+	uint32_t expected = __atomic_load_n(&motorEmergencyCutoffState, __ATOMIC_ACQUIRE);
+	if ((expected & MOTOR_CUTOFF_LATCHED) == 0) return true;
+	const uint32_t generation = expected & MOTOR_CUTOFF_GENERATION_MASK;
+	if (__atomic_load_n(&motorEmergencyCutoffAcknowledgedGeneration, __ATOMIC_ACQUIRE) != generation)
+		return false;
+	return __atomic_compare_exchange_n(&motorEmergencyCutoffState, &expected, generation,
+		false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+}
+
+void sendMotors() {
+	const bool cutoff = motorEmergencyCutoffLatched();
+	for (int i = 0; i < 4; i++) {
+		ledcWrite(motorPins[i], getDutyCycle(cutoff ? 0.0f : motors[i]));
+	}
+	// Close the race where the fast-stop task latches between the first check
+	// and the final motor write. The last writer is always a zero-duty pass.
+	if (!cutoff && motorEmergencyCutoffLatched()) writeMotorStopOutputs();
 }
 
 void serviceMotorTest() {

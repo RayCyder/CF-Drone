@@ -416,6 +416,8 @@ const char* armBlockReason() {
 
 bool requestArm() {
 	if (armed) return true;
+	extern bool clearMotorEmergencyCutoffIfAcknowledged();
+	if (!clearMotorEmergencyCutoffIfAcknowledged()) return false;
 	updateDiagnostics();
 	if (armBlockReason()) return false;
 	return tryArmWithSystemLog();

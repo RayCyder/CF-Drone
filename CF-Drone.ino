@@ -49,6 +49,8 @@ Quaternion attitude; // 估计出的姿态（四元数）
 bool landed; // are we landed and stationary
 
 void sendMotors();
+uint32_t motorEmergencyCutoffGeneration();
+void acknowledgeMotorEmergencyCutoff(uint32_t generation);
 void testMotor(int n);
 void serviceSerialConsoleOutput();
 void serviceMotorTest();
@@ -137,10 +139,12 @@ void loop() {
 	uint32_t stageStarted = loopStarted;
 #endif
 	#if WEB_RC_ENABLED
+	const uint32_t motorCutoffGeneration = motorEmergencyCutoffGeneration();
 	const WebRCFastStopAction fastStop = consumeWebRCFastStop();
 	if (fastStop == WEB_RC_FAST_STOP_KILL) disarm(DISARM_REASON_WEB_EMERGENCY);
 	else if (fastStop == WEB_RC_FAST_STOP_LOCK) disarm(DISARM_REASON_WEB_LOCK);
 	else if (fastStop == WEB_RC_FAST_STOP_LAND && armed) descend();
+	if (!armed) acknowledgeMotorEmergencyCutoff(motorCutoffGeneration);
 	#endif
 	readIMU(); // 读取IMU原始数据（陀螺仪/加速度计），并完成校准与坐标旋转
 	MONITOR_STAGE(LOOP_STAGE_IMU);
