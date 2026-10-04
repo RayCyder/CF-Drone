@@ -22,14 +22,21 @@ int main() {
     assert(policy.validateAndTouch("AAAABBBBCCCCDDDD", 601, timeoutMs));
     assert(!policy.validateAndTouch("EEEEFFFFGGGGHHHH", 601, timeoutMs));
 
-    assert(!policy.validateAndTouch("AAAABBBBCCCCDDDD", 10601, timeoutMs));
-    assert(policy.acquire(10601, timeoutMs, "1111222233334444", &secondChanged));
+    // A caller that has separately authenticated continuity may replace the
+    // active lease, as used for an armed page reload with the prior stop token.
+    assert(policy.acquire(700, timeoutMs, "EEEEFFFFGGGGHHHH", &secondChanged, true));
     assert(secondChanged);
-    assert(!policy.validateAndTouch("AAAABBBBCCCCDDDD", 10602, timeoutMs));
-    assert(policy.validateAndTouch("1111222233334444", 10602, timeoutMs));
+    assert(!policy.validateAndTouch("AAAABBBBCCCCDDDD", 701, timeoutMs));
+    assert(policy.validateAndTouch("EEEEFFFFGGGGHHHH", 701, timeoutMs));
 
-    assert(!policy.acquire(10603, timeoutMs, "", nullptr));
-    assert(!policy.acquire(10603, timeoutMs, "short", nullptr));
+    assert(!policy.validateAndTouch("EEEEFFFFGGGGHHHH", 10701, timeoutMs));
+    assert(policy.acquire(10701, timeoutMs, "1111222233334444", &secondChanged));
+    assert(secondChanged);
+    assert(!policy.validateAndTouch("EEEEFFFFGGGGHHHH", 10702, timeoutMs));
+    assert(policy.validateAndTouch("1111222233334444", 10702, timeoutMs));
+
+    assert(!policy.acquire(10703, timeoutMs, "", nullptr));
+    assert(!policy.acquire(10703, timeoutMs, "short", nullptr));
 
     assert(!webRCLeaseAllowsEmergencyButtonOverride(1, 1));
     assert(!webRCLeaseAllowsEmergencyButtonOverride(2, 0));

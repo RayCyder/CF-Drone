@@ -54,7 +54,10 @@ bool isLevelCalibrationActive(){return levelCalibrationBlocksArming(levelCalibra
 bool parameterPersistencePending(){return parameterWritePending;}
 bool imuRotationRestartPending(){return rotationRestartPending;}
 void sendMotors() {}
-bool clearMotorEmergencyCutoffIfAcknowledged() { return true; }
+bool motorCutoffReady=true;
+unsigned motorCutoffClearCount=0;
+bool motorEmergencyCutoffReadyForArm() { return motorCutoffReady; }
+bool clearMotorEmergencyCutoffIfAcknowledged() { ++motorCutoffClearCount; return motorCutoffReady; }
 bool motorsActive(){for(float m:motors)if(m!=0)return true;return false;}
 unsigned motorTestCancelCount=0,vibrationAbortCount=0;
 void cancelMotorTest() {++motorTestCancelCount;motorTestActive=false;}
@@ -114,6 +117,11 @@ int main(){
 	armed=false;
 	controlTorque();
 	for(float motor:motors)assert(motor==0.0f);
+	controlThrottle=0.2f;
+	const unsigned clearsBeforeBlockedArm=motorCutoffClearCount;
+	assert(!requestArm());
+	assert(motorCutoffClearCount==clearsBeforeBlockedArm);
+	controlThrottle=0.0f;
     armed=false; mode=STAB; controlThrottle=0;
     motorTestActive=true; motors[MOTOR_FRONT_RIGHT]=.05f;
     const unsigned cancelsBefore=motorTestCancelCount, abortsBefore=vibrationAbortCount;

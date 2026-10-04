@@ -123,6 +123,13 @@ void acknowledgeMotorEmergencyCutoff(uint32_t generation) {
 	}
 }
 
+bool motorEmergencyCutoffReadyForArm() {
+	const uint32_t state = __atomic_load_n(&motorEmergencyCutoffState, __ATOMIC_ACQUIRE);
+	if ((state & MOTOR_CUTOFF_LATCHED) == 0) return true;
+	return __atomic_load_n(&motorEmergencyCutoffAcknowledgedGeneration, __ATOMIC_ACQUIRE) ==
+		(state & MOTOR_CUTOFF_GENERATION_MASK);
+}
+
 bool clearMotorEmergencyCutoffIfAcknowledged() {
 	uint32_t expected = __atomic_load_n(&motorEmergencyCutoffState, __ATOMIC_ACQUIRE);
 	if ((expected & MOTOR_CUTOFF_LATCHED) == 0) return true;

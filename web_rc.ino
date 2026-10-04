@@ -1745,7 +1745,9 @@ void setupWebRC() {
         if (rejectFlightApiInConfigPortal()) return;
         // Disarmed pages may take over only after the current lease expires.
         // In flight, the previous stop token proves continuity after a reload.
-        if (armed && !webRCStopTokenMatches(webRCServer.arg("stop").c_str())) {
+        const String requestedStopToken = webRCServer.arg("stop");
+        const bool continuityRecovery = armed && webRCStopTokenMatches(requestedStopToken.c_str());
+        if (armed && !continuityRecovery) {
             webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"web_rc_stop_token_required\"}");
             return;
         }
@@ -1753,7 +1755,7 @@ void setupWebRC() {
         makeWebRCLeaseToken(token, sizeof(token));
         bool ownerChanged = false;
         const uint32_t now = millis();
-        if (!webRCLease.acquire(now, WEB_RC_TIMEOUT_MS, token, &ownerChanged)) {
+        if (!webRCLease.acquire(now, WEB_RC_TIMEOUT_MS, token, &ownerChanged, continuityRecovery)) {
             char response[128];
             const uint32_t age = (uint32_t)(now - webRCLease.lastSeenMs);
             snprintf(response, sizeof(response),
@@ -1764,8 +1766,13 @@ void setupWebRC() {
         }
         if (ownerChanged) clearWebRCQueuedInputAndButtons();
         char stopToken[WEB_RC_LEASE_TOKEN_CHARS + 1];
-        makeWebRCLeaseToken(stopToken, sizeof(stopToken));
-        publishWebRCStopToken(stopToken);
+        if (continuityRecovery) {
+            strncpy(stopToken, requestedStopToken.c_str(), sizeof(stopToken) - 1);
+            stopToken[sizeof(stopToken) - 1] = '\0';
+        } else {
+            makeWebRCLeaseToken(stopToken, sizeof(stopToken));
+            publishWebRCStopToken(stopToken);
+        }
         char response[192];
         snprintf(response, sizeof(response),
             "{\"ok\":1,\"lease\":\"%s\",\"stop\":\"%s\",\"timeout_ms\":%lu}",

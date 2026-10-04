@@ -416,11 +416,15 @@ const char* armBlockReason() {
 
 bool requestArm() {
 	if (armed) return true;
-	extern bool clearMotorEmergencyCutoffIfAcknowledged();
-	if (!clearMotorEmergencyCutoffIfAcknowledged()) return false;
 	updateDiagnostics();
 	if (armBlockReason()) return false;
-	return tryArmWithSystemLog();
+	extern bool motorEmergencyCutoffReadyForArm();
+	extern bool clearMotorEmergencyCutoffIfAcknowledged();
+	if (!motorEmergencyCutoffReadyForArm() || !tryArmWithSystemLog()) return false;
+	if (clearMotorEmergencyCutoffIfAcknowledged()) return true;
+	// A new fast-stop arrived between the readiness check and arming.
+	disarm(DISARM_REASON_WEB_EMERGENCY);
+	return false;
 }
 
 static uint8_t lastDisarmReason = DISARM_REASON_UNKNOWN;
