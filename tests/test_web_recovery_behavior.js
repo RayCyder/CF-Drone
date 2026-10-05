@@ -31,6 +31,7 @@ const requests = [];
 let conflict = false;
 let hangBody = false;
 let leaseRequests = 0;
+let releaseInitialLease = null;
 
 function response(status, data, signal) {
   return {
@@ -69,6 +70,12 @@ const context = {
     if (url === '/hang') return response(200, {}, options.signal);
     if (String(url).startsWith('/web_rc/lease')) {
       leaseRequests++;
+      if (!releaseInitialLease) {
+        return new Promise(resolve => {
+          releaseInitialLease = () => resolve(response(200,
+            {lease: 'lease-a', stop: 'continuity-token'}, options.signal));
+        });
+      }
       return response(200, {lease: 'lease-a', stop: 'continuity-token'}, options.signal);
     }
     if (url === '/web_rc/status')
@@ -84,12 +91,17 @@ const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 
 async function run() {
   vm.runInNewContext(script[1], context);
-  await flush();
-  await flush();
   assert.equal(intervals.length, 2, 'recovery page installs control and status timers');
 
+  intervals[0]();
   const left = elements['joystick-left'];
   left.onpointerdown({pointerId: 7, clientX: 100, clientY: 50, currentTarget: left});
+  const joinedAcquire = context.acquire();
+  assert.equal(leaseRequests, 1,
+    'startup, heartbeat, pointer input, and direct callers share one pending lease request');
+  releaseInitialLease();
+  assert.equal(await joinedAcquire, true, 'all concurrent callers receive the acquired lease');
+  await flush();
   await flush();
   const firstStickCount = requests.filter(item => item.url === '/web_rc' &&
     JSON.parse(item.options.body).t === 1).length;

@@ -17,6 +17,8 @@ assert.match(source, /async function timeoutFetch[\s\S]*clone\(\)\.arrayBuffer\(
   'the recovery request deadline remains active through response body consumption');
 assert.match(source, /web_rc_lease_in_use'[\s\S]*leaseBlocked=true[\s\S]*if\(leaseBlocked\)return/,
   'a recovery page displaced by another controller stops reacquiring its lease');
+assert.match(source, /leasePromise=null[\s\S]*if\(leasePromise\)return leasePromise[\s\S]*if\(leaseBlocked\)return false[\s\S]*finally\(\(\)=>\{leasePromise=null\}\)/,
+  'concurrent recovery callers share one lease request and recheck blocking before applying it');
 assert.match(source, /if\(active\)\{sendLatest\(\);return\}/,
   'active recovery controls periodically renew the latest stick values');
 assert.match(source, /location\.reload\(\)/,

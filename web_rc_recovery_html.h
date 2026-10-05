@@ -8,23 +8,28 @@ const char webRCRecoveryHtml[] PROGMEM = R"rawliteral(
 <div class="pads"><div id="joystick-left" class="pad"><div class="knob"></div></div><div id="joystick-right" class="pad"><div class="knob"></div></div></div>
 <div class="actions"><button onclick="emergency(3)">迫降</button><button onclick="emergency(1)">上锁</button><button class="danger" onclick="emergency(2)">急停</button><button id="full" onclick="location.reload()" disabled>返回完整页面</button></div>
 <script>
-let lease='',stop='',active=false,inFlight=null,pending=false,heartbeat=null,leaseBlocked=false;
+let lease='',stop='',active=false,inFlight=null,pending=false,heartbeat=null,leaseBlocked=false,leasePromise=null;
 let hoverRaw=0,left={x:0,y:0},right={x:0,y:0},values={th:0,r:0,p:0,y:0};
 const state=document.getElementById('state');
 try{stop=localStorage.getItem('cfDroneStopToken')||''}catch(_){}
 if(!stop){try{stop=sessionStorage.getItem('cfDroneStopToken')||''}catch(_){}}
 async function timeoutFetch(url,options={},ms=3000){const c=new AbortController(),t=setTimeout(()=>c.abort(),ms);try{const r=await fetch(url,{...options,signal:c.signal});await r.clone().arrayBuffer();return r}finally{clearTimeout(t)}}
-async function acquire(){
-  if(leaseBlocked)return false;
-  if(lease)return true;
-  try{
-    const r=await timeoutFetch('/web_rc/lease'+(stop?'?stop='+encodeURIComponent(stop):''),{method:'POST',cache:'no-store'},3500);
-    const data=await r.json().catch(()=>({}));
-    if(!r.ok||!data.lease){if(data.error==='web_rc_lease_in_use'||data.error==='web_rc_flight_takeover_forbidden')leaseBlocked=true;state.textContent=data.error==='web_rc_flight_takeover_forbidden'?'飞行中禁止此页面接管':data.error==='web_rc_lease_in_use'?'控制权已被其他页面接管':'无法恢复控制权';return false}
-    lease=data.lease;stop=data.stop||stop;
-    try{localStorage.setItem('cfDroneStopToken',stop)}catch(_){} try{sessionStorage.setItem('cfDroneStopToken',stop)}catch(_){}
-    state.textContent='控制权已恢复';return true;
-  }catch(_){state.textContent='连接超时，正在重试';return false}
+function acquire(){
+  if(leaseBlocked)return Promise.resolve(false);
+  if(lease)return Promise.resolve(true);
+  if(leasePromise)return leasePromise;
+  leasePromise=(async()=>{
+    try{
+      const r=await timeoutFetch('/web_rc/lease'+(stop?'?stop='+encodeURIComponent(stop):''),{method:'POST',cache:'no-store'},3500);
+      const data=await r.json().catch(()=>({}));
+      if(leaseBlocked)return false;
+      if(!r.ok||!data.lease){if(data.error==='web_rc_lease_in_use'||data.error==='web_rc_flight_takeover_forbidden')leaseBlocked=true;state.textContent=data.error==='web_rc_flight_takeover_forbidden'?'飞行中禁止此页面接管':data.error==='web_rc_lease_in_use'?'控制权已被其他页面接管':'无法恢复控制权';return false}
+      lease=data.lease;stop=data.stop||stop;
+      try{localStorage.setItem('cfDroneStopToken',stop)}catch(_){} try{sessionStorage.setItem('cfDroneStopToken',stop)}catch(_){}
+      state.textContent='控制权已恢复';return true;
+    }catch(_){if(!leaseBlocked)state.textContent='连接超时，正在重试';return false}
+  })().finally(()=>{leasePromise=null});
+  return leasePromise;
 }
 async function post(data,retry=true){
   if(!await acquire())return false;
