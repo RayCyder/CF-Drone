@@ -336,6 +336,10 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
         <strong>正在检查起飞前标定…</strong>
         <small>检查陀螺静止校准、六面加速度计校准和机身水平校准。</small>
       </div>
+      <div id="barometer-status" class="diagnostic-summary offline">
+        <strong>正在读取气压高度保护…</strong>
+        <small>气压计为可选传感器，不影响基础手动解锁。</small>
+      </div>
       <div id="led-alert-reason" class="diagnostic-summary offline">
         <strong>正在读取蓝灯状态…</strong>
       </div>
@@ -352,7 +356,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   <section id="route-page" class="route-page" aria-hidden="true">
     <div class="route-shell">
       <div class="diagnostic-top"><h2>相对航线（遥控输出序列）</h2><div class="diagnostic-actions"><button onclick="closeRoutePage()">返回遥控器</button></div></div>
-      <p class="route-intro">这是按时间回放遥控输入，不是坐标航点。正常完成或异常中断时，飞控可能转入定推力下降；手动接管会切回自稳。没有高度或触地反馈，飞手需保持接管能力并在触地后上锁。</p>
+      <p class="route-intro">这是按时间回放遥控输入，不是坐标航点。正常完成或异常中断时，飞控可能转入以定推力为主体的下降；可用的气压高度只会对过快下降做有限保护，不能定高或判断触地。手动接管会切回自稳，飞手需保持接管能力并在触地后上锁。</p>
       <div class="route-state-card" aria-live="polite"><strong>当前飞控状态</strong><div class="route-status" id="route-status">正在读取飞控状态…</div><div class="route-status" id="route-message" role="status">当前内容尚未上传；上传不会解锁或启动。</div></div>
 
       <section class="route-step" aria-labelledby="route-step-edit-title">
@@ -375,7 +379,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
         <div class="route-page-actions"><button id="route-auto" class="run" onclick="setAutoModeForRoute()">进入回放模式（AUTO）</button><button id="route-takeover" class="stop" onclick="takeManualControl()">接管摇杆</button></div>
       </section>
 
-      <details class="route-details"><summary>回放行为与能力边界</summary><p class="route-help">每段的数值会在该段持续使用，不是相对上一段的增量。飞控没有位置或高度反馈，风、推力和机体响应都会影响实际轨迹；回放遥控指令不保证相同的飞行轨迹或着陆。序列正常完成、连接断开或执行周期中断时，飞控会转入定推力下降；若末段油门低于设定的下降推力，进入下降时油门可能上升。手动接管会切回自稳。下降推力需先用带桨实测标定，飞手需确认着陆并手动上锁。设备序列只保存在运行内存，飞控重启后需重新上传；需要迫降时使用遥控器上的“迫降”按钮。</p></details>
+      <details class="route-details"><summary>回放行为与能力边界</summary><p class="route-help">每段的数值会在该段持续使用，不是相对上一段的增量。飞控没有位置反馈或高度闭环，风、推力和机体响应都会影响实际轨迹；回放遥控指令不保证相同的飞行轨迹或着陆。序列正常完成、连接断开或执行周期中断时，飞控会转入以定推力为主体的下降；若气压估计可用，只会在高于相对基准 1 米且下降过快时有限增加推力。若末段油门低于设定的下降推力，进入下降时油门可能上升。手动接管会切回自稳。下降推力需先用带桨实测标定，飞手需确认着陆并手动上锁。设备序列只保存在运行内存，飞控重启后需重新上传；需要迫降时使用遥控器上的“迫降”按钮。</p></details>
     </div>
   </section>
   <section id="descent-calibration-page" class="descent-calibration-page" aria-hidden="true">
@@ -384,9 +388,9 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <div class="calibration-card"><strong>飞手手动下降，飞控只记录</strong><p>仅在自稳模式且已解锁时开始记录。开始后请关闭此页回到摇杆操作；可从顶部“停止标定”结束采集。单次最多 30 秒，记录每秒约 20 个样本。该功能不会自动改变飞行控制。</p><small>完成后输入这段记录对应的实测下降高度差，页面用高度差 ÷ 记录时长计算平均下降速度。IMU 不会提供可靠的垂直速度或离地高度。</small></div>
       <div id="descent-calibration-status" class="route-status" role="status">正在读取标定状态…</div>
       <div class="calibration-actions"><button id="descent-calibration-start" class="primary" onclick="startDescentCalibrationCapture()">开始记录当前手动下降</button><button id="descent-calibration-stop" onclick="stopDescentCalibrationCapture()">停止记录</button><button id="descent-calibration-download" onclick="downloadDescentCalibrationCsv()">下载原始记录</button></div>
-      <div class="calibration-card"><strong>记录测量结果</strong><div class="calibration-fields"><label for="descent-airframe-id">机体标识</label><input id="descent-airframe-id" maxlength="32" placeholder="例如 frame-a"><label for="descent-prop-id">桨叶配置</label><input id="descent-prop-id" maxlength="32" placeholder="例如 55mm-2blade"><label for="descent-drop-distance">实测高度差（米）</label><input id="descent-drop-distance" type="number" min="0.1" max="100" step="0.1" placeholder="例如 2.0"><button onclick="addDescentCalibrationPoint()">添加实测点</button></div><p id="descent-calibration-measurement" class="route-status">需要一段有效且稳定的标定记录。标定点仅用于相同设备、固件、机体和桨叶配置，并在 30 天后过期。</p></div>
+      <div class="calibration-card"><strong>记录测量结果</strong><div class="calibration-fields"><label for="descent-airframe-id">机体标识</label><input id="descent-airframe-id" maxlength="32" placeholder="例如 frame-a" oninput="invalidateDescentCalibrationRecommendation()"><label for="descent-prop-id">桨叶配置</label><input id="descent-prop-id" maxlength="32" placeholder="例如 55mm-2blade" oninput="invalidateDescentCalibrationRecommendation()"><label for="descent-drop-distance">实测高度差（米）</label><input id="descent-drop-distance" type="number" min="0.1" max="100" step="0.1" placeholder="例如 2.0"><button onclick="addDescentCalibrationPoint()">添加实测点</button></div><p id="descent-calibration-measurement" class="route-status">需要一段有效且稳定的标定记录。标定点仅用于相同设备、固件、机体和桨叶配置，并在 30 天后过期。</p></div>
       <div class="calibration-card"><strong>实测点与推力建议</strong><div id="descent-calibration-points" class="calibration-points">此浏览器还没有保存实测点。</div><div class="calibration-fields"><label for="descent-target-speed">期望最大下降速度（米/秒）</label><input id="descent-target-speed" type="number" min="0.05" max="5" step="0.05" placeholder="输入目标"><button onclick="recommendDescentCalibrationPoint()">查找实测点</button></div><p id="descent-calibration-recommendation" class="route-status">只会推荐速度不超过目标值的实测点；不会插值或外推。</p><div class="calibration-actions"><button id="descent-calibration-apply" class="primary" onclick="applyDescentCalibrationRecommendation()" disabled>确认保存下降推力</button><button onclick="clearDescentCalibrationPoints()">清除此浏览器的实测点</button></div></div>
-      <div class="calibration-card"><strong>能力边界</strong><p>这是经验推力标定，不是自动着陆。迫降仍是定推力下降；飞控没有高度、垂直速度或触地反馈，不能据此保证下降速度或避免撞地。飞手必须保持接管能力，并在触地后明确上锁。电池、载荷、螺旋桨、风和地面效应变化都会影响结果。</p></div>
+      <div class="calibration-card"><strong>能力边界</strong><p>这是经验推力标定，不是自动着陆。迫降仍以定推力下降为主体；可选气压计只在样本有效且下降过快时有限增加推力，没有高度闭环、近地测距或触地反馈，不能保证下降速度或避免撞地。飞手必须保持接管能力，并在触地后明确上锁。电池、载荷、螺旋桨、风和地面效应变化都会影响结果。</p></div>
     </div>
   </section>
   <section id="vibration-calibration-page" class="vibration-calibration-page" aria-hidden="true">
@@ -891,6 +895,12 @@ function descentPointMatch(point,config){
   const age=Date.now()-Number(point.at);
   return Number.isFinite(age)&&age>=0&&age<=DESCENT_CALIBRATION_MAX_AGE_MS&&point.device_id===currentDeviceId&&point.firmware_build===currentFirmwareBuild&&point.airframe===config.airframe&&point.prop===config.prop;
 }
+function invalidateDescentCalibrationRecommendation(){
+  if(!descentCalibrationRecommendation)return;
+  descentCalibrationRecommendation=null;
+  document.getElementById('descent-calibration-recommendation').textContent='机体或桨叶配置已变化，请重新查找匹配的实测点。';
+  refreshDescentCalibrationSaveState();
+}
 function renderDescentCalibrationPoints(){
   const points=readDescentCalibrationPoints();const root=document.getElementById('descent-calibration-points');
   let config=null;try{config=readDescentCalibrationConfig();}catch(_){}
@@ -931,8 +941,22 @@ async function refreshDescentCalibrationSaveState(){
 }
 async function applyDescentCalibrationRecommendation(){
   if(!descentCalibrationRecommendation||currentArmed||!connectionOk){showToast('保存参数前请连接飞控并确认已上锁');return;}
-  const value=Number(descentCalibrationRecommendation.thrust);
   try{
+    const config=readDescentCalibrationConfig();
+    const identityResponse=await fetchWithTimeout('/web_rc/status',{cache:'no-store'},STATUS_REQUEST_TIMEOUT_MS);
+    const identity=await identityResponse.json();
+    if(!identityResponse.ok||!identity.device_id||!identity.firmware_build)throw new Error('无法再次确认当前设备和固件身份');
+    currentDeviceId=String(identity.device_id);currentFirmwareBuild=String(identity.firmware_build);
+    if(!descentPointMatch(descentCalibrationRecommendation,config)){
+      descentCalibrationRecommendation=null;refreshDescentCalibrationSaveState();
+      throw new Error('设备、固件、机体、桨叶配置或有效期已变化，请重新查找标定点');
+    }
+    const stillStored=readDescentCalibrationPoints().some(point=>
+      Number(point.at)===Number(descentCalibrationRecommendation.at)&&
+      Number(point.thrust)===Number(descentCalibrationRecommendation.thrust)&&
+      descentPointMatch(point,config));
+    if(!stillStored){descentCalibrationRecommendation=null;refreshDescentCalibrationSaveState();throw new Error('推荐标定点已删除或变化，请重新查找');}
+    const value=Number(descentCalibrationRecommendation.thrust);
     const response=await controlFetch('/descent-calibration/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({value:String(value)})});
     const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'参数保存未排队');
     document.getElementById('descent-calibration-recommendation').textContent='已提交保存；等待飞控写入并确认…';
@@ -1440,7 +1464,7 @@ function controlUrl(url, leaseToken=webRCLeaseToken) {
   return url + (url.includes('?') ? '&' : '?') + 'lease=' + encodeURIComponent(leaseToken);
 }
 
-function fetchWithTimeout(input, options={}, timeoutMs=CONTROL_REQUEST_TIMEOUT_MS) {
+async function fetchWithTimeout(input, options={}, timeoutMs=CONTROL_REQUEST_TIMEOUT_MS) {
   const controller = new AbortController();
   const sourceSignal = options.signal;
   let sourceAbort = null;
@@ -1450,10 +1474,16 @@ function fetchWithTimeout(input, options={}, timeoutMs=CONTROL_REQUEST_TIMEOUT_M
     else sourceSignal.addEventListener('abort', sourceAbort, {once:true});
   }
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  return fetch(input, {...options, signal:controller.signal}).finally(() => {
+  try {
+    const response = await fetch(input, {...options, signal:controller.signal});
+    // Keep the same deadline active until the complete response body arrives.
+    // Callers may parse the original response after this buffered clone finishes.
+    await response.clone().arrayBuffer();
+    return response;
+  } finally {
     clearTimeout(timeout);
     if (sourceSignal && sourceAbort) sourceSignal.removeEventListener('abort', sourceAbort);
-  });
+  }
 }
 
 function recoverExpiredLease(expectedToken='') {
@@ -1732,6 +1762,22 @@ function renderSelfCheckStatus(data) {
   calibrationReadiness.innerHTML=calibrationPending.length
     ? `<strong>起飞前标定未完成（${calibrationPending.length} 项）</strong><small>${calibrationChecks.map(item=>`${item.ok?'✓':'✗'} ${item.name}${item.ok?'':'：'+item.action}`).join('<br>')}</small>`
     : `<strong>起飞前标定已完成</strong><small>${calibrationChecks.map(item=>`✓ ${item.name}`).join('<br>')}</small>`;
+  const barometerStatus = document.getElementById('barometer-status');
+  const barometerReasons = {
+    barometer_unavailable:'未检测到气压计',
+    waiting_for_sample:'气压计已检测，正在等待首个样本',
+    sample_stale_or_invalid:'气压计样本过期或无效',
+    relative_altitude_below_1m:'样本有效；相对高度低于 1 米，快速下降保护暂不介入',
+    ready:'高度样本有效，快速下降保护可用'
+  };
+  const barometerReason = barometerReasons[data.barometer_reason] || '状态未知';
+  const barometerAge = Number(data.barometer_age_ms);
+  const relativeAltitude = Number(data.relative_altitude_m);
+  const verticalSpeed = Number(data.vertical_speed_mps);
+  barometerStatus.className='diagnostic-summary '+(data.barometer_guard_ready===true?'ok':'offline');
+  barometerStatus.innerHTML=data.barometer_guard_ready===true
+    ? `<strong>气压快速下降保护可用</strong><small>相对高度 ${relativeAltitude.toFixed(2)} m，垂直速度 ${verticalSpeed.toFixed(2)} m/s，样本年龄 ${barometerAge} ms。此保护只会有限增加迫降推力。</small>`
+    : `<strong>气压高度保护当前降级</strong><small>${barometerReason}。气压计为可选传感器，不影响基础手动解锁；迫降会退回定推力下降。</small>`;
   const ledReason = document.getElementById('led-alert-reason');
   const blockingFaults = diagnosticChecks.filter(check =>
     [1, 2, 4, 8, 256].includes(check.bit) && (faults & check.bit) !== 0);
@@ -1798,6 +1844,9 @@ function showSelfCheckUnavailable() {
   summary.className = 'diagnostic-summary offline';
   summary.innerHTML = '<strong>暂时无法读取自检结果</strong><small>请检查与飞控的连接，或确认当前固件已提供诊断数据。</small>';
   document.getElementById('diagnostic-list').innerHTML = '';
+  const barometerStatus = document.getElementById('barometer-status');
+  barometerStatus.className = 'diagnostic-summary offline';
+  barometerStatus.innerHTML = '<strong>无法读取气压高度保护状态</strong><small>连接恢复后刷新；气压计为可选传感器，不影响基础手动解锁。</small>';
   const activePanel = document.getElementById('diagnostic-active');
   activePanel.style.display = 'none';
   activePanel.innerHTML = '';

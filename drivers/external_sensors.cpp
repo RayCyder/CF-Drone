@@ -475,6 +475,10 @@ bool compassAvailable() {
 	return qmcReady;
 }
 
+bool barometerAvailable() {
+	return bmpAddress != 0;
+}
+
 bool getBarometerEstimate(BarometerEstimate &estimate) {
 	portENTER_CRITICAL(&bmpSampleMux);
 	estimate = bmpRuntime.estimate;

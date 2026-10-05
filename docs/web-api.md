@@ -146,7 +146,7 @@ STA 模式下应使用路由器分配给飞控的实际 IP 地址。
 
 遥控页顶部的“开环序列”按钮会打开独立编辑页面。每行填写五个空格或逗号分隔字段：持续秒数、油门百分比、横滚数值、俯仰数值、偏航数值；三个姿态轴都是遥控输入值，范围为 `-100..100`，不是角度。空行和 `#` 开头的注释行会忽略。最多 128 段、总时长 30 分钟、正文 4096 字节。先在上锁且电机停止时上传校验并读回，再切换 AUTO；操作者解锁后主循环再次检查批次、模式和链路并自动启动。飞控用两组定长缓冲保存动作，不在控制循环分配内存；每段之间按限定斜率平滑过渡。编辑内容可存入浏览器 `localStorage`；飞控 RAM 内序列在重启后清除。输入值还会经过固件现有的死区及灵敏度缩放。
 
-此功能只有加速度计与陀螺仪，没有位置/高度/触地反馈，不是位置航点或闭环航线控制；杆量不能保证实际位移、半径、飞行高度或落点。浏览器断开、控制循环停顿超过 100 ms、序列完成或操作者停止都会进入固定推力下降；该流程不能识别触地，操作者须确认情况后上锁。执行期间摇杆不会隐式接管；点击“接管摇杆”或切换到 STAB/ACRO 才会明确停止序列并恢复手动控制。急停/上锁按钮仍立即停机。
+此功能没有位置反馈或高度闭环，不是位置航点或闭环航线控制；杆量不能保证实际位移、半径、飞行高度或落点。浏览器断开、控制循环停顿超过 100 ms、序列完成或操作者停止都会进入以固定推力为主体的下降；运行时可用的气压估计只会在高于相对基准 1 米且下降过快时有限增加推力，不能识别近地或触地。操作者须确认情况后上锁。执行期间摇杆不会隐式接管；点击“接管摇杆”或切换到 STAB/ACRO 才会明确停止序列并恢复手动控制。急停/上锁按钮仍立即停机。
 
 返回编译进固件的完整 HTML、CSS 和 JavaScript 遥控页面。
 
@@ -167,7 +167,7 @@ Content-Type: text/html
 
 `GET /route/plan` 仅在上锁时读回当前文本，并通过 `X-Plan-Revision` 返回批次号。页面确认读回内容和批次后请求 AUTO 模式；操作者随后解锁，主循环在当前批次有效、Web RC 在线且模式仍为 AUTO 时自动启动。固件没有 `/route/start` 或 `/route/stop`。`GET /route/status` 返回 `state`（含 `start_pending`）、段数、当前段、总时长、`plan_revision`、`pending`、原因、解锁状态和模式。`POST /route/takeover` 明确切回 STAB 手动控制；页面迫降按钮使用 Web RC 按钮消息。切换到 STAB/ACRO 也会取消序列。
 
-此机制仍是开环杆量执行，不含位置/高度闭环。Web RC 的“急停”仍会立即 disarm；停止/完成/断连使用的是固定推力下降流程，不能确认着陆。
+此机制仍是开环杆量执行，不含位置/高度闭环。Web RC 的“急停”仍会立即 disarm；停止/完成/断连使用以固定推力为主体、可选气压快速下降保护为辅的流程，不能确认着陆。
 
 ### 5.2 提交摇杆数据
 
@@ -340,7 +340,14 @@ GET /web_rc/status
   "packet_age_ms": 75,
   "http_idle_drops": 2,
   "control_source": 2,
-  "thrust_target": 0.25
+  "thrust_target": 0.25,
+  "barometer_available": true,
+  "barometer_usable": true,
+  "barometer_guard_ready": true,
+  "barometer_reason": "ready",
+  "barometer_age_ms": 42,
+  "relative_altitude_m": 1.42,
+  "vertical_speed_mps": -0.31
 }
 ```
 
@@ -365,6 +372,13 @@ GET /web_rc/status
 | `http_idle_drops` | integer | 次 | 本次启动后因连接建立但未发送请求而主动关闭的 TCP 连接数 |
 | `control_source` | integer | 枚举 | 实际控制来源；`2` 为 Web RC，`6` 为受控下降 |
 | `thrust_target` | number | 0..1 | 当前控制器目标推力；可能与摇杆油门不同 |
+| `barometer_available` | boolean | - | 运行时是否实际检测到 BMP388；构建启用不等于实体传感器存在 |
+| `barometer_usable` | boolean | - | 当前估计是否有效、有限且样本年龄不超过 250 ms |
+| `barometer_guard_ready` | boolean | - | 样本可用且相对高度至少 1 m，迫降快速下降保护具备介入条件；这不是定高或触地能力 |
+| `barometer_reason` | string | - | `ready`、`barometer_unavailable`、`waiting_for_sample`、`sample_stale_or_invalid` 或 `relative_altitude_below_1m` |
+| `barometer_age_ms` | integer | ms | 当前气压样本年龄；无样本时为 `-1` |
+| `relative_altitude_m` | number | m | 相对本次传感器基准的气压高度；无样本时为 `0.0`，不能作为离地高度 |
+| `vertical_speed_mps` | number | m/s | 气压估计垂直速度，向上为正；无样本时为 `0.0` |
 | `arm_ready` | boolean | - | 按飞控当前完整解锁门槛计算的即时结果；仅表示查询时状态 |
 | `arm_reason` | string | - | `arm_ready=false` 时的首个阻止原因；条件可能在下一次查询前变化 |
 

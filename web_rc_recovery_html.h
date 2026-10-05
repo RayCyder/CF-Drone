@@ -8,18 +8,19 @@ const char webRCRecoveryHtml[] PROGMEM = R"rawliteral(
 <div class="pads"><div id="joystick-left" class="pad"><div class="knob"></div></div><div id="joystick-right" class="pad"><div class="knob"></div></div></div>
 <div class="actions"><button onclick="emergency(3)">迫降</button><button onclick="emergency(1)">上锁</button><button class="danger" onclick="emergency(2)">急停</button><button id="full" onclick="location.reload()" disabled>返回完整页面</button></div>
 <script>
-let lease='',stop='',active=false,inFlight=null,pending=false,heartbeat=null;
+let lease='',stop='',active=false,inFlight=null,pending=false,heartbeat=null,leaseBlocked=false;
 let hoverRaw=0,left={x:0,y:0},right={x:0,y:0},values={th:0,r:0,p:0,y:0};
 const state=document.getElementById('state');
 try{stop=localStorage.getItem('cfDroneStopToken')||''}catch(_){}
 if(!stop){try{stop=sessionStorage.getItem('cfDroneStopToken')||''}catch(_){}}
-function timeoutFetch(url,options={},ms=3000){const c=new AbortController(),t=setTimeout(()=>c.abort(),ms);return fetch(url,{...options,signal:c.signal}).finally(()=>clearTimeout(t))}
+async function timeoutFetch(url,options={},ms=3000){const c=new AbortController(),t=setTimeout(()=>c.abort(),ms);try{const r=await fetch(url,{...options,signal:c.signal});await r.clone().arrayBuffer();return r}finally{clearTimeout(t)}}
 async function acquire(){
+  if(leaseBlocked)return false;
   if(lease)return true;
   try{
     const r=await timeoutFetch('/web_rc/lease'+(stop?'?stop='+encodeURIComponent(stop):''),{method:'POST',cache:'no-store'},3500);
     const data=await r.json().catch(()=>({}));
-    if(!r.ok||!data.lease){state.textContent=data.error==='web_rc_flight_takeover_forbidden'?'飞行中禁止此页面接管':'无法恢复控制权';return false}
+    if(!r.ok||!data.lease){if(data.error==='web_rc_lease_in_use'||data.error==='web_rc_flight_takeover_forbidden')leaseBlocked=true;state.textContent=data.error==='web_rc_flight_takeover_forbidden'?'飞行中禁止此页面接管':data.error==='web_rc_lease_in_use'?'控制权已被其他页面接管':'无法恢复控制权';return false}
     lease=data.lease;stop=data.stop||stop;
     try{localStorage.setItem('cfDroneStopToken',stop)}catch(_){} try{sessionStorage.setItem('cfDroneStopToken',stop)}catch(_){}
     state.textContent='控制权已恢复';return true;
@@ -32,7 +33,7 @@ async function post(data,retry=true){
     const r=await timeoutFetch('/web_rc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(dataWithLease)});
     const body=await r.json().catch(()=>({}));
     if(r.status===409&&(body.error==='web_rc_lease_expired'||body.error==='web_rc_lease_required')&&retry&&lease===used){lease='';return post(data,false)}
-    if(r.status===409&&body.error==='web_rc_lease_in_use'){lease='';state.textContent='控制权已被其他页面接管'}
+    if(r.status===409&&body.error==='web_rc_lease_in_use'){lease='';leaseBlocked=true;active=false;state.textContent='控制权已被其他页面接管'}
     return r.ok;
   }catch(_){state.textContent='控制请求超时';return false}
 }
@@ -54,9 +55,9 @@ async function emergency(button){
   fetch(`${location.protocol}//${location.hostname}:82/${action}?s=${encodeURIComponent(stop)}`,{method:'POST',mode:'no-cors',keepalive:true}).catch(()=>{});
   await timeoutFetch('/web_rc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({t:2,b:button,s:1,stop,ts:performance.now()})}).catch(()=>{});
 }
-async function refresh(){try{const r=await timeoutFetch('/web_rc/status',{cache:'no-store'}),d=await r.json();if(Number.isFinite(Number(d.hover_throttle_pct)))hoverRaw=Math.max(-100,Math.min(100,Number(d.hover_throttle_pct)*2-100));document.getElementById('full').disabled=d.armed===true;state.textContent=d.armed?'飞行中，轻量控制可用':'飞控已上锁，可返回完整页面'}catch(_){}}
+async function refresh(){try{const r=await timeoutFetch('/web_rc/status',{cache:'no-store'}),d=await r.json();if(Number.isFinite(Number(d.hover_throttle_pct)))hoverRaw=Math.max(-100,Math.min(100,Number(d.hover_throttle_pct)*2-100));document.getElementById('full').disabled=d.armed===true;if(!leaseBlocked)state.textContent=d.armed?'飞行中，轻量控制可用':'飞控已上锁，可返回完整页面'}catch(_){}}
 document.addEventListener('visibilitychange',()=>{if(document.hidden)release()});window.addEventListener('pagehide',release);window.addEventListener('blur',release);
-acquire();refresh();setInterval(()=>{if(!heartbeat)heartbeat=post({t:4,ts:performance.now()}).finally(()=>heartbeat=null)},2000);setInterval(refresh,2000);
+acquire();refresh();setInterval(()=>{if(leaseBlocked)return;if(active){sendLatest();return}if(!heartbeat)heartbeat=post({t:4,ts:performance.now()}).finally(()=>heartbeat=null)},2000);setInterval(refresh,2000);
 </script></body></html>
 )rawliteral";
 static_assert(sizeof(webRCRecoveryHtml) <= 16384, "Flight recovery page must stay small");

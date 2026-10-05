@@ -30,6 +30,8 @@
 #include "web_rc_hover_throttle.h"
 #include "web_armed_route_policy.h"
 #include "vibration_motor_result.h"
+#include "legacy_http_redirect_parser.h"
+#include "landing_barometer_guard.h"
 
 // 飞控统一控制变量（供协议适配层写入，与 SBUS/MAVLink 共用）
 extern double t;
@@ -1044,6 +1046,7 @@ static bool rejectWiFiMaintenanceWhileActive() {
 static WiFiServer* redirectServer8080 = nullptr;
 static WiFiClient redirectClient8080;
 static uint32_t redirectClientAcceptedMs = 0;
+static LegacyHttpRedirectParser* redirectRequestParser8080 = nullptr;
 #endif
 // ------旧PCB印刷地址访问 :8080 → 301跳转到80端口；旧地址全部淘汰后可删除------------
 
@@ -1571,58 +1574,76 @@ bool isUsingWebRC() {
 // 兼容旧遥控端口，处理8080端口的301重定向请求（WiFiServer原始TCP，手动解析HTTP）
 // ESP32-C3无旧用户，编译时完全去除。等待首包时跨循环返回，不阻塞80端口。
 #ifndef CONFIG_IDF_TARGET_ESP32C3
+static void closeRedirectClient8080() {
+    redirectClient8080.stop();
+    redirectClient8080 = WiFiClient();
+    if (redirectRequestParser8080) redirectRequestParser8080->reset();
+}
+
 static void handleRedirect8080() {
-    if (!redirectServer8080) return;
+    if (!redirectServer8080 || !redirectRequestParser8080) return;
     if (!redirectClient8080) {
         redirectClient8080 = redirectServer8080->accept();
         if (!redirectClient8080) return;
         redirectClientAcceptedMs = millis();
-        redirectClient8080.setTimeout(20);
+        redirectRequestParser8080->reset();
         return;
     }
 
     if (!redirectClient8080.connected()) {
-        redirectClient8080.stop();
-        redirectClient8080 = WiFiClient();
+        closeRedirectClient8080();
         return;
     }
-    if (!redirectClient8080.available()) {
-        if ((uint32_t)(millis() - redirectClientAcceptedMs) >= 200) {
-            redirectClient8080.stop();
-            redirectClient8080 = WiFiClient();
+    if ((uint32_t)(millis() - redirectClientAcceptedMs) >=
+        LEGACY_HTTP_REDIRECT_REQUEST_TIMEOUT_MS) {
+        closeRedirectClient8080();
+        return;
+    }
+
+    size_t consumed = 0;
+    while (redirectClient8080.available() &&
+        consumed < LEGACY_HTTP_REDIRECT_READ_BUDGET_BYTES &&
+        !redirectRequestParser8080->complete()) {
+        const int value = redirectClient8080.read();
+        if (value < 0) break;
+        ++consumed;
+        if (!redirectRequestParser8080->append((char)value)) {
+            closeRedirectClient8080();
+            return;
         }
-        return;
     }
+    if (!redirectRequestParser8080->complete()) return;
 
     String path = "/";
     String host = "";
-    if (redirectClient8080.available()) {
-        // 解析请求行：GET /path HTTP/1.1
-        String reqLine = redirectClient8080.readStringUntil('\n');
-        int s1 = reqLine.indexOf(' ');
-        int s2 = reqLine.indexOf(' ', s1 + 1);
-        if (s1 >= 0 && s2 > s1) path = reqLine.substring(s1 + 1, s2);
+    String request(redirectRequestParser8080->data());
+    const int firstLineEnd = request.indexOf('\n');
+    String reqLine = firstLineEnd >= 0 ? request.substring(0, firstLineEnd) : request;
+    int s1 = reqLine.indexOf(' ');
+    int s2 = reqLine.indexOf(' ', s1 + 1);
+    if (s1 >= 0 && s2 > s1) path = reqLine.substring(s1 + 1, s2);
 
-        // 读取请求头，提取Host（去掉 :8080 端口部分）
-        while (redirectClient8080.available()) {
-            String line = redirectClient8080.readStringUntil('\n');
-            line.trim();
-            if (line.length() == 0) break;
-            if (line.startsWith("Host:") || line.startsWith("host:")) {
-                host = line.substring(5);
-                host.trim();
-                int colon = host.indexOf(':');
-                if (colon >= 0) host = host.substring(0, colon);
-            }
+    int lineStart = firstLineEnd + 1;
+    while (lineStart > 0 && lineStart < request.length()) {
+        const int lineEnd = request.indexOf('\n', lineStart);
+        String line = lineEnd >= 0 ? request.substring(lineStart, lineEnd) : request.substring(lineStart);
+        line.trim();
+        if (line.length() == 0) break;
+        if (line.startsWith("Host:") || line.startsWith("host:")) {
+            host = line.substring(5);
+            host.trim();
+            int colon = host.indexOf(':');
+            if (colon >= 0) host = host.substring(0, colon);
         }
+        if (lineEnd < 0) break;
+        lineStart = lineEnd + 1;
     }
 
     redirectClient8080.print("HTTP/1.1 301 Moved Permanently\r\nLocation: http://");
     redirectClient8080.print(host);
     redirectClient8080.print(path);
     redirectClient8080.print("\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-    redirectClient8080.stop();
-    redirectClient8080 = WiFiClient();
+    closeRedirectClient8080();
 }
 #endif
 // ------旧PCB印刷地址访问 :8080 → 301跳转到80端口；旧地址全部淘汰后可删除------------
@@ -2403,11 +2424,25 @@ void setupWebRC() {
 #endif
         const WebRCHoverThrottleReturn hoverReturn =
             computeWebRCHoverThrottleReturn(hoverThrottleInput(), webRCThrottleScale);
+        BarometerEstimate barometerEstimate;
+        const bool haveBarometerSample = getBarometerEstimate(barometerEstimate);
+        const bool barometerDetected = barometerAvailable();
+        const uint32_t sensorNowUs = micros();
+        const bool barometerUsable = haveBarometerSample &&
+            barometerEstimateUsable(barometerEstimate, sensorNowUs, LANDING_BARO_MAX_AGE_US);
+        const bool barometerGuardReady = barometerUsable &&
+            barometerEstimate.relativeAltitudeMeters >= LANDING_BARO_MIN_RELATIVE_ALTITUDE_M;
+        const long barometerAgeMs = haveBarometerSample ?
+            (long)((uint32_t)(sensorNowUs - barometerEstimate.sample.timestampUs) / 1000U) : -1L;
+        const char *barometerReason = !barometerDetected ? "barometer_unavailable" :
+            !haveBarometerSample ? "waiting_for_sample" :
+            !barometerUsable ? "sample_stale_or_invalid" :
+            !barometerGuardReady ? "relative_altitude_below_1m" : "ready";
         const uint64_t deviceMac = ESP.getEfuseMac();
         char deviceId[13];
         snprintf(deviceId, sizeof(deviceId), "%04X%08X",
             (unsigned)((deviceMac >> 32) & 0xFFFFU), (unsigned)(deviceMac & 0xFFFFFFFFU));
-        char json[1088];
+        char json[1536];
         const char *armReason = armBlockReason();
         const bool armReady = armed || !armReason;
         snprintf(json, sizeof(json),
@@ -2422,6 +2457,10 @@ void setupWebRC() {
             "\"control_source\":%u,\"thrust_target\":%.3f,\"hover_throttle_pct\":%.1f,"
             "\"hover_throttle_reachable\":%s,"
             "\"compass_available\":%s,"
+            "\"barometer_available\":%s,\"barometer_usable\":%s,"
+            "\"barometer_guard_ready\":%s,\"barometer_reason\":\"%s\","
+            "\"barometer_age_ms\":%ld,\"relative_altitude_m\":%.3f,"
+            "\"vertical_speed_mps\":%.3f,"
             "\"gyro_bias_ready\":%s,\"accel_calibration_stored\":%s,"
             "\"level_calibration_stored\":%s,"
             "\"arm_ready\":%s,\"arm_reason\":\"%s\"}",
@@ -2444,6 +2483,14 @@ void setupWebRC() {
             (unsigned)getCurrentControlSource(), thrustTarget, hoverReturn.percent,
             hoverReturn.reachable ? "true" : "false",
             compassAvailable() ? "true" : "false",
+            barometerDetected ? "true" : "false",
+            barometerUsable ? "true" : "false",
+            barometerGuardReady ? "true" : "false", barometerReason,
+            barometerAgeMs,
+            haveBarometerSample && isfinite(barometerEstimate.relativeAltitudeMeters) ?
+                barometerEstimate.relativeAltitudeMeters : 0.0f,
+            haveBarometerSample && isfinite(barometerEstimate.verticalSpeedMps) ?
+                barometerEstimate.verticalSpeedMps : 0.0f,
             gyroBiasReady() ? "true" : "false",
             accelCalibrationStored() ? "true" : "false",
             levelCalibrationStored() ? "true" : "false",
@@ -2877,6 +2924,7 @@ void setupWebRC() {
     // ------旧PCB印刷地址访问 :8080 → 301跳转到80端口；旧地址全部淘汰后可删除------------
 #ifndef CONFIG_IDF_TARGET_ESP32C3
     redirectServer8080 = new WiFiServer(8080); // 堆构造，不占BSS
+    redirectRequestParser8080 = new LegacyHttpRedirectParser();
     redirectServer8080->begin(); // 8080端口轻量重定向（WiFiServer），兼容旧PCB印刷地址
 #endif
     // ------旧PCB印刷地址访问 :8080 → 301跳转到80端口；旧地址全部淘汰后可删除------------

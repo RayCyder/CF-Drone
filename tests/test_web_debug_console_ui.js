@@ -114,8 +114,14 @@ assert.match(source,
   /gyro_bias_ready[\s\S]*accel_calibration_stored[\s\S]*level_calibration_stored/,
   'the preflight checklist renders all required calibration states');
 assert.match(source,
+  /id="barometer-status"[\s\S]*barometer_guard_ready[\s\S]*气压计为可选传感器，不影响基础手动解锁/,
+  'the preflight page exposes optional barometer guard health and its fallback');
+assert.match(source,
   /DESCENT_CALIBRATION_MAX_AGE_MS = 30\*24\*60\*60\*1000[\s\S]*device_id===currentDeviceId[\s\S]*firmware_build===currentFirmwareBuild[\s\S]*point\.airframe===config\.airframe[\s\S]*point\.prop===config\.prop/,
   'descent calibration recommendations reject expired or mismatched device, build, airframe, and propeller data');
+assert.match(source,
+  /applyDescentCalibrationRecommendation\(\)[\s\S]*fetchWithTimeout\('\/web_rc\/status'[\s\S]*descentPointMatch\(descentCalibrationRecommendation,config\)[\s\S]*stillStored/,
+  'descent calibration save revalidates live identity, configuration, age, and stored recommendation');
 assert.match(source,
   /PID 查看与调整：[\s\S]*p CTL_R_RATE_P[\s\S]*p CTL_R_RATE_P 0\.06/,
   'the Web debug console explains how to inspect and change PID parameters');
