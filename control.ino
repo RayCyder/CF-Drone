@@ -85,6 +85,10 @@ float hoverThrottleInput() {
 		thrustSpan * 0.95f, 0.05f, 1.0f);
 }
 
+float hoverThrustTarget() {
+	return ALTHOLD_HOVER_THRUST;
+}
+
 #define AUTO_TARGET_TIMEOUT_MS 500UL
 #define AUTO_TARGET_READY_MS 100UL
 #define AUTO_TARGET_READY_COUNT 3
@@ -159,6 +163,10 @@ static void resetAllPids() {
 	rollPID.reset();
 	pitchPID.reset();
 	yawPID.reset();
+}
+
+void resetControlPidState() {
+	resetAllPids();
 }
 
 void resetControlTargets() {

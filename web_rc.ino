@@ -7,6 +7,7 @@
 #include <esp_system.h>
 #include <ctype.h>
 #include <stdlib.h>
+#include <string.h>
 #include "web_rc_html.h"
 #include "board_config.h"
 #include "diagnostics.h"
@@ -132,7 +133,7 @@ extern const int MOTOR_REAR_LEFT, MOTOR_REAR_RIGHT, MOTOR_FRONT_RIGHT, MOTOR_FRO
 extern void descend();
 extern bool isControlledLandingActive();
 extern bool startDescentCalibration();
-extern bool stopDescentCalibration();
+extern bool abortDescentCalibration();
 extern void clearDescentCalibration();
 extern DescentCalibrationSummary getDescentCalibrationSummary();
 extern bool copyDescentCalibrationSample(uint16_t index, DescentCalibrationSample &sample);
@@ -145,6 +146,7 @@ extern bool imuOK;
 extern Quaternion attitude;
 extern bool isParameterDirty(const char *name);
 extern bool parameterPersistenceReady();
+extern bool parameterPersistencePending();
 extern bool gyroBiasReady();
 extern bool accelCalibrationStored();
 extern bool levelCalibrationStored();
@@ -421,19 +423,113 @@ static const char *flightLogStateName(FlightLogState state) {
 
 static const char *descentCalibrationStateName(DescentCalibrationState state) {
     switch (state) {
-        case DESCENT_CALIBRATION_RECORDING: return "recording";
+        case DESCENT_CALIBRATION_WAITING_TAKEOFF: return "waiting_takeoff";
+        case DESCENT_CALIBRATION_TAKEOFF_DELAY: return "takeoff_delay";
+        case DESCENT_CALIBRATION_HOVER_CANDIDATE: return "hover_candidate";
+        case DESCENT_CALIBRATION_HOVER_READY: return "hover_ready";
+        case DESCENT_CALIBRATION_DESCENT_TRACKING: return "descent_tracking";
         case DESCENT_CALIBRATION_COMPLETE: return "complete";
         case DESCENT_CALIBRATION_ABORTED: return "aborted";
         default: return "empty";
     }
 }
 
-static bool parseCalibrationValueArg(float &value) {
-    const String text = webRCServer.arg("value");
+struct DescentCalibrationBinding {
+    char airframe[97];
+    char prop[97];
+    char session[17];
+    char deviceId[13];
+    char firmwareBuild[24];
+    uint32_t startedMs;
+    bool valid;
+    bool saveRequested;
+    bool saved;
+};
+
+static DescentCalibrationBinding descentCalibrationBinding = {};
+static constexpr uint32_t DESCENT_CALIBRATION_BINDING_MAX_AGE_MS = 30UL * 24UL * 60UL * 60UL * 1000UL;
+
+static bool parseDescentBindingArg(const char *name, char *destination, size_t capacity) {
+    const String text = webRCServer.arg(name);
+    if (text.isEmpty() || text.length() >= capacity) return false;
+    for (size_t i = 0; i < text.length(); ++i) {
+        const uint8_t c = (uint8_t)text[i];
+        if (c < 0x20 || c == 0x7f || c == '"' || c == '\\' || c == '<' || c == '>') return false;
+    }
+    memcpy(destination, text.c_str(), text.length() + 1);
+    return true;
+}
+
+static bool descentCalibrationBindingMatchesRequest() {
+    const uint64_t deviceMac = ESP.getEfuseMac();
+    char currentDeviceId[13];
+    snprintf(currentDeviceId, sizeof(currentDeviceId), "%04X%08X",
+        (unsigned)((deviceMac >> 32) & 0xFFFFU), (unsigned)(deviceMac & 0xFFFFFFFFU));
+    return descentCalibrationBinding.valid &&
+        webRCServer.arg("session") == descentCalibrationBinding.session &&
+        webRCServer.arg("airframe") == descentCalibrationBinding.airframe &&
+        webRCServer.arg("prop") == descentCalibrationBinding.prop &&
+        webRCServer.arg("device_id") == descentCalibrationBinding.deviceId &&
+        webRCServer.arg("firmware_build") == descentCalibrationBinding.firmwareBuild &&
+        strcmp(currentDeviceId, descentCalibrationBinding.deviceId) == 0 &&
+        strcmp(__DATE__ " " __TIME__, descentCalibrationBinding.firmwareBuild) == 0 &&
+        (uint32_t)(millis() - descentCalibrationBinding.startedMs) <= DESCENT_CALIBRATION_BINDING_MAX_AGE_MS;
+}
+
+struct WebPidParameter {
+    const char *name;
+    const char *arg;
+    float minimum;
+    float maximum;
+};
+
+static const WebPidParameter webPidParameters[] = {
+    {"CTL_R_RATE_P", "roll_p", 0.0f, 0.20f},
+    {"CTL_R_RATE_I", "roll_i", 0.0f, 0.50f},
+    {"CTL_R_RATE_D", "roll_d", 0.0f, 0.01f},
+    {"CTL_P_RATE_P", "pitch_p", 0.0f, 0.20f},
+    {"CTL_P_RATE_I", "pitch_i", 0.0f, 0.50f},
+    {"CTL_P_RATE_D", "pitch_d", 0.0f, 0.01f},
+    {"CTL_Y_RATE_P", "yaw_p", 0.0f, 1.00f},
+    {"CTL_Y_RATE_I", "yaw_i", 0.0f, 0.20f},
+    {"CTL_Y_RATE_D", "yaw_d", 0.0f, 0.05f},
+};
+
+static bool parseWebPidValue(const char *argument, float minimum, float maximum, float &value) {
+    const String text = webRCServer.arg(argument);
     if (text.isEmpty()) return false;
     char *end = nullptr;
     value = strtof(text.c_str(), &end);
-    return end != text.c_str() && *end == '\0' && isfinite(value);
+    return end != text.c_str() && *end == '\0' && isfinite(value) &&
+        value >= minimum && value <= maximum;
+}
+
+static String webPidConfigJson(bool includeRanges) {
+    String json;
+    json.reserve(includeRanges ? 720 : 400);
+    json = "{\"ok\":1,\"editable\":";
+    json += (!armed && !motorsActive()) ? "true" : "false";
+    json += ",\"values\":{";
+    for (size_t i = 0; i < sizeof(webPidParameters) / sizeof(webPidParameters[0]); ++i) {
+        if (i) json += ',';
+        json += '\"'; json += webPidParameters[i].arg; json += "\":";
+        json += String(getParameter(webPidParameters[i].name), 6);
+    }
+    json += '}';
+    if (includeRanges) {
+        json += ",\"ranges\":{";
+        for (size_t i = 0; i < sizeof(webPidParameters) / sizeof(webPidParameters[0]); ++i) {
+            if (i) json += ',';
+            json += '\"'; json += webPidParameters[i].arg; json += "\":[";
+            json += String(webPidParameters[i].minimum, 4); json += ',';
+            json += String(webPidParameters[i].maximum, 4); json += ']';
+        }
+        json += '}';
+    }
+    json += ",\"pending\":";
+    json += parameterPersistencePending() ? "true" : "false";
+    json += '}';
+    return json;
 }
 
 static bool appendCsvFloat(char *line, size_t capacity, int &used, float value, bool first) {
@@ -1880,6 +1976,85 @@ void setupWebRC() {
     webRCServer.on("/web_rc",           HTTP_POST, handleWebRCRequest);
     webRCServer.on("/web_rc/heartbeat", HTTP_POST, handleWebRCRequest);
 
+    webRCServer.on("/pid/config", HTTP_GET, []() {
+        webRCServer.sendHeader("Cache-Control", "no-store");
+        webRCServer.send(200, "application/json", webPidConfigJson(true));
+    });
+
+    webRCServer.on("/pid/config", HTTP_POST, []() {
+        if (!requireWebRCLease()) return;
+        if (armed || motorsActive()) {
+            webRCServer.send(409, "application/json",
+                "{\"ok\":0,\"error\":\"requires_disarmed_motors_stopped\"}");
+            return;
+        }
+        if (!parameterPersistenceReady() || parameterPersistencePending()) {
+            webRCServer.send(409, "application/json",
+                "{\"ok\":0,\"error\":\"parameter_storage_busy\"}");
+            return;
+        }
+        if (isAccelCalibrationActive() || isLevelCalibrationActive() || motorTestActive ||
+            vibrationRouteBusy() || vibrationCalibrationState == VIBRATION_BOOT_WAIT ||
+            vibrationCalibrationState == VIBRATION_QUEUED || vibrationCalibrationState == VIBRATION_BASELINE ||
+            vibrationCalibrationState == VIBRATION_RUNNING || vibrationCalibrationState == VIBRATION_SETTLING ||
+            isLocalSequenceRunning() || imuCapture.state() != IMU_CAPTURE_IDLE) {
+            webRCServer.send(409, "application/json",
+                "{\"ok\":0,\"error\":\"flight_controller_busy\"}");
+            return;
+        }
+
+        constexpr size_t count = sizeof(webPidParameters) / sizeof(webPidParameters[0]);
+        float requested[count];
+        float previous[count];
+        for (size_t i = 0; i < count; ++i) {
+            if (!parseWebPidValue(webPidParameters[i].arg, webPidParameters[i].minimum,
+                webPidParameters[i].maximum, requested[i])) {
+                String response = "{\"ok\":0,\"error\":\"invalid_pid_value\",\"field\":\"";
+                response += webPidParameters[i].arg;
+                response += "\"}";
+                webRCServer.send(400, "application/json", response);
+                return;
+            }
+            previous[i] = getParameter(webPidParameters[i].name);
+        }
+
+        if (!beginPersistentWriteBatch()) {
+            webRCServer.send(409, "application/json",
+                "{\"ok\":0,\"error\":\"parameter_storage_busy\"}");
+            return;
+        }
+
+        size_t applied = 0;
+        for (; applied < count; ++applied) {
+            if (!setParameter(webPidParameters[applied].name, requested[applied])) break;
+        }
+        if (applied != count) {
+            for (size_t i = 0; i < applied; ++i)
+                setParameter(webPidParameters[i].name, previous[i]);
+            finishPersistentWriteBatch(false);
+            webRCServer.send(500, "application/json",
+                "{\"ok\":0,\"error\":\"pid_apply_failed\"}");
+            return;
+        }
+
+        bool queued = true;
+        for (size_t i = 0; i < count; ++i)
+            queued = saveParameterNow(webPidParameters[i].name) && queued;
+        if (!queued) {
+            for (size_t i = 0; i < count; ++i)
+                setParameter(webPidParameters[i].name, previous[i]);
+            finishPersistentWriteBatch(false);
+            webRCServer.send(500, "application/json",
+                "{\"ok\":0,\"error\":\"parameter_save_not_queued\"}");
+            return;
+        }
+
+        resetControlPidState();
+        finishPersistentWriteBatch(false);
+        webRCServer.sendHeader("Cache-Control", "no-store");
+        webRCServer.send(202, "application/json", webPidConfigJson(false));
+    });
+
     webRCServer.on("/route/upload", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
         if (!requireWebRCLease()) return;
@@ -2203,29 +2378,48 @@ void setupWebRC() {
         const bool routeBusy = openLoopState == OPEN_LOOP_STATE_RUNNING ||
             openLoopState == OPEN_LOOP_STATE_START_PENDING || openLoopState == OPEN_LOOP_STATE_LANDING;
         portEXIT_CRITICAL(&openLoopMux);
-        if (routeBusy || !armed || mode != STAB || isControlledLandingActive()) {
-            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires_armed_manual_stab_flight\"}");
+        char airframe[97], prop[97];
+        if (!parseDescentBindingArg("airframe", airframe, sizeof(airframe)) ||
+            !parseDescentBindingArg("prop", prop, sizeof(prop))) {
+            webRCServer.send(400, "application/json", "{\"ok\":0,\"error\":\"invalid_airframe_or_prop\"}");
+            return;
+        }
+        if (routeBusy || armed || motorsActive() || mode != STAB || isControlledLandingActive() ||
+            hasBlockingDiagnosticFault()) {
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires_disarmed_ready_stab_preflight\"}");
             return;
         }
         if (!startDescentCalibration()) {
             webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"capture_already_active_or_unavailable\"}");
             return;
         }
-        webRCServer.send(202, "application/json", "{\"ok\":1,\"state\":\"recording\"}");
+        memset(&descentCalibrationBinding, 0, sizeof(descentCalibrationBinding));
+        strncpy(descentCalibrationBinding.airframe, airframe, sizeof(descentCalibrationBinding.airframe) - 1);
+        strncpy(descentCalibrationBinding.prop, prop, sizeof(descentCalibrationBinding.prop) - 1);
+        snprintf(descentCalibrationBinding.session, sizeof(descentCalibrationBinding.session), "%08lX%08lX",
+            (unsigned long)esp_random(), (unsigned long)esp_random());
+        const uint64_t deviceMac = ESP.getEfuseMac();
+        snprintf(descentCalibrationBinding.deviceId, sizeof(descentCalibrationBinding.deviceId), "%04X%08X",
+            (unsigned)((deviceMac >> 32) & 0xFFFFU), (unsigned)(deviceMac & 0xFFFFFFFFU));
+        snprintf(descentCalibrationBinding.firmwareBuild, sizeof(descentCalibrationBinding.firmwareBuild),
+            "%s %s", __DATE__, __TIME__);
+        descentCalibrationBinding.startedMs = millis();
+        descentCalibrationBinding.valid = true;
+        char response[96];
+        snprintf(response, sizeof(response),
+            "{\"ok\":1,\"state\":\"waiting_takeoff\",\"session\":\"%s\"}",
+            descentCalibrationBinding.session);
+        webRCServer.send(202, "application/json", response);
     });
-    webRCServer.on("/descent-calibration/stop", HTTP_POST, []() {
+    webRCServer.on("/descent-calibration/abort", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
-        if (!stopDescentCalibration()) {
+        if (!requireWebRCLease()) return;
+        if (!abortDescentCalibration()) {
             webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"capture_not_recording\"}");
             return;
         }
-        const DescentCalibrationSummary summary = getDescentCalibrationSummary();
-        char response[192];
-        snprintf(response, sizeof(response),
-            "{\"ok\":1,\"state\":\"%s\",\"samples\":%u,\"duration_ms\":%lu}",
-            descentCalibrationStateName(summary.state), (unsigned)summary.sampleCount,
-            (unsigned long)summary.durationMs);
-        webRCServer.send(200, "application/json", response);
+        descentCalibrationBinding.valid = false;
+        webRCServer.send(200, "application/json", "{\"ok\":1,\"state\":\"aborted\"}");
     });
     webRCServer.on("/descent-calibration/clear", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
@@ -2235,51 +2429,73 @@ void setupWebRC() {
             return;
         }
         clearDescentCalibration();
+        memset(&descentCalibrationBinding, 0, sizeof(descentCalibrationBinding));
         webRCServer.send(200, "application/json", "{\"ok\":1,\"state\":\"empty\"}");
     });
     webRCServer.on("/descent-calibration/status", HTTP_GET, []() {
         const DescentCalibrationSummary summary = getDescentCalibrationSummary();
-        char response[320];
+        const bool bindingFresh = descentCalibrationBinding.valid &&
+            (uint32_t)(millis() - descentCalibrationBinding.startedMs) <= DESCENT_CALIBRATION_BINDING_MAX_AGE_MS;
+        char response[896];
         snprintf(response, sizeof(response),
-            "{\"state\":\"%s\",\"reason\":\"%s\",\"samples\":%u,\"duration_ms\":%lu,"
-            "\"usable\":%s,\"median_thrust\":%.3f,\"mean_battery_v\":%.3f,\"max_tilt_deg\":%.2f,"
-            "\"thrust_spread\":%.3f,\"faults\":%u,\"armed\":%s,\"mode\":%d}",
+            "{\"state\":\"%s\",\"reason\":\"%s\",\"samples\":%u,"
+            "\"takeoff_elapsed_ms\":%lu,\"stable_progress_ms\":%lu,\"candidate_ready\":%s,"
+            "\"hover_mean_thrust\":%.4f,\"candidate_thrust\":%.4f,\"thrust_delta\":%.4f,"
+            "\"candidate_battery_v\":%.3f,\"max_tilt_deg\":%.2f,\"thrust_spread\":%.4f,"
+            "\"armed\":%s,\"mode\":%d,\"binding_valid\":%s,\"save_pending\":%s,\"binding_saved\":%s,"
+            "\"session\":\"%s\",\"device_id\":\"%s\",\"firmware_build\":\"%s\","
+            "\"airframe\":\"%s\",\"prop\":\"%s\"}",
             descentCalibrationStateName(summary.state), summary.reason ? summary.reason : "unknown",
-            (unsigned)summary.sampleCount, (unsigned long)summary.durationMs,
-            summary.usable ? "true" : "false", summary.medianThrust, summary.meanBatteryV,
-            summary.maxTiltDeg, summary.thrustP90MinusP10, (unsigned)summary.faults,
-            armed ? "true" : "false", mode);
+            (unsigned)summary.sampleCount, (unsigned long)summary.takeoffElapsedMs,
+            (unsigned long)summary.stableProgressMs, summary.candidateReady ? "true" : "false",
+            summary.hoverMeanThrust, summary.candidateThrust, summary.thrustDelta,
+            summary.candidateBatteryV, summary.maxTiltDeg, summary.thrustSpread,
+            armed ? "true" : "false", mode, bindingFresh ? "true" : "false",
+            descentCalibrationBinding.saveRequested && !descentCalibrationBinding.saved ? "true" : "false",
+            descentCalibrationBinding.saved ? "true" : "false",
+            bindingFresh ? descentCalibrationBinding.session : "",
+            bindingFresh ? descentCalibrationBinding.deviceId : "",
+            bindingFresh ? descentCalibrationBinding.firmwareBuild : "",
+            bindingFresh ? descentCalibrationBinding.airframe : "",
+            bindingFresh ? descentCalibrationBinding.prop : "");
         webRCServer.send(200, "application/json", response);
     });
     webRCServer.on("/descent-calibration/save", HTTP_POST, []() {
         if (rejectFlightApiInConfigPortal()) return;
         if (!requireWebRCLease()) return;
-        float value;
+        const DescentCalibrationSummary summary = getDescentCalibrationSummary();
         if (armed || motorsActive() || !parameterPersistenceReady() ||
-            !parseCalibrationValueArg(value) || !isfinite(value) || value < 0.05f || value > 0.5f) {
+            summary.state != DESCENT_CALIBRATION_COMPLETE || !summary.candidateReady ||
+            descentCalibrationBinding.saveRequested || !descentCalibrationBindingMatchesRequest() ||
+            !isfinite(summary.candidateThrust) || summary.candidateThrust < 0.05f ||
+            summary.candidateThrust > hoverThrustTarget()) {
             webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"requires_valid_calibration_and_disarmed_persistent_storage\"}");
             return;
         }
-        if (!setParameter("SF_DESCEND_THRUST", value) || !saveParameterNow("SF_DESCEND_THRUST")) {
+        if (!setParameter("SF_DESCEND_THRUST", summary.candidateThrust) ||
+            !saveParameterNow("SF_DESCEND_THRUST")) {
             webRCServer.send(500, "application/json", "{\"ok\":0,\"error\":\"parameter_save_not_queued\"}");
             return;
         }
+        descentCalibrationBinding.saveRequested = true;
         char response[96];
         snprintf(response, sizeof(response), "{\"ok\":1,\"pending\":%s,\"value\":%.3f}",
             isParameterDirty("SF_DESCEND_THRUST") ? "true" : "false", getParameter("SF_DESCEND_THRUST"));
         webRCServer.send(202, "application/json", response);
     });
     webRCServer.on("/descent-calibration/save-status", HTTP_GET, []() {
-        float requested;
-        if (!parseCalibrationValueArg(requested) || requested < 0.05f || requested > 0.5f) {
-            webRCServer.send(400, "application/json", "{\"ok\":0,\"error\":\"invalid_value\"}");
+        const DescentCalibrationSummary summary = getDescentCalibrationSummary();
+        if (!descentCalibrationBindingMatchesRequest() || !summary.candidateReady) {
+            webRCServer.send(400, "application/json", "{\"ok\":0,\"error\":\"invalid_session_or_binding\"}");
             return;
         }
         const float current = getParameter("SF_DESCEND_THRUST");
         const bool dirty = isParameterDirty("SF_DESCEND_THRUST");
+        const bool saved = !dirty && fabsf(current - summary.candidateThrust) < 0.0005f;
+        if (saved) descentCalibrationBinding.saved = true;
         char response[128];
         snprintf(response, sizeof(response), "{\"ok\":1,\"saved\":%s,\"dirty\":%s,\"value\":%.3f}",
-            (!dirty && fabsf(current - requested) < 0.0005f) ? "true" : "false",
+            saved ? "true" : "false",
             dirty ? "true" : "false", current);
         webRCServer.send(200, "application/json", response);
     });
@@ -2300,16 +2516,18 @@ void setupWebRC() {
         client.print("Cache-Control: no-store\r\nConnection: close\r\n");
         client.printf("X-Calibration-Rows: %u\r\n", (unsigned)summary.sampleCount);
         client.print("Content-Disposition: attachment; filename=\"cf-drone-descent-calibration.csv\"\r\n\r\n");
-        client.print("elapsed_ms,thrust_target,battery_v,roll_deg,pitch_deg,rc_throttle,faults,flight_mode,control_source\n");
-        char line[160];
+        client.print("timestamp_ms,thrust_target,battery_v,roll_deg,pitch_deg,rc_roll,rc_pitch,rc_yaw,rc_throttle,faults,flight_mode,control_source,landing_guard\n");
+        char line[220];
         for (uint16_t i = 0; i < summary.sampleCount && client.connected(); ++i) {
             DescentCalibrationSample sample;
             if (!copyDescentCalibrationSample(i, sample)) break;
-            const int length = snprintf(line, sizeof(line), "%lu,%.2f,%.3f,%.2f,%.2f,%.4f,%u,%u,%u\n",
-                (unsigned long)sample.elapsedMs, sample.thrustCenti / 100.0f, sample.batteryMv / 1000.0f,
+            const int length = snprintf(line, sizeof(line), "%lu,%.4f,%.3f,%.2f,%.2f,%.4f,%.4f,%.4f,%.4f,%u,%u,%u,%u\n",
+                (unsigned long)sample.elapsedMs, sample.thrustTenThousand / 10000.0f, sample.batteryMv / 1000.0f,
                 sample.rollCentiDeg / 100.0f, sample.pitchCentiDeg / 100.0f,
-                sample.rcThrottleCenti / 10000.0f, (unsigned)sample.faults,
-                (unsigned)sample.mode, (unsigned)sample.controlSource);
+                sample.rcRollTenThousand / 10000.0f, sample.rcPitchTenThousand / 10000.0f,
+                sample.rcYawTenThousand / 10000.0f, sample.rcThrottleTenThousand / 10000.0f,
+                (unsigned)sample.faults, (unsigned)sample.mode, (unsigned)sample.controlSource,
+                (unsigned)sample.landingGuardActive);
             if (length <= 0 || length >= (int)sizeof(line) || client.write((const uint8_t *)line, length) != (size_t)length) break;
             if ((i & 0x0f) == 0x0f) vTaskDelay(pdMS_TO_TICKS(1));
         }

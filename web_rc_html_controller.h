@@ -120,6 +120,8 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
 /*======== 按钮区 ========*/
 .buttons-container{flex:.55;display:flex;flex-direction:column;gap:10px;padding:12px;background:rgba(0,0,0,.4);border-radius:20px;border:2px solid rgba(150,150,150,.3);box-shadow:inset 0 0 20px rgba(0,0,0,.5)}
 #descent-calibration-button{border-color:rgba(255,160,60,.65);background:rgba(255,140,0,.16);color:#ffd2a3}
+.descent-recording-banner{display:none;align-items:center;justify-content:center;gap:10px;padding:8px 12px;border:1px solid rgba(255,166,68,.7);border-radius:10px;background:rgba(137,66,0,.92);color:#fff3df;font-size:.8rem;font-weight:bold;box-shadow:0 5px 18px rgba(0,0,0,.35)}
+.descent-recording-banner.active{display:flex}.descent-recording-banner button{border:1px solid rgba(255,255,255,.55);border-radius:7px;background:#fff;color:#7d3600;padding:6px 11px;font-weight:bold;touch-action:manipulation;cursor:pointer}
 #console-open-button{border-color:rgba(110,190,255,.65);background:rgba(30,120,200,.16);color:#c4e6ff}
 .route-page{position:fixed;inset:0;z-index:1001;display:none;background:#252525;overflow-y:auto;padding:clamp(14px,4vw,28px);touch-action:pan-y}
 .descent-calibration-page{position:fixed;inset:0;z-index:1002;display:none;background:#252525;overflow-y:auto;padding:clamp(14px,4vw,28px);touch-action:pan-y}
@@ -127,13 +129,20 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
 .descent-calibration-shell{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
 .calibration-card{border:1px solid rgba(255,255,255,.14);border-radius:12px;padding:14px;background:rgba(0,0,0,.25)}
 .calibration-card p,.calibration-card small{color:#c4cbd3;font-size:.85rem;line-height:1.5}
-.calibration-actions{display:flex;gap:8px;flex-wrap:wrap}
+.calibration-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .calibration-actions button{border:0;border-radius:8px;padding:10px 14px;background:#444;color:#fff;font-size:.9rem;touch-action:manipulation}
-.calibration-actions button.primary{background:#a85b00}.calibration-actions button:disabled{opacity:.45}
-.calibration-fields{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.calibration-fields input{max-width:130px;background:#17191c;color:#fff;border:1px solid #777;border-radius:7px;padding:9px}
-.calibration-fields button{border:0;border-radius:7px;padding:9px 12px;background:#444;color:#fff;font-size:.88rem;touch-action:manipulation}
-.calibration-points{display:grid;gap:6px;font-size:.82rem;color:#d3d9e0}
+.calibration-actions button.primary{background:#a85b00}.calibration-actions button:disabled{opacity:.45;cursor:not-allowed}
+.calibration-step-heading{display:flex;align-items:center;gap:9px;margin-bottom:10px}.calibration-step-heading strong{font-size:.95rem}.calibration-step-number{display:grid;place-items:center;flex:0 0 26px;height:26px;border-radius:50%;background:#a85b00;color:#fff;font-size:.8rem;font-weight:bold}
+.calibration-form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:start}
+.calibration-field{display:flex;flex-direction:column;gap:5px;min-width:0;color:#e6edf3;font-size:.78rem;touch-action:pan-y}
+.calibration-field>span{font-weight:bold}.calibration-field small{font-size:.68rem;color:#94a3af;line-height:1.35}
+.calibration-field input{width:100%;min-height:44px;background:#17191c;color:#fff;border:1px solid #697781;border-radius:8px;padding:9px 10px;font-size:1rem;touch-action:auto;user-select:text;-webkit-user-select:text}
+.calibration-field input:focus{outline:2px solid rgba(255,166,68,.55);border-color:#f0a24e}.calibration-field input:disabled{opacity:.55;background:#292929}
+.calibration-form-actions{display:flex;align-items:flex-end;gap:8px;min-height:44px}.calibration-form-actions button{width:100%;min-height:44px;border:0;border-radius:8px;padding:9px 12px;background:#555;color:#fff;font-size:.88rem;touch-action:manipulation}.calibration-form-actions button.primary{background:#a85b00}.calibration-form-actions button:disabled{opacity:.45;cursor:not-allowed}
+.calibration-actions button:focus-visible,.calibration-form-actions button:focus-visible,.calibration-limit summary:focus-visible{outline:2px solid #ffc477;outline-offset:2px}
+.calibration-inline-status{margin-top:10px;padding:9px 10px;border-radius:8px;background:rgba(40,92,133,.18);border:1px solid rgba(100,180,255,.2);color:#acd4f5;font-size:.8rem;line-height:1.45}
+.calibration-points{display:grid;gap:7px;font-size:.78rem;color:#d3d9e0;margin:9px 0}.calibration-points>div{padding:8px 10px;border:1px solid rgba(255,255,255,.1);border-radius:8px;background:rgba(0,0,0,.2);line-height:1.4}
+.calibration-limit{border:1px solid rgba(255,255,255,.13);border-radius:10px;padding:11px 12px;background:rgba(0,0,0,.18)}.calibration-limit summary{cursor:pointer;color:#d4dbe2;font-weight:bold;touch-action:manipulation}.calibration-limit p{margin-top:8px}
 .route-shell{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
 .route-intro{padding:12px 14px;border:1px solid rgba(255,180,70,.35);border-radius:10px;background:rgba(120,70,10,.16);color:#ffe0b0;font-size:.88rem;line-height:1.5}
 .route-step{display:flex;flex-direction:column;gap:10px;padding:14px;border:1px solid rgba(255,255,255,.13);border-radius:12px;background:rgba(0,0,0,.2)}
@@ -180,6 +189,27 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
 .console-status.ok{color:#62d895}.console-status.error{color:#ff8a8a}.console-status.busy{color:#ffd166}
 .console-command-row{display:flex;gap:6px;touch-action:pan-y}
 
+/*======== 内环 PID 调参 ========*/
+.pid-window{position:fixed;inset:0;z-index:1020;display:none;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,.76);touch-action:pan-y}
+.pid-window[aria-hidden="false"]{display:flex}
+.pid-dialog{width:min(760px,100%);max-height:92dvh;overflow:auto;padding:14px;background:#17191c;border:1px solid rgba(255,255,255,.2);border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,.65);touch-action:pan-y}
+.pid-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+.pid-header h2{font-size:1.05rem}.pid-header button,.pid-actions button{border:1px solid #66717a;border-radius:7px;background:#333;color:#fff;padding:7px 12px;cursor:pointer;touch-action:manipulation}
+.pid-intro{color:#c8d2db;font-size:.78rem;line-height:1.45;margin-bottom:9px}
+.pid-help{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:10px}
+.pid-help div{padding:8px;border:1px solid rgba(100,180,255,.25);border-radius:8px;background:rgba(30,90,140,.12);font-size:.7rem;line-height:1.35;color:#c9dced}
+.pid-help strong{color:#fff}.pid-sync{display:flex;align-items:center;gap:7px;margin:7px 0 9px;font-size:.75rem;color:#d7e5ef;touch-action:manipulation}
+.pid-sync input{width:17px;height:17px;touch-action:manipulation}
+.pid-grid{display:grid;grid-template-columns:minmax(74px,.8fr) repeat(3,minmax(92px,1fr));gap:7px;align-items:end}
+.pid-grid-head{font-size:.7rem;color:#9fb0bd;text-align:center;padding-bottom:2px}
+.pid-axis{font-size:.78rem;font-weight:bold;color:#e9f6ff;align-self:center}.pid-axis small{display:block;font-size:.62rem;font-weight:normal;color:#92a5b4;margin-top:2px}
+.pid-field{display:flex;flex-direction:column;gap:3px;font-size:.61rem;color:#91a6b7;touch-action:pan-y}
+.pid-field input{width:100%;border:1px solid #60717e;border-radius:7px;background:#101418;color:#fff;padding:8px;font: .78rem ui-monospace,SFMono-Regular,Consolas,monospace;touch-action:auto;user-select:text;-webkit-user-select:text}
+.pid-field input:focus{outline:2px solid rgba(77,166,255,.55);border-color:#65aef0}.pid-field input.invalid{border-color:#ff6868;background:#351919}
+.pid-status{min-height:1.3em;margin:10px 0 8px;font-size:.72rem;color:#aebdca}.pid-status.ok{color:#62d895}.pid-status.error{color:#ff8a8a}.pid-status.busy{color:#ffd166}
+.pid-actions{display:flex;justify-content:flex-end;gap:7px;flex-wrap:wrap}.pid-actions button.primary{background:#176a9e;border-color:#65b9ed}.pid-actions button:disabled{opacity:.45;cursor:not-allowed}
+.pid-footnote{margin-top:8px;color:#8fa0ad;font-size:.64rem;line-height:1.4}
+
 /*======== 动画 ========*/
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(67,97,238,.7)}70%{box-shadow:0 0 0 12px rgba(67,97,238,0)}100%{box-shadow:0 0 0 0 rgba(67,97,238,0)}}
 .joystick.active{animation:pulse 1.5s infinite}
@@ -208,6 +238,12 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   .status-bar{gap:5px;flex-wrap:wrap;justify-content:center}
   .status-item{font-size:clamp(0.6rem,2.5vw,0.7rem);padding:2px 5px}
 }
+@media (max-width:420px){
+  .pid-window{padding:7px}.pid-dialog{padding:10px}.pid-help{gap:4px}.pid-help div{padding:5px;font-size:.62rem}
+  .pid-grid{grid-template-columns:48px repeat(3,minmax(0,1fr));gap:4px}.pid-axis{font-size:.68rem}.pid-axis small{font-size:.55rem}
+  .pid-field input{padding:7px 4px;font-size:.68rem}.pid-field span{font-size:.52rem}.pid-actions{justify-content:stretch}.pid-actions button{flex:1;padding:7px 4px}
+  .calibration-form-grid{grid-template-columns:1fr}.calibration-actions button{flex:1}.calibration-form-actions{width:100%}
+}
 
 /*======== 小屏横屏自适应（高度≤480px）========*/
 @media (max-height:480px) and (orientation:landscape){
@@ -217,6 +253,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   .header h1{display:none}
   .header-tools{gap:4px;flex-wrap:nowrap;margin:0 0 3px}
   .header-tools .self-check-button{padding:3px 6px;font-size:.62rem}
+  .descent-recording-banner{padding:4px 8px;font-size:.65rem}.descent-recording-banner button{padding:4px 8px;font-size:.65rem}
   .status-bar{margin-top:0;gap:3px;flex-wrap:nowrap;overflow:hidden}
   .status-item{gap:2px;font-size:0.55rem;padding:1px 3px}
   .content{min-height:0}
@@ -238,6 +275,11 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   .console-command-row{grid-column:2;grid-row:2;min-width:0}
   .console-dialog-header h2{font-size:.85rem}
   .console-dialog-header button{padding:4px 9px}
+  .pid-window{padding:5px}.pid-dialog{width:min(980px,99vw);max-height:97dvh;padding:8px}
+  .pid-header{margin-bottom:5px}.pid-header h2{font-size:.88rem}.pid-header button{padding:4px 9px}
+  .pid-intro{font-size:.65rem;margin-bottom:5px}.pid-help{grid-template-columns:repeat(3,1fr);gap:4px;margin-bottom:5px}.pid-help div{padding:4px;font-size:.58rem}
+  .pid-sync{margin:4px 0;font-size:.64rem}.pid-grid{grid-template-columns:70px repeat(3,minmax(80px,1fr));gap:4px}.pid-field input{padding:5px;font-size:.7rem}
+  .pid-status{margin:5px 0;font-size:.64rem}.pid-actions button{padding:4px 8px;font-size:.68rem}.pid-footnote{margin-top:4px;font-size:.56rem}
 }
 /*======== 版权页脚 ========*/
 .footer{text-align:center;font-size:0.5rem;color:rgba(255,255,255,.25);padding:0;flex-shrink:0;line-height:0.8;}
@@ -254,6 +296,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <button id="self-check-button" class="self-check-button" onclick="openSelfCheck()">自检状态</button>
       <button id="route-page-button" class="self-check-button" onclick="openRoutePage()">开环序列</button>
       <button id="descent-calibration-button" class="self-check-button" onclick="handleDescentCalibrationEntry()">迫降标定</button>
+      <button id="pid-button" class="self-check-button" onclick="openPidPanel()">PID</button>
       <button id="console-open-button" class="self-check-button" onclick="toggleConsole()">调试</button>
       <button id="wifi-settings-button" class="self-check-button" onclick="openWifiSettings()">Wi-Fi 模式</button>
     </nav>
@@ -266,6 +309,10 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <div class="status-item"><span>遥控延迟</span><span id="latency">-</span></div>
       <div class="status-item"><span>丢包率</span><span id="packet-loss">0%</span></div>
     </div>
+  </div>
+  <div id="descent-recording-banner" class="descent-recording-banner" role="status" aria-live="assertive" aria-hidden="true">
+    <span id="descent-recording-banner-text">迫降标定已开启，等待起飞。</span>
+    <button type="button" onclick="abortDescentCalibrationCapture()">取消标定</button>
   </div>
 
   <div class="content">
@@ -302,7 +349,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <div class="console-tools-row"><strong>调试工具</strong><button class="primary" onclick="openVibrationCalibrationFromConsole()">电机扰动检测</button><button class="primary" onclick="startAccelCalibrationFromConsole()">六面加速度计校准</button><button class="primary" onclick="openLevelCalibrationFromConsole()">机身水平校准</button></div>
       <div class="console-tools-row"><strong>常用命令</strong><button onclick="runConsoleCommand('diag brief')">快速预检</button><button onclick="runConsoleCommand('diag')">完整诊断</button><button onclick="runConsoleCommand('imu')">IMU</button><button onclick="runConsoleCommand('ps')">姿态</button><button onclick="runConsoleCommand('p CTL_TRIM_ROLL')">横滚配平值</button><button onclick="runConsoleCommand('p CTL_TRIM_PITCH')">俯仰配平值</button><button onclick="runConsoleCommand('rc')">遥控输入</button><button onclick="runConsoleCommand('mot')">电机输出</button><button onclick="runConsoleCommand('wifi')">Wi-Fi</button><button onclick="runConsoleCommand('time')">循环时间</button><button onclick="runConsoleCommand('sys')">系统任务</button><button onclick="runConsoleCommand('log status')">日志状态</button><button onclick="runConsoleCommand('p')">参数列表</button><button onclick="runConsoleCommand('help')">命令帮助</button><button onclick="restartFromConsole()">重启</button></div>
       <div class="console-tools-note">磁力计为可选传感器；未安装磁力计仍可进行六面加速度计校准和机身水平校准，仅磁航向与 magcal 不可用。机身静置水平但姿态不为 0°：使用“机身水平校准”修正 IMU 安装角。只有实际飞行松杆后持续漂移时，才调整 CTL_TRIM_ROLL / CTL_TRIM_PITCH。</div>
-      <div class="console-tools-note"><strong>PID 查看与调整：</strong>点击“参数列表”查看当前值，或输入 <code>p CTL_R_RATE_P</code> 查询单项；输入 <code>p CTL_R_RATE_P 0.06</code> 修改。仅允许在上锁且电机停止时执行，修改后自动进入参数保存队列。</div>
+      <div class="console-tools-note"><strong>PID 调整：</strong>使用顶部“PID”按钮集中修改 Roll、Pitch、Yaw 的内环 P/I/D；控制台“参数列表”仍可用于核对全部参数。</div>
       <div id="console-status" class="console-status" role="status">打开后将主动确认飞控处于上锁状态。</div>
     </div>
     <div id="console-output" class="console-output"></div>
@@ -313,6 +360,36 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <button onclick="sendConsoleCmd()" style="background:#1a73e8;border:none;border-radius:6px;color:#fff;padding:4px 10px;font-size:0.7rem;cursor:pointer;touch-action:auto">发送</button>
     </div>
       </div>
+    </div>
+  </section>
+  <section id="pid-window" class="pid-window" role="dialog" aria-modal="true" aria-labelledby="pid-title" aria-hidden="true">
+    <div class="pid-dialog">
+      <div class="pid-header"><h2 id="pid-title">角速度内环 PID</h2><button type="button" onclick="closePidPanel()">关闭</button></div>
+      <p class="pid-intro">调整 Roll、Pitch、Yaw 三个轴的角速度响应。保存只允许在飞控上锁且电机停止时进行；外环姿态参数和积分限幅 WU 保持固件当前值。</p>
+      <div class="pid-help" aria-label="PID 参数简要说明">
+        <div><strong>P 比例</strong><br>决定跟随力度。偏低响应软，偏高容易快速振荡。</div>
+        <div><strong>I 积分</strong><br>消除持续偏差。偏高可能慢速摆动并积累过量修正。</div>
+        <div><strong>D 微分</strong><br>抑制快速变化。偏高会放大噪声，并可能使电机发热。</div>
+      </div>
+      <label class="pid-sync"><input id="pid-sync-roll-pitch" type="checkbox" checked> Roll / Pitch 同步修改相同类型参数</label>
+      <div class="pid-grid" id="pid-grid">
+        <div></div><div class="pid-grid-head">P 比例</div><div class="pid-grid-head">I 积分</div><div class="pid-grid-head">D 微分</div>
+        <div class="pid-axis">Roll<small>横滚</small></div>
+        <label class="pid-field"><input id="pid-roll-p" type="number" inputmode="decimal" step="0.001"><span id="pid-roll-p-range"></span></label>
+        <label class="pid-field"><input id="pid-roll-i" type="number" inputmode="decimal" step="0.001"><span id="pid-roll-i-range"></span></label>
+        <label class="pid-field"><input id="pid-roll-d" type="number" inputmode="decimal" step="0.0001"><span id="pid-roll-d-range"></span></label>
+        <div class="pid-axis">Pitch<small>俯仰</small></div>
+        <label class="pid-field"><input id="pid-pitch-p" type="number" inputmode="decimal" step="0.001"><span id="pid-pitch-p-range"></span></label>
+        <label class="pid-field"><input id="pid-pitch-i" type="number" inputmode="decimal" step="0.001"><span id="pid-pitch-i-range"></span></label>
+        <label class="pid-field"><input id="pid-pitch-d" type="number" inputmode="decimal" step="0.0001"><span id="pid-pitch-d-range"></span></label>
+        <div class="pid-axis">Yaw<small>偏航</small></div>
+        <label class="pid-field"><input id="pid-yaw-p" type="number" inputmode="decimal" step="0.001"><span id="pid-yaw-p-range"></span></label>
+        <label class="pid-field"><input id="pid-yaw-i" type="number" inputmode="decimal" step="0.001"><span id="pid-yaw-i-range"></span></label>
+        <label class="pid-field"><input id="pid-yaw-d" type="number" inputmode="decimal" step="0.0001"><span id="pid-yaw-d-range"></span></label>
+      </div>
+      <div id="pid-status" class="pid-status" role="status">打开后读取飞控当前参数。</div>
+      <div class="pid-actions"><button type="button" onclick="loadPidConfig()">重新读取</button><button type="button" onclick="restorePidEdits()">撤销编辑</button><button id="pid-save-button" class="primary" type="button" onclick="savePidConfig()">保存参数</button></div>
+      <p class="pid-footnote">每次只做小幅调整，并在低高度、空旷环境逐轴验证。快速高频抖动通常先降低 P 或 D；持续缓慢偏差再少量调整 I。</p>
     </div>
   </section>
   <section id="diagnostic-page" class="diagnostic-page" aria-hidden="true">
@@ -385,12 +462,10 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   <section id="descent-calibration-page" class="descent-calibration-page" aria-hidden="true">
     <div class="descent-calibration-shell">
       <div class="diagnostic-top"><h2>迫降推力标定</h2><div class="diagnostic-actions"><button onclick="closeDescentCalibrationPage()">返回遥控器</button></div></div>
-      <div class="calibration-card"><strong>飞手手动下降，飞控只记录</strong><p>仅在自稳模式且已解锁时开始记录。开始后请关闭此页回到摇杆操作；可从顶部“停止标定”结束采集。单次最多 30 秒，记录每秒约 20 个样本。该功能不会自动改变飞行控制。</p><small>完成后输入这段记录对应的实测下降高度差，页面用高度差 ÷ 记录时长计算平均下降速度。IMU 不会提供可靠的垂直速度或离地高度。</small></div>
-      <div id="descent-calibration-status" class="route-status" role="status">正在读取标定状态…</div>
-      <div class="calibration-actions"><button id="descent-calibration-start" class="primary" onclick="startDescentCalibrationCapture()">开始记录当前手动下降</button><button id="descent-calibration-stop" onclick="stopDescentCalibrationCapture()">停止记录</button><button id="descent-calibration-download" onclick="downloadDescentCalibrationCsv()">下载原始记录</button></div>
-      <div class="calibration-card"><strong>记录测量结果</strong><div class="calibration-fields"><label for="descent-airframe-id">机体标识</label><input id="descent-airframe-id" maxlength="32" placeholder="例如 frame-a" oninput="invalidateDescentCalibrationRecommendation()"><label for="descent-prop-id">桨叶配置</label><input id="descent-prop-id" maxlength="32" placeholder="例如 55mm-2blade" oninput="invalidateDescentCalibrationRecommendation()"><label for="descent-drop-distance">实测高度差（米）</label><input id="descent-drop-distance" type="number" min="0.1" max="100" step="0.1" placeholder="例如 2.0"><button onclick="addDescentCalibrationPoint()">添加实测点</button></div><p id="descent-calibration-measurement" class="route-status">需要一段有效且稳定的标定记录。标定点仅用于相同设备、固件、机体和桨叶配置，并在 30 天后过期。</p></div>
-      <div class="calibration-card"><strong>实测点与推力建议</strong><div id="descent-calibration-points" class="calibration-points">此浏览器还没有保存实测点。</div><div class="calibration-fields"><label for="descent-target-speed">期望最大下降速度（米/秒）</label><input id="descent-target-speed" type="number" min="0.05" max="5" step="0.05" placeholder="输入目标"><button onclick="recommendDescentCalibrationPoint()">查找实测点</button></div><p id="descent-calibration-recommendation" class="route-status">只会推荐速度不超过目标值的实测点；不会插值或外推。</p><div class="calibration-actions"><button id="descent-calibration-apply" class="primary" onclick="applyDescentCalibrationRecommendation()" disabled>确认保存下降推力</button><button onclick="clearDescentCalibrationPoints()">清除此浏览器的实测点</button></div></div>
-      <div class="calibration-card"><strong>能力边界</strong><p>这是经验推力标定，不是自动着陆。迫降仍以定推力下降为主体；可选气压计只在样本有效且下降过快时有限增加推力，没有高度闭环、近地测距或触地反馈，不能保证下降速度或避免撞地。飞手必须保持接管能力，并在触地后明确上锁。电池、载荷、螺旋桨、风和地面效应变化都会影响结果。</p></div>
+      <section class="calibration-card" aria-labelledby="descent-step-start"><div class="calibration-step-heading"><span class="calibration-step-number">1</span><strong id="descent-step-start">起飞前开启</strong></div><p>保持上锁、电机停止并处于自稳模式。填写配置后开启标定；飞控只观察数据，不会解锁、起飞或改变推力。</p><div class="calibration-form-grid"><label class="calibration-field" for="descent-airframe-id"><span>机体标识</span><input id="descent-airframe-id" maxlength="32" autocomplete="off" placeholder="例如 frame-a" oninput="handleDescentCalibrationConfigInput()"><small>用于区分机架、载荷和电池配置。</small></label><label class="calibration-field" for="descent-prop-id"><span>桨叶配置</span><input id="descent-prop-id" maxlength="32" autocomplete="off" placeholder="例如 55mm-2blade" oninput="handleDescentCalibrationConfigInput()"><small>填写尺寸、叶数或型号；配置会绑定到本次记录。</small></label></div><div class="calibration-actions"><button id="descent-calibration-start" class="primary" onclick="startDescentCalibrationCapture()">起飞前开启标定</button><button id="descent-calibration-abort" onclick="abortDescentCalibrationCapture()" disabled>取消标定</button></div></section>
+      <section class="calibration-card" aria-labelledby="descent-step-flight"><div class="calibration-step-heading"><span class="calibration-step-number">2</span><strong id="descent-step-flight">自动寻找稳定标记与下降候选</strong></div><p>起飞代理信号成立 3 秒后，飞控才检查连续 5 秒稳定状态。标记完成后蓝灯快闪 5 次、熄灭 1 秒并循环；看到提示后缓慢降低油门，进入下降候选段后灯态恢复正常。</p><div id="descent-calibration-status" class="calibration-inline-status" role="status" aria-live="polite">正在读取标定状态…</div><div id="descent-calibration-measurement" class="calibration-inline-status" role="status">尚无候选结果。</div></section>
+      <section class="calibration-card" aria-labelledby="descent-step-save"><div class="calibration-step-heading"><span class="calibration-step-number">3</span><strong id="descent-step-save">落地上锁后确认保存</strong></div><p>系统保留最后一个连续稳定 3 秒的下降候选。请确认稳定标记时确实悬停、候选段确实下降，再保存到迫降推力参数。</p><div id="descent-calibration-recommendation" class="calibration-inline-status" role="status" aria-live="polite">落地上锁且候选通过质量检查后可保存。</div><div class="calibration-actions"><button id="descent-calibration-apply" class="primary" onclick="applyDescentCalibrationCandidate()" disabled>确认保存候选推力</button><button id="descent-calibration-download" onclick="downloadDescentCalibrationCsv()" disabled>下载记录</button><button id="descent-calibration-clear" onclick="clearDescentCalibrationCapture()">清除本次记录</button></div></section>
+      <details class="calibration-limit"><summary>能力边界与飞行注意事项</summary><p>蓝灯只表示姿态、推力和杆量形成了稳定候选，不能证明真实悬停；匀速爬升也可能满足条件。此流程不使用高度或下降速度，得到的是飞手确认的经验推力。迫降仍无触地检测，电池、载荷、桨叶、风和地面效应变化后需重新验证。</p></details>
     </div>
   </section>
   <section id="vibration-calibration-page" class="vibration-calibration-page" aria-hidden="true">
@@ -462,7 +537,7 @@ let armedStatusKnown = false;
 const flightRequestPaths = new Set([
   '/web_rc', '/web_rc/heartbeat', '/web_rc/lease', '/web_rc/status',
   '/route/takeover', '/route/status',
-  '/descent-calibration/start', '/descent-calibration/stop', '/descent-calibration/status',
+  '/descent-calibration/start', '/descent-calibration/abort', '/descent-calibration/status',
   '/console/disable'
 ]);
 const nativeFetch = window.fetch.bind(window);
@@ -552,6 +627,7 @@ function setArmedState(armed) {
   currentArmed = !!armed;
   armedStatusKnown = true;
   if (currentArmed && !wasArmed && consolePanelOpen) toggleConsole();
+  if (currentArmed && !wasArmed && pidPanelOpen) closePidPanel();
   if (routeRecording && routeRecordStartedArmed && !currentArmed && wasArmed) stopRouteRecording('飞控已上锁，录制已安全停止。', true);
   if (routeRecording && !routeRecordStartedArmed && currentArmed && !wasArmed) stopRouteRecording('飞控已解锁，本地录制已停止。', true);
   updateRouteControls();
@@ -563,12 +639,9 @@ let selfCheckRequestInFlight = false;
 let routeTimer = null;
 let descentCalibrationTimer = null;
 let vibrationCalibrationTimer = null;
-let descentCalibrationRecommendation = null;
 let descentCalibrationLatestStatus = null;
 let currentDeviceId='',currentFirmwareBuild='';
-const DESCENT_CALIBRATION_POINTS_KEY = 'cfDroneDescentCalibrationPointsV2';
 const DESCENT_CALIBRATION_CONFIG_KEY = 'cfDroneDescentCalibrationConfigV1';
-const DESCENT_CALIBRATION_MAX_AGE_MS = 30*24*60*60*1000;
 let flightRouteRunning = false;
 let routeStarting = false;
 let routeHold = false;
@@ -818,160 +891,116 @@ function stopRouteRecording(reason,automatic=false,skipOpenSegment=false){
 }
 
 function handleDescentCalibrationEntry(){
-  if(descentCalibrationTimer){stopDescentCalibrationCapture();return;}
   openDescentCalibrationPage();
 }
 function openDescentCalibrationPage(){
   const page=document.getElementById('descent-calibration-page');page.style.display='block';page.setAttribute('aria-hidden','false');
   loadDescentCalibrationConfig();
-  renderDescentCalibrationPoints();refreshDescentCalibrationStatus();
+  refreshDescentCalibrationStatus();
 }
 function closeDescentCalibrationPage(){
   const page=document.getElementById('descent-calibration-page');page.style.display='none';page.setAttribute('aria-hidden','true');
 }
-function setDescentCalibrationRecording(recording){
-  if(recording&&!descentCalibrationTimer)descentCalibrationTimer=setInterval(refreshDescentCalibrationStatus,1000);
-  if(!recording&&descentCalibrationTimer){clearInterval(descentCalibrationTimer);descentCalibrationTimer=null;}
+function setDescentCalibrationActive(active){
+  if(active&&!descentCalibrationTimer)descentCalibrationTimer=setInterval(refreshDescentCalibrationStatus,1000);
+  if(!active&&descentCalibrationTimer){clearInterval(descentCalibrationTimer);descentCalibrationTimer=null;}
   const button=document.getElementById('descent-calibration-button');
-  button.textContent=recording?'停止标定':'迫降标定';button.classList.toggle('has-fault',recording);
+  button.textContent=active?'标定状态':'迫降标定';button.classList.toggle('has-fault',active);
+  const banner=document.getElementById('descent-recording-banner');
+  banner.classList.toggle('active',active);banner.setAttribute('aria-hidden',active?'false':'true');
   updateDescentCalibrationControls();
 }
 function updateDescentCalibrationControls(){
-  const recording=!!descentCalibrationTimer;
-  document.getElementById('descent-calibration-start').disabled=recording||!connectionOk||!currentArmed||currentFlightMode!==2;
-  document.getElementById('descent-calibration-stop').disabled=!recording;
   const status=descentCalibrationLatestStatus;
-  document.getElementById('descent-calibration-download').disabled=currentArmed||!status||status.samples===0||status.state==='recording';
-  document.getElementById('descent-drop-distance').disabled=!status||!status.usable;
-  const button=document.getElementById('descent-calibration-apply');
-  if(button){
-    const pageOpen=document.getElementById('descent-calibration-page').getAttribute('aria-hidden')==='false';
-    button.disabled=!descentCalibrationRecommendation||!pageOpen||!connectionOk||currentArmed;
-  }
+  const active=!!(status&&['waiting_takeoff','takeoff_delay','hover_candidate','hover_ready','descent_tracking'].includes(status.state));
+  document.getElementById('descent-calibration-start').disabled=active||!connectionOk||currentArmed||currentFlightMode!==2;
+  document.getElementById('descent-calibration-abort').disabled=!active;
+  document.getElementById('descent-airframe-id').disabled=active;
+  document.getElementById('descent-prop-id').disabled=active;
+  document.getElementById('descent-calibration-download').disabled=currentArmed||!status||!['complete','aborted'].includes(status.state)||Number(status.samples)===0;
+  document.getElementById('descent-calibration-clear').disabled=currentArmed||active;
+  document.getElementById('descent-calibration-apply').disabled=!connectionOk||currentArmed||!status||status.state!=='complete'||status.candidate_ready!==true||status.save_pending===true||status.binding_saved===true;
 }
 async function refreshDescentCalibrationStatus(){
   try{
     const response=await fetch('/descent-calibration/status',{cache:'no-store'});if(!response.ok)throw new Error('状态读取失败');
-    const data=await response.json();descentCalibrationLatestStatus=data;setDescentCalibrationRecording(data.state==='recording');
+    const data=await response.json();descentCalibrationLatestStatus=data;
+    if(typeof data.armed==='boolean')setArmedState(data.armed);
+    if(Number.isInteger(data.mode)){currentFlightMode=data.mode;document.getElementById('flight-mode').textContent=['直控','特技','自稳','不支持','自动'][data.mode]||'未知';}
+    const active=['waiting_takeoff','takeoff_delay','hover_candidate','hover_ready','descent_tracking'].includes(data.state);
+    setDescentCalibrationActive(active);
     const status=document.getElementById('descent-calibration-status');
-    const reason=({empty:'尚无标定记录',recording:'正在记录。请关闭标定页，使用摇杆手动下降；从顶部按钮结束记录。',complete:'记录完成',aborted:'记录已中止'})[data.state]||'标定状态未知';
-    status.textContent=`${reason}；${data.samples} 个样本，${(Number(data.duration_ms)/1000).toFixed(1)} 秒。`+
-      (data.state==='complete'?`中位推力 ${Number(data.median_thrust).toFixed(2)}，平均电池 ${Number(data.mean_battery_v).toFixed(2)} V，最大倾角 ${Number(data.max_tilt_deg).toFixed(1)}°。${data.usable?'记录质量通过检查。':'不可用于标定：'+data.reason+'。'}`:'');
-    document.getElementById('descent-calibration-measurement').textContent=data.usable
-      ? `记录有效，持续 ${(Number(data.duration_ms)/1000).toFixed(2)} 秒；中位推力 ${Number(data.median_thrust).toFixed(2)}。请输入对应高度差。`
-      : `当前记录尚不能用于参数标定${data.reason&&data.state!=='empty'?'：'+data.reason:''}。`;
+    const progress=Math.min(100,Math.max(0,Number(data.stable_progress_ms)||0)/(data.state==='hover_candidate'?5000:3000)*100);
+    const stateText={empty:'尚未开启标定',waiting_takeoff:'标定已开启，等待起飞代理信号',takeoff_delay:`已检测到起飞代理信号，等待 3 秒（${Math.min(3,Number(data.takeoff_elapsed_ms)/1000).toFixed(1)}/3.0 秒）`,hover_candidate:`正在寻找连续 5 秒稳定标记（${progress.toFixed(0)}%）`,hover_ready:'悬停候选／稳定标记完成，可以缓慢下降；蓝灯正在循环提示',descent_tracking:`已检测到降低油门，正在滚动检查稳定下降候选（${progress.toFixed(0)}%）`,complete:'已上锁，候选记录已冻结',aborted:'本次标定已中止'};
+    status.textContent=(stateText[data.state]||'标定状态未知')+(data.reason?`；状态：${data.reason}`:'');
+    const bannerText=document.getElementById('descent-recording-banner-text');
+    if(bannerText)bannerText.textContent=data.state==='hover_ready'?'蓝灯提示已开始：悬停候选完成，可以缓慢下降':data.state==='descent_tracking'?'正在采集稳定下降候选；落地后请明确上锁':stateText[data.state]||'迫降标定进行中';
+    document.getElementById('descent-calibration-measurement').textContent=data.candidate_ready
+      ? `稳定标记平均推力 ${Number(data.hover_mean_thrust).toFixed(3)}；下降候选 ${Number(data.candidate_thrust).toFixed(3)}；差值 ${Number(data.thrust_delta).toFixed(3)}；电池 ${Number(data.candidate_battery_v).toFixed(2)} V；最大倾角 ${Number(data.max_tilt_deg).toFixed(1)}°。`
+      : `尚未形成完整的 3 秒稳定下降候选${data.reason&&active?'；'+data.reason:''}。`;
+    document.getElementById('descent-calibration-recommendation').textContent=data.binding_saved
+      ? `候选已保存并绑定到本次记录。当前 SF_DESCEND_THRUST=${Number(data.candidate_thrust).toFixed(3)}。`
+      : data.state==='complete'&&data.candidate_ready?'请确认实际飞行中稳定标记对应悬停、候选段对应下降，再保存。':'落地上锁且候选通过质量检查后可保存。';
     updateDescentCalibrationControls();
   }catch(error){document.getElementById('descent-calibration-status').textContent=error.message||'无法读取标定状态';}
 }
 async function startDescentCalibrationCapture(){
-  if(!connectionOk||!currentArmed||currentFlightMode!==2){showToast('请连接飞控并在自稳模式、已解锁状态下开始记录');return;}
+  if(!connectionOk||currentArmed||currentFlightMode!==2){showToast('请连接飞控并在自稳模式、上锁状态下开启标定');return;}
   try{
-    const response=await controlFetch('/descent-calibration/start',{method:'POST'});const result=await response.json();
+    const config=readDescentCalibrationConfig();
+    const response=await controlFetch('/descent-calibration/start',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(config)});const result=await response.json();
     if(!response.ok||!result.ok)throw new Error(result.error||'无法开始记录');
-    setDescentCalibrationRecording(true);closeDescentCalibrationPage();showToast('开始记录手动下降；顶部按钮可停止');
+    await refreshDescentCalibrationStatus();closeDescentCalibrationPage();showToast('标定已开启；起飞后将自动寻找稳定标记');
   }catch(error){document.getElementById('descent-calibration-status').textContent=error.message;}
 }
-async function stopDescentCalibrationCapture(){
+async function abortDescentCalibrationCapture(){
   try{
-    const response=await fetch('/descent-calibration/stop',{method:'POST'});const result=await response.json();
-    if(!response.ok||!result.ok)throw new Error(result.error||'当前没有进行中的记录');
-    setDescentCalibrationRecording(false);openDescentCalibrationPage();refreshDescentCalibrationStatus();
-  }catch(error){showToast(error.message||'停止记录失败');}
+    const response=await controlFetch('/descent-calibration/abort',{method:'POST'});const result=await response.json();
+    if(!response.ok||!result.ok)throw new Error(result.error||'当前没有进行中的标定');
+    await refreshDescentCalibrationStatus();openDescentCalibrationPage();showToast('本次标定已取消');
+  }catch(error){showToast(error.message||'取消标定失败');}
 }
-function readDescentCalibrationPoints(){try{const value=JSON.parse(localStorage.getItem(DESCENT_CALIBRATION_POINTS_KEY)||'[]');return Array.isArray(value)?value:[];}catch(_){return [];}}
-function saveDescentCalibrationPoints(points){try{localStorage.setItem(DESCENT_CALIBRATION_POINTS_KEY,JSON.stringify(points.slice(-12)));}catch(_){throw new Error('浏览器无法保存标定点');}}
 function loadDescentCalibrationConfig(){
   try{const value=JSON.parse(localStorage.getItem(DESCENT_CALIBRATION_CONFIG_KEY)||'{}');document.getElementById('descent-airframe-id').value=value.airframe||'';document.getElementById('descent-prop-id').value=value.prop||'';}catch(_){}
+}
+function handleDescentCalibrationConfigInput(){
+  const airframe=document.getElementById('descent-airframe-id').value;
+  const prop=document.getElementById('descent-prop-id').value;
+  try{localStorage.setItem(DESCENT_CALIBRATION_CONFIG_KEY,JSON.stringify({airframe,prop}));}catch(_){}
 }
 function readDescentCalibrationConfig(){
   const airframe=document.getElementById('descent-airframe-id').value.trim();
   const prop=document.getElementById('descent-prop-id').value.trim();
   if(!airframe||!prop)throw new Error('请填写机体标识和桨叶配置');
-  if(airframe.length>32||prop.length>32||/[<>\x00-\x1f]/.test(airframe)||/[<>\x00-\x1f]/.test(prop))throw new Error('机体和桨叶标识不能超过 32 个字符或包含控制字符和尖括号');
+  if(airframe.length>32||prop.length>32||/["\\<>\x00-\x1f]/.test(airframe)||/["\\<>\x00-\x1f]/.test(prop))throw new Error('机体和桨叶标识不能超过 32 个字符，也不能包含引号、反斜杠、控制字符或尖括号');
   try{localStorage.setItem(DESCENT_CALIBRATION_CONFIG_KEY,JSON.stringify({airframe,prop}));}catch(_){throw new Error('浏览器无法保存机体配置');}
   return {airframe,prop};
-}
-function descentPointMatch(point,config){
-  const age=Date.now()-Number(point.at);
-  return Number.isFinite(age)&&age>=0&&age<=DESCENT_CALIBRATION_MAX_AGE_MS&&point.device_id===currentDeviceId&&point.firmware_build===currentFirmwareBuild&&point.airframe===config.airframe&&point.prop===config.prop;
-}
-function invalidateDescentCalibrationRecommendation(){
-  if(!descentCalibrationRecommendation)return;
-  descentCalibrationRecommendation=null;
-  document.getElementById('descent-calibration-recommendation').textContent='机体或桨叶配置已变化，请重新查找匹配的实测点。';
-  refreshDescentCalibrationSaveState();
-}
-function renderDescentCalibrationPoints(){
-  const points=readDescentCalibrationPoints();const root=document.getElementById('descent-calibration-points');
-  let config=null;try{config=readDescentCalibrationConfig();}catch(_){}
-  root.innerHTML=points.length?points.map((point,index)=>`<div>点 ${index+1}：${Number(point.speed).toFixed(2)} m/s，推力 ${Number(point.thrust).toFixed(2)}，电池 ${Number(point.battery).toFixed(2)} V，${new Date(point.at).toLocaleString()}；${config&&descentPointMatch(point,config)?'当前配置可用':'设备、固件、机体、桨叶不匹配或已过期'}</div>`).join(''):'此浏览器还没有保存实测点。';
-}
-async function addDescentCalibrationPoint(){
-  const distance=Number(document.getElementById('descent-drop-distance').value);
-  if(!Number.isFinite(distance)||distance<0.1||distance>100){showToast('请输入 0.1 到 100 米之间的实测高度差');return;}
-  try{
-    const config=readDescentCalibrationConfig();
-    const [response,identityResponse]=await Promise.all([fetch('/descent-calibration/status',{cache:'no-store'}),fetch('/web_rc/status',{cache:'no-store'})]);
-    const data=await response.json();const identity=await identityResponse.json();
-    if(!response.ok||!data.usable)throw new Error('当前记录不满足质量条件');
-    if(!identityResponse.ok||!identity.device_id||!identity.firmware_build)throw new Error('无法确认当前设备和固件身份');
-    currentDeviceId=String(identity.device_id);currentFirmwareBuild=String(identity.firmware_build);
-    const duration=Number(data.duration_ms)/1000;const speed=distance/duration;
-    if(!Number.isFinite(speed)||speed<=0||speed>5)throw new Error('计算速度超出 0 到 5 m/s 范围，请检查高度差和记录区间');
-    const points=readDescentCalibrationPoints();points.push({speed,thrust:Number(data.median_thrust),battery:Number(data.mean_battery_v),tilt:Number(data.max_tilt_deg),at:Date.now(),device_id:currentDeviceId,firmware_build:currentFirmwareBuild,airframe:config.airframe,prop:config.prop});
-    saveDescentCalibrationPoints(points);renderDescentCalibrationPoints();
-    document.getElementById('descent-calibration-recommendation').textContent=`已保存实测点：平均下降速度 ${speed.toFixed(2)} m/s，对应推力 ${Number(data.median_thrust).toFixed(2)}。`;
-  }catch(error){showToast(error.message||'无法添加实测点');}
-}
-async function recommendDescentCalibrationPoint(){
-  const target=Number(document.getElementById('descent-target-speed').value);
-  if(!Number.isFinite(target)||target<0.05||target>5){showToast('请输入 0.05 到 5 m/s 的目标最大下降速度');return;}
-  let config;try{config=readDescentCalibrationConfig();}catch(error){showToast(error.message);return;}
-  if(!currentDeviceId||!currentFirmwareBuild){
-    try{const response=await fetch('/web_rc/status',{cache:'no-store'});const identity=await response.json();if(!response.ok||!identity.device_id||!identity.firmware_build)throw new Error();currentDeviceId=String(identity.device_id);currentFirmwareBuild=String(identity.firmware_build);}catch(_){showToast('无法确认当前设备和固件身份');return;}
-  }
-  const candidates=readDescentCalibrationPoints().filter(point=>Number.isFinite(Number(point.speed))&&Number(point.speed)<=target&&descentPointMatch(point,config));
-  if(!candidates.length){descentCalibrationRecommendation=null;document.getElementById('descent-calibration-recommendation').textContent='当前设备、固件、机体和桨叶配置没有未过期且速度不超过目标值的实测点。';refreshDescentCalibrationSaveState();return;}
-  candidates.sort((a,b)=>Number(b.speed)-Number(a.speed));descentCalibrationRecommendation=candidates[0];
-  document.getElementById('descent-calibration-recommendation').textContent=`推荐已测点：${Number(descentCalibrationRecommendation.speed).toFixed(2)} m/s，对应 SF_DESCEND_THRUST=${Number(descentCalibrationRecommendation.thrust).toFixed(2)}。不会外推。`;
-  refreshDescentCalibrationSaveState();
 }
 async function refreshDescentCalibrationSaveState(){
   updateDescentCalibrationControls();
 }
-async function applyDescentCalibrationRecommendation(){
-  if(!descentCalibrationRecommendation||currentArmed||!connectionOk){showToast('保存参数前请连接飞控并确认已上锁');return;}
+async function applyDescentCalibrationCandidate(){
+  const status=descentCalibrationLatestStatus;
+  if(!status||status.state!=='complete'||!status.candidate_ready||currentArmed||!connectionOk){showToast('保存前请确认候选有效、飞控已连接并上锁');return;}
   try{
     const config=readDescentCalibrationConfig();
-    const identityResponse=await fetchWithTimeout('/web_rc/status',{cache:'no-store'},STATUS_REQUEST_TIMEOUT_MS);
-    const identity=await identityResponse.json();
-    if(!identityResponse.ok||!identity.device_id||!identity.firmware_build)throw new Error('无法再次确认当前设备和固件身份');
-    currentDeviceId=String(identity.device_id);currentFirmwareBuild=String(identity.firmware_build);
-    if(!descentPointMatch(descentCalibrationRecommendation,config)){
-      descentCalibrationRecommendation=null;refreshDescentCalibrationSaveState();
-      throw new Error('设备、固件、机体、桨叶配置或有效期已变化，请重新查找标定点');
-    }
-    const stillStored=readDescentCalibrationPoints().some(point=>
-      Number(point.at)===Number(descentCalibrationRecommendation.at)&&
-      Number(point.thrust)===Number(descentCalibrationRecommendation.thrust)&&
-      descentPointMatch(point,config));
-    if(!stillStored){descentCalibrationRecommendation=null;refreshDescentCalibrationSaveState();throw new Error('推荐标定点已删除或变化，请重新查找');}
-    const value=Number(descentCalibrationRecommendation.thrust);
-    const response=await controlFetch('/descent-calibration/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({value:String(value)})});
+    if(config.airframe!==status.airframe||config.prop!==status.prop||!status.session)throw new Error('机体或桨叶配置与本次记录不一致');
+    const binding={session:status.session,device_id:status.device_id,firmware_build:status.firmware_build,airframe:config.airframe,prop:config.prop};
+    const response=await controlFetch('/descent-calibration/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(binding)});
     const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'参数保存未排队');
     document.getElementById('descent-calibration-recommendation').textContent='已提交保存；等待飞控写入并确认…';
     for(let i=0;i<12;i++){
       await new Promise(resolve=>setTimeout(resolve,1000));
-      const status=await fetch('/descent-calibration/save-status?value='+encodeURIComponent(value),{cache:'no-store'}).then(r=>r.json());
-      if(status.saved){document.getElementById('descent-calibration-recommendation').textContent=`参数已写入并读回确认：SF_DESCEND_THRUST=${Number(status.value).toFixed(2)}。`;return;}
+      const saved=await fetch('/descent-calibration/save-status?'+new URLSearchParams(binding),{cache:'no-store'}).then(r=>r.json());
+      if(saved.saved){document.getElementById('descent-calibration-recommendation').textContent=`参数已写入并读回确认：SF_DESCEND_THRUST=${Number(saved.value).toFixed(3)}。`;await refreshDescentCalibrationStatus();return;}
     }
     throw new Error('参数仍未确认写入；请检查 NVS 状态，勿重复飞行验证');
   }catch(error){document.getElementById('descent-calibration-recommendation').textContent=error.message||'参数保存失败';}
 }
-function clearDescentCalibrationPoints(){
-  try{localStorage.removeItem(DESCENT_CALIBRATION_POINTS_KEY);}catch(_){}
-  descentCalibrationRecommendation=null;renderDescentCalibrationPoints();refreshDescentCalibrationSaveState();
-  document.getElementById('descent-calibration-recommendation').textContent='已清除此浏览器保存的实测点。';
+async function clearDescentCalibrationCapture(){
+  if(currentArmed){showToast('请先上锁再清除记录');return;}
+  try{const response=await controlFetch('/descent-calibration/clear',{method:'POST'});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'清除失败');await refreshDescentCalibrationStatus();}
+  catch(error){showToast(error.message||'清除标定记录失败');}
 }
 function downloadDescentCalibrationCsv(){
   if(currentArmed){showToast('请先上锁后下载标定数据');return;}
@@ -1942,6 +1971,170 @@ function showToast(msg) {
   t._timer = setTimeout(() => { t.style.opacity = '0'; }, 2000);
 }
 
+/*======================== 内环 PID 调参 ========================*/
+const pidFields=[
+  {key:'roll_p',id:'pid-roll-p',pair:'pitch_p',fallback:[0,.20]},
+  {key:'roll_i',id:'pid-roll-i',pair:'pitch_i',fallback:[0,.50]},
+  {key:'roll_d',id:'pid-roll-d',pair:'pitch_d',fallback:[0,.01]},
+  {key:'pitch_p',id:'pid-pitch-p',pair:'roll_p',fallback:[0,.20]},
+  {key:'pitch_i',id:'pid-pitch-i',pair:'roll_i',fallback:[0,.50]},
+  {key:'pitch_d',id:'pid-pitch-d',pair:'roll_d',fallback:[0,.01]},
+  {key:'yaw_p',id:'pid-yaw-p',fallback:[0,1.00]},
+  {key:'yaw_i',id:'pid-yaw-i',fallback:[0,.20]},
+  {key:'yaw_d',id:'pid-yaw-d',fallback:[0,.05]}
+];
+let pidPanelOpen=false;
+let pidSnapshot=null;
+let pidRanges={};
+let pidRequestPending=false;
+
+function setPidStatus(message,state=''){
+  const status=document.getElementById('pid-status');
+  status.textContent=message;
+  status.className='pid-status'+(state?' '+state:'');
+}
+
+function formatPidValue(value){
+  return Number(value).toFixed(6).replace(/0+$/,'').replace(/\.$/,'');
+}
+
+function applyPidConfig(data,updateRanges=true){
+  if(!data||!data.values)throw new Error('飞控未返回 PID 参数');
+  if(updateRanges&&data.ranges)pidRanges=data.ranges;
+  const values={};
+  pidFields.forEach(field=>{
+    const value=Number(data.values[field.key]);
+    if(!Number.isFinite(value))throw new Error('PID 参数格式无效');
+    const range=pidRanges[field.key]||field.fallback;
+    const input=document.getElementById(field.id);
+    input.min=range[0];input.max=range[1];input.value=formatPidValue(value);input.classList.remove('invalid');
+    document.getElementById(field.id+'-range').textContent=`范围 ${formatPidValue(range[0])}–${formatPidValue(range[1])}`;
+    values[field.key]=value;
+  });
+  pidSnapshot=values;
+  document.getElementById('pid-save-button').disabled=data.editable===false||currentArmed;
+  return values;
+}
+
+async function openPidPanel(){
+  if(pidPanelOpen)return;
+  try{
+    const response=await fetchWithTimeout('/web_rc/status',{cache:'no-store'},STATUS_REQUEST_TIMEOUT_MS);
+    const status=await response.json().catch(()=>({}));
+    if(!response.ok||typeof status.armed!=='boolean')throw new Error('无法确认飞控上锁状态');
+    setArmedState(status.armed);
+    if(status.armed)throw new Error('请先上锁并停止电机，再调整 PID');
+    pidPanelOpen=true;
+    document.getElementById('pid-window').setAttribute('aria-hidden','false');
+    document.getElementById('pid-button')?.classList.add('active');
+    if(!await loadPidConfig())throw new Error('PID 参数读取失败');
+  }catch(error){
+    if(pidPanelOpen)closePidPanel();
+    showToast(error.message||'PID 页面打开失败');
+  }
+}
+
+function closePidPanel(){
+  if(!pidPanelOpen)return;
+  pidPanelOpen=false;
+  document.getElementById('pid-window').setAttribute('aria-hidden','true');
+  const button=document.getElementById('pid-button');
+  button?.classList.remove('active');button?.focus();
+}
+
+async function loadPidConfig(){
+  if(pidRequestPending)return;
+  pidRequestPending=true;
+  document.getElementById('pid-save-button').disabled=true;
+  setPidStatus('正在读取飞控当前参数…','busy');
+  try{
+    const response=await fetchWithTimeout('/pid/config',{cache:'no-store'});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok||!data.ok)throw new Error(data.error||'PID 参数读取失败');
+    applyPidConfig(data,true);
+    setPidStatus(data.pending?'参数存储正在处理上一批写入，请稍后再保存。':'已读取当前内环 PID。',data.pending?'busy':'ok');
+    document.getElementById('pid-save-button').disabled=!!data.pending||data.editable===false||currentArmed;
+    return true;
+  }catch(error){
+    setPidStatus(error.message||'PID 参数读取失败','error');
+    return false;
+  }finally{pidRequestPending=false;}
+}
+
+function restorePidEdits(){
+  if(!pidSnapshot){setPidStatus('尚未读取到可恢复的参数。','error');return;}
+  pidFields.forEach(field=>{
+    const input=document.getElementById(field.id);
+    input.value=formatPidValue(pidSnapshot[field.key]);input.classList.remove('invalid');
+  });
+  setPidStatus('已恢复为本次读取或保存后的值。');
+}
+
+function collectPidValues(){
+  const values={};let invalid='';
+  pidFields.forEach(field=>{
+    const input=document.getElementById(field.id),value=Number(input.value),range=pidRanges[field.key]||field.fallback;
+    const valid=input.value.trim()!==''&&Number.isFinite(value)&&value>=Number(range[0])&&value<=Number(range[1]);
+    input.classList.toggle('invalid',!valid);
+    if(!valid&&!invalid)invalid=field.key;
+    values[field.key]=value;
+  });
+  if(invalid)throw new Error('存在空值或超出范围的 PID 参数');
+  return values;
+}
+
+async function waitForPidPersistence(expected){
+  for(let attempt=0;attempt<8&&pidPanelOpen;attempt++){
+    await new Promise(resolve=>setTimeout(resolve,350));
+    try{
+      const response=await fetchWithTimeout('/pid/config',{cache:'no-store'});
+      const data=await response.json().catch(()=>({}));
+      if(!response.ok||!data.ok)continue;
+      const matches=pidFields.every(field=>Math.abs(Number(data.values[field.key])-expected[field.key])<1e-6);
+      if(matches&&!data.pending){
+        applyPidConfig(data,false);
+        setPidStatus('PID 已写入并由飞控读回确认。','ok');
+        return;
+      }
+    }catch(_){}
+  }
+  if(pidPanelOpen)setPidStatus('参数已生效并进入保存队列；稍后可点“重新读取”确认。','busy');
+}
+
+async function savePidConfig(){
+  if(pidRequestPending)return;
+  if(currentArmed){setPidStatus('飞控已解锁，禁止保存 PID。','error');return;}
+  let values;
+  try{values=collectPidValues();}catch(error){setPidStatus(error.message,'error');return;}
+  pidRequestPending=true;
+  const button=document.getElementById('pid-save-button');button.disabled=true;
+  let keepDisabled=false;
+  setPidStatus('正在校验并提交全部 9 个参数…','busy');
+  try{
+    const response=await controlFetch('/pid/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(values)});
+    const data=await response.json().catch(()=>({}));
+    const messages={requires_disarmed_motors_stopped:'请先上锁并停止全部电机',parameter_storage_busy:'参数存储正忙，请稍后重试',flight_controller_busy:'飞控正在执行校准、测试或序列任务',invalid_pid_value:'参数为空或超出允许范围',pid_apply_failed:'参数应用失败，原值已恢复',parameter_save_not_queued:'参数保存未能排队，原值已恢复'};
+    if(!response.ok||!data.ok)throw new Error(messages[data.error]||data.error||'PID 保存失败');
+    applyPidConfig(data,false);
+    keepDisabled=!!data.pending;
+    setPidStatus(data.pending?'参数已生效，正在写入持久存储…':'PID 已保存。',data.pending?'busy':'ok');
+    if(data.pending)waitForPidPersistence(values);
+  }catch(error){
+    setPidStatus(error.message||'PID 保存失败','error');
+  }finally{
+    pidRequestPending=false;
+    button.disabled=currentArmed||keepDisabled;
+  }
+}
+
+pidFields.forEach(field=>document.getElementById(field.id).addEventListener('input',event=>{
+  event.target.classList.remove('invalid');
+  if(!field.pair||!document.getElementById('pid-sync-roll-pitch').checked)return;
+  const pair=pidFields.find(candidate=>candidate.key===field.pair);
+  if(pair)document.getElementById(pair.id).value=event.target.value;
+}));
+document.getElementById('pid-window').addEventListener('click',event=>{if(event.target.id==='pid-window')closePidPanel();});
+
 /*======================== 调试控制台 ========================*/
 function setConsoleStatus(message,state=''){
   const status=document.getElementById('console-status');
@@ -2022,7 +2215,8 @@ document.getElementById('console-window').addEventListener('click',event=>{
 });
 
 document.addEventListener('keydown',event=>{
-  if(event.key==='Escape'&&consolePanelOpen)toggleConsole();
+  if(event.key==='Escape'&&pidPanelOpen)closePidPanel();
+  else if(event.key==='Escape'&&consolePanelOpen)toggleConsole();
 });
 
 function initConsoleTouchScrolling() {

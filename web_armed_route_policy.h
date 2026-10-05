@@ -18,7 +18,7 @@ inline bool webArmedRouteAllowed(const char *path, bool get, bool post) {
             strcmp(path, "/web_rc/lease") == 0 ||
             strcmp(path, "/route/takeover") == 0 ||
             strcmp(path, "/descent-calibration/start") == 0 ||
-            strcmp(path, "/descent-calibration/stop") == 0 ||
+            strcmp(path, "/descent-calibration/abort") == 0 ||
             strcmp(path, "/console/disable") == 0;
     }
     return false;

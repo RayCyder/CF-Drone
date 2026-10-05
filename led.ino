@@ -22,6 +22,7 @@ extern float thrustTarget;    // control.ino
 extern float batteryVoltage;  // battery.ino
 extern bool batteryAlertActiveForFlight(bool flying);
 extern bool isInverted; // safety.ino
+extern bool descentCalibrationStableMarkReady();
 #if WEB_RC_ENABLED
 extern bool webRCEnabled;
 extern bool useWebRC;
@@ -81,8 +82,21 @@ bool ledFastBlinkActive() {
 
 // 主循环调用：根据飞行状态驱动 LED
 void updateLED() {
+	static bool calibrationPromptWasActive = false;
+	static uint32_t calibrationPromptStartedMs = 0;
+	const bool calibrationPromptActive = descentCalibrationStableMarkReady();
+	if (!calibrationPromptActive) calibrationPromptWasActive = false;
 	if (ledFastBlinkActive()) {
 		setLED(micros() / BLINK_FAST_PERIOD % 2); // 告警：快闪 8Hz
+	} else if (calibrationPromptActive) {
+		// 5 x (100 ms on + 100 ms off), followed by 1 s off.
+		// Fault indication above always has priority.
+		if (!calibrationPromptWasActive) {
+			calibrationPromptWasActive = true;
+			calibrationPromptStartedMs = millis();
+		}
+		const uint32_t phaseMs = (millis() - calibrationPromptStartedMs) % 2000UL;
+		setLED(phaseMs < 1000UL && (phaseMs % 200UL) < 100UL);
 	} else if (!armed) {
 		setLED(false); // 正常待机：常灭
 	} else {

@@ -86,6 +86,7 @@ const char* getModeName();
 bool isSupportedFlightMode(int requestedMode);
 bool setFlightMode(int requestedMode);
 void resetControlTargets();
+void resetControlPidState();
 bool submitAutoAttitudeTarget(const AutoAttitudeCommand& target);
 bool submitAutoActuatorTarget(const AutoActuatorCommand& target);
 bool autoTargetReady();
@@ -98,6 +99,7 @@ bool canAcceptMavlinkManualControl();
 Vector constrainRatesToConfiguredLimits(const Vector& rates);
 bool ratesWithinConfiguredLimits(const Vector& rates);
 float hoverThrottleInput();
+float hoverThrustTarget();
 
 // 外部函数声明
 bool isUsingWebRC();
