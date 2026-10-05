@@ -422,6 +422,9 @@ let latencyHistory = new Array(10).fill(0);
 let latencyIndex = 0;
 const SEND_INTERVAL = 50;  // ~20Hz 摇杆检测频率
 const FORCE_SEND_INTERVAL = 200; // 静止时强制重发间隔（ms），保持飞控数据新鲜
+const CONTROL_REQUEST_TIMEOUT_MS = 2500;
+const LEASE_REQUEST_TIMEOUT_MS = 3500;
+const STATUS_REQUEST_TIMEOUT_MS = 3500;
 const stickReadoutElements = {
   throttle:document.getElementById('left-y'),
   yaw:document.getElementById('left-x'),
@@ -460,8 +463,15 @@ const flightRequestPaths = new Set([
 ]);
 const nativeFetch = window.fetch.bind(window);
 window.fetch = (input, options) => {
-  const path = typeof input === 'string' ? input.split('?')[0] : new URL(input.url).pathname;
-  if ((!armedStatusKnown || currentArmed) && !flightRequestPaths.has(path))
+  let url = null;
+  try {
+    const raw = typeof input === 'string' ? input : input.url;
+    url = new URL(raw, location.href);
+  } catch (_) {}
+  const fastStopRequest = url && url.hostname === location.hostname && url.port === '82' &&
+    ['/kill','/land','/lock'].includes(url.pathname);
+  const flightRequest = url && url.origin === location.origin && flightRequestPaths.has(url.pathname);
+  if ((!armedStatusKnown || currentArmed) && !flightRequest && !fastStopRequest)
     return Promise.reject(new Error('飞控已解锁，非飞行请求已暂停'));
   return nativeFetch(input, options);
 };
@@ -475,11 +485,16 @@ document.addEventListener('click', event => {
 let webRCLeaseToken = '';
 let webRCStopToken = '';
 try {
-  webRCStopToken = localStorage.getItem('cfDroneStopToken') ||
-    sessionStorage.getItem('cfDroneStopToken') || '';
+  webRCStopToken = localStorage.getItem('cfDroneStopToken') || '';
 } catch (_) {}
+if (!webRCStopToken) {
+  try { webRCStopToken = sessionStorage.getItem('cfDroneStopToken') || ''; } catch (_) {}
+}
 let webRCLeasePromise = null;
 let webRCLeaseBlocked = false;
+let joystickRequestPromise = null;
+let joystickSendPending = false;
+let heartbeatRequestPromise = null;
 let currentWifiMode = 'unknown';
 
 function updateWifiModeButton(mode) {
@@ -540,6 +555,7 @@ function setArmedState(armed) {
 let selfCheckOpen = false;
 let selfCheckRequestSequence = 0;
 let selfCheckHasData = false;
+let selfCheckRequestInFlight = false;
 let routeTimer = null;
 let descentCalibrationTimer = null;
 let vibrationCalibrationTimer = null;
@@ -1266,11 +1282,21 @@ function checkAndSendChanges() {
 /*======================== 数据发送函数 ========================*/
 function sendJoystickData() {
   if (!stickInputActivated) return Promise.resolve(false);
-  const request=sendToESP('/web_rc', { t:1, th:Math.round(currentValues.throttle), r:Math.round(currentValues.roll),
-    p:Math.round(currentValues.pitch), y:Math.round(currentValues.yaw), ts:performance.now() });
-  lastSentValues = {...currentValues};
-  packetStats.sent++;
-  return request;
+  joystickSendPending = true;
+  if (joystickRequestPromise) return joystickRequestPromise;
+  joystickRequestPromise = (async () => {
+    let result = false;
+    while (joystickSendPending) {
+      joystickSendPending = false;
+      const values = {...currentValues};
+      lastSentValues = values;
+      packetStats.sent++;
+      result = await sendToESP('/web_rc', {t:1, th:Math.round(values.throttle), r:Math.round(values.roll),
+        p:Math.round(values.pitch), y:Math.round(values.yaw), ts:performance.now()});
+    }
+    return result;
+  })().finally(() => { joystickRequestPromise = null; });
+  return joystickRequestPromise;
 }
 
 function sendButtonData(buttonIndex, state) {
@@ -1280,7 +1306,7 @@ function sendButtonData(buttonIndex, state) {
   }
   if (state && webRCStopToken && (buttonIndex === 1 || buttonIndex === 2 || buttonIndex === 3)) {
     const action = buttonIndex === 2 ? 'kill' : buttonIndex === 3 ? 'land' : 'lock';
-    fetch(`${location.protocol}//${location.hostname}:82/${action}?s=${encodeURIComponent(webRCStopToken)}`,
+    nativeFetch(`${location.protocol}//${location.hostname}:82/${action}?s=${encodeURIComponent(webRCStopToken)}`,
       {method:'POST', mode:'no-cors', keepalive:true}).catch(() => {});
   }
   sendToESP('/web_rc', { t:2, b:buttonIndex, s:state ? 1 : 0, ts:performance.now() });
@@ -1369,12 +1395,35 @@ function updateJoystickPosition(side, clientX, clientY) {
 }
 
 /*======================== 网络处理 ========================*/
-function controlUrl(url) {
-  if (!webRCLeaseToken) return url;
-  return url + (url.includes('?') ? '&' : '?') + 'lease=' + encodeURIComponent(webRCLeaseToken);
+function controlUrl(url, leaseToken=webRCLeaseToken) {
+  if (!leaseToken) return url;
+  return url + (url.includes('?') ? '&' : '?') + 'lease=' + encodeURIComponent(leaseToken);
 }
 
-function handleLeaseConflict(message) {
+function fetchWithTimeout(input, options={}, timeoutMs=CONTROL_REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const sourceSignal = options.signal;
+  let sourceAbort = null;
+  if (sourceSignal) {
+    sourceAbort = () => controller.abort();
+    if (sourceSignal.aborted) controller.abort();
+    else sourceSignal.addEventListener('abort', sourceAbort, {once:true});
+  }
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(input, {...options, signal:controller.signal}).finally(() => {
+    clearTimeout(timeout);
+    if (sourceSignal && sourceAbort) sourceSignal.removeEventListener('abort', sourceAbort);
+  });
+}
+
+function recoverExpiredLease(expectedToken='') {
+  if (expectedToken && webRCLeaseToken !== expectedToken) return;
+  webRCLeaseToken = '';
+  webRCLeaseBlocked = false;
+}
+
+function handleLeaseConflict(message, expectedToken='') {
+  if (expectedToken && webRCLeaseToken !== expectedToken) return;
   const shouldNotify = !webRCLeaseBlocked;
   webRCLeaseToken = '';
   webRCLeaseBlocked = true;
@@ -1388,23 +1437,24 @@ async function acquireControlLease() {
   if (webRCLeaseBlocked) return false;
   if (webRCLeasePromise) return webRCLeasePromise;
   const leaseUrl = '/web_rc/lease' + (webRCStopToken ? '?stop=' + encodeURIComponent(webRCStopToken) : '');
-  webRCLeasePromise = fetch(leaseUrl, {method:'POST', cache:'no-store'})
+  webRCLeasePromise = fetchWithTimeout(leaseUrl, {method:'POST', cache:'no-store'}, LEASE_REQUEST_TIMEOUT_MS)
     .then(async response => {
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.lease) {
-        const reason = data.error === 'web_rc_flight_takeover_forbidden'
-          ? '飞行中禁止其他页面抢占；请返回原控制浏览器'
-          : '控制权申请失败；上锁后刷新页面可立即重新申请';
-        handleLeaseConflict(reason);
+        if (data.error === 'web_rc_flight_takeover_forbidden')
+          handleLeaseConflict('飞行中禁止其他页面抢占；请返回原控制浏览器');
+        else if (data.error === 'web_rc_lease_in_use')
+          handleLeaseConflict('遥控控制权已被其他页面占用');
+        else if (++consecutiveFails >= 3) updateConnectionStatus(false);
         return false;
       }
       webRCLeaseToken = data.lease;
       webRCStopToken = data.stop || '';
-      try {
-        localStorage.setItem('cfDroneStopToken', webRCStopToken);
-        sessionStorage.setItem('cfDroneStopToken', webRCStopToken);
-      } catch (_) {}
+      try { localStorage.setItem('cfDroneStopToken', webRCStopToken); } catch (_) {}
+      try { sessionStorage.setItem('cfDroneStopToken', webRCStopToken); } catch (_) {}
       webRCLeaseBlocked = false;
+      consecutiveFails = 0;
+      updateConnectionStatus(true);
       updateRouteControls();
       return true;
     })
@@ -1417,37 +1467,54 @@ async function acquireControlLease() {
 }
 
 async function controlFetch(url, options={}) {
-  const ok = await acquireControlLease();
-  if (!ok) throw new Error('web_rc_lease_required');
-  const response = await fetch(controlUrl(url), options);
-  if (response.status === 409) {
-    let data = {};
-    try { data = await response.clone().json(); } catch (_) {}
-    if (data.error === 'web_rc_lease_required' || data.error === 'web_rc_lease_in_use') {
-      handleLeaseConflict('遥控控制权已被其他页面占用');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const ok = await acquireControlLease();
+    if (!ok) throw new Error('web_rc_lease_required');
+    const requestLeaseToken = webRCLeaseToken;
+    const response = await fetchWithTimeout(controlUrl(url, requestLeaseToken), options);
+    if (response.status === 409) {
+      let data = {};
+      try { data = await response.clone().json(); } catch (_) {}
+      if ((data.error === 'web_rc_lease_required' || data.error === 'web_rc_lease_expired') && attempt === 0) {
+        recoverExpiredLease(requestLeaseToken);
+        continue;
+      }
+      if (data.error === 'web_rc_lease_in_use')
+        handleLeaseConflict('遥控控制权已被其他页面占用', requestLeaseToken);
     }
+    return response;
   }
-  return response;
+  throw new Error('web_rc_lease_required');
 }
 
 function isEmergencyButtonData(data) {
   return data && data.t === 2 && (data.b === 1 || data.b === 2 || data.b === 3);
 }
 
-function sendToESP(url, data) {
+function sendToESP(url, data, leaseRetry=false) {
   const t0 = performance.now();
   const emergencyOverride = isEmergencyButtonData(data);
+  let requestLeaseToken = '';
   return (emergencyOverride ? Promise.resolve(true) : acquireControlLease()).then(ok => {
     if (!ok) return null;
     if (emergencyOverride) data.stop = webRCStopToken;
-    else data.lease = webRCLeaseToken;
-    return fetch(emergencyOverride ? url : controlUrl(url), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data) });
+    else {
+      requestLeaseToken = webRCLeaseToken;
+      data.lease = requestLeaseToken;
+    }
+    return fetchWithTimeout(emergencyOverride ? url : controlUrl(url, requestLeaseToken),
+      {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
   })
     .then(r => {
       if (!r) return null;
       if (r.status === 409) {
         return r.json().catch(() => ({})).then(data => {
-          if (data.error === 'web_rc_lease_required' || data.error === 'web_rc_lease_in_use') handleLeaseConflict('遥控控制权已被其他页面占用');
+          if (data.error === 'web_rc_lease_required' || data.error === 'web_rc_lease_expired') {
+            recoverExpiredLease(requestLeaseToken);
+            throw new Error('lease_retry');
+          }
+          if (data.error === 'web_rc_lease_in_use')
+            handleLeaseConflict('遥控控制权已被其他页面占用', requestLeaseToken);
           throw new Error('lease');
         });
       }
@@ -1498,7 +1565,8 @@ function sendToESP(url, data) {
       if (resp.rt === 4 && resp.warn) showToast('⚠️ ' + resp.warn);
       return true;
     })
-    .catch(() => {
+    .catch(error => {
+      if (error.message === 'lease_retry' && !leaseRetry) return sendToESP(url, data, true);
       if (++consecutiveFails >= 3) updateConnectionStatus(false);
       return false;
     });
@@ -1554,13 +1622,15 @@ function refreshSelfCheck() {
 }
 
 function loadSelfCheckStatus(showLoading) {
+  if (selfCheckRequestInFlight) return;
+  selfCheckRequestInFlight = true;
   const requestId = ++selfCheckRequestSequence;
   const summary = document.getElementById('diagnostic-summary');
   if (showLoading && !selfCheckHasData) {
     summary.className = 'diagnostic-summary offline';
     summary.innerHTML = '<strong>正在读取诊断状态…</strong><small>数据来自飞控当前运行状态。</small>';
   }
-  fetch('/web_rc/status', {cache:'no-store'}).then(r => {
+  fetchWithTimeout('/web_rc/status', {cache:'no-store'}, STATUS_REQUEST_TIMEOUT_MS).then(r => {
     if (!r.ok) throw new Error('status unavailable');
     return r.json();
   }).then(data => {
@@ -1576,6 +1646,8 @@ function loadSelfCheckStatus(showLoading) {
     }
     if (typeof data.armed === 'boolean') setArmedState(data.armed);
     if (typeof data.wifi_mode === 'string') updateWifiModeButton(data.wifi_mode);
+    consecutiveFails = 0;
+    updateConnectionStatus(true);
     selfCheckHasData = true;
     renderSelfCheckStatus(data);
     if (data.voltage !== undefined && data.voltage > 0.5)
@@ -1588,7 +1660,7 @@ function loadSelfCheckStatus(showLoading) {
     ledReason.innerHTML = '<strong>无法确认蓝灯快闪原因</strong><small>飞控状态读取失败；请检查 USB/Wi-Fi 链路后刷新。</small>';
     if (!selfCheckHasData) showSelfCheckUnavailable();
     else document.getElementById('diagnostic-updated').textContent = '读取失败，保留上次故障结果';
-  });
+  }).finally(() => { selfCheckRequestInFlight = false; });
 }
 
 function renderSelfCheckStatus(data) {
@@ -2017,7 +2089,9 @@ document.addEventListener('contextmenu', e => e.preventDefault());
 
 // 心跳：2000ms，连续3次失败才判定断连
 setInterval(() => {
-  if (connectionOk) sendToESP('/web_rc/heartbeat', {t:4, ts:performance.now()});
+  if (heartbeatRequestPromise) return;
+  heartbeatRequestPromise = sendToESP('/web_rc/heartbeat', {t:4, ts:performance.now()})
+    .finally(() => { heartbeatRequestPromise = null; });
 }, 2000);
 </script>
 </body>

@@ -9,6 +9,8 @@ int main() {
     assert(policy.acquire(100, timeoutMs, "AAAABBBBCCCCDDDD", &changed));
     assert(changed);
     assert(policy.validateAndTouch("AAAABBBBCCCCDDDD", 200, timeoutMs));
+    assert(policy.validate("AAAABBBBCCCCDDDD", 201, timeoutMs) == WEB_RC_LEASE_VALID);
+    assert(policy.validate("1111222233334444", 201, timeoutMs) == WEB_RC_LEASE_IN_USE);
 
     bool secondChanged = false;
     // A newly opened page immediately replaces the active controller. The old
@@ -24,6 +26,7 @@ int main() {
     assert(!policy.validateAndTouch("1111222233334444", 601, timeoutMs));
     assert(policy.validateAndTouch("EEEEFFFFGGGGHHHH", 601, timeoutMs));
 
+    assert(policy.validate("EEEEFFFFGGGGHHHH", 10601, timeoutMs) == WEB_RC_LEASE_EXPIRED);
     assert(!policy.validateAndTouch("EEEEFFFFGGGGHHHH", 10601, timeoutMs));
     assert(policy.acquire(10601, timeoutMs, "1111222233334444", &secondChanged));
     assert(secondChanged);

@@ -1038,10 +1038,12 @@ static bool rejectWiFiMaintenanceWhileActive() {
 }
 
 // ------旧PCB印刷地址访问 :8080 → 301跳转到80端口；旧地址全部淘汰后可删除------------
-// 8080端口兼容重定向：堆指针，setupWebRC()中动态构造，BSS仅占4字节
-// ESP32-C3无旧用户，条件编译去除以避免单核上200ms自旋阻塞和额外socket占用
+// 8080端口兼容重定向：setupWebRC()中动态构造服务端；客户端按状态跨循环处理。
+// ESP32-C3无旧用户，条件编译去除以减少额外socket占用。
 #ifndef CONFIG_IDF_TARGET_ESP32C3
 static WiFiServer* redirectServer8080 = nullptr;
+static WiFiClient redirectClient8080;
+static uint32_t redirectClientAcceptedMs = 0;
 #endif
 // ------旧PCB印刷地址访问 :8080 → 301跳转到80端口；旧地址全部淘汰后可删除------------
 
@@ -1221,12 +1223,23 @@ static bool isWebRCEmergencyButtonOverride(const String &body) {
 static bool requireWebRCLease(const String *body = nullptr) {
     char token[WEB_RC_LEASE_TOKEN_CHARS + 1];
     const uint32_t now = millis();
-    if (!readWebRCLeaseToken(body, token, sizeof(token)) ||
-        !webRCLease.validateAndTouch(token, now, WEB_RC_TIMEOUT_MS)) {
+    if (!readWebRCLeaseToken(body, token, sizeof(token))) {
         webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"web_rc_lease_required\"}");
         return false;
     }
-    return true;
+    switch (webRCLease.validate(token, now, WEB_RC_TIMEOUT_MS)) {
+        case WEB_RC_LEASE_VALID:
+            return webRCLease.validateAndTouch(token, now, WEB_RC_TIMEOUT_MS);
+        case WEB_RC_LEASE_IN_USE:
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"web_rc_lease_in_use\"}");
+            return false;
+        case WEB_RC_LEASE_EXPIRED:
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"web_rc_lease_expired\"}");
+            return false;
+        default:
+            webRCServer.send(409, "application/json", "{\"ok\":0,\"error\":\"web_rc_lease_required\"}");
+            return false;
+    }
 }
 
 static bool requireWebRCStopToken(const String &body) {
@@ -1556,28 +1569,43 @@ bool isUsingWebRC() {
 
 // ------旧PCB印刷地址访问 :8080 → 301跳转到80端口；旧地址全部淘汰后可删除------------
 // 兼容旧遥控端口，处理8080端口的301重定向请求（WiFiServer原始TCP，手动解析HTTP）
-// ESP32-C3无旧用户，编译时完全去除，避免200ms自旋阻塞在单核上饿死WiFi任务
+// ESP32-C3无旧用户，编译时完全去除。等待首包时跨循环返回，不阻塞80端口。
 #ifndef CONFIG_IDF_TARGET_ESP32C3
 static void handleRedirect8080() {
     if (!redirectServer8080) return;
-    WiFiClient client = redirectServer8080->accept();
-    if (!client) return;
+    if (!redirectClient8080) {
+        redirectClient8080 = redirectServer8080->accept();
+        if (!redirectClient8080) return;
+        redirectClientAcceptedMs = millis();
+        redirectClient8080.setTimeout(20);
+        return;
+    }
+
+    if (!redirectClient8080.connected()) {
+        redirectClient8080.stop();
+        redirectClient8080 = WiFiClient();
+        return;
+    }
+    if (!redirectClient8080.available()) {
+        if ((uint32_t)(millis() - redirectClientAcceptedMs) >= 200) {
+            redirectClient8080.stop();
+            redirectClient8080 = WiFiClient();
+        }
+        return;
+    }
 
     String path = "/";
     String host = "";
-    unsigned long t0 = millis();
-    while (!client.available() && millis() - t0 < 200) {}
-
-    if (client.available()) {
+    if (redirectClient8080.available()) {
         // 解析请求行：GET /path HTTP/1.1
-        String reqLine = client.readStringUntil('\n');
+        String reqLine = redirectClient8080.readStringUntil('\n');
         int s1 = reqLine.indexOf(' ');
         int s2 = reqLine.indexOf(' ', s1 + 1);
         if (s1 >= 0 && s2 > s1) path = reqLine.substring(s1 + 1, s2);
 
         // 读取请求头，提取Host（去掉 :8080 端口部分）
-        while (client.available()) {
-            String line = client.readStringUntil('\n');
+        while (redirectClient8080.available()) {
+            String line = redirectClient8080.readStringUntil('\n');
             line.trim();
             if (line.length() == 0) break;
             if (line.startsWith("Host:") || line.startsWith("host:")) {
@@ -1589,11 +1617,12 @@ static void handleRedirect8080() {
         }
     }
 
-    client.print("HTTP/1.1 301 Moved Permanently\r\nLocation: http://");
-    client.print(host);
-    client.print(path);
-    client.print("\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-    client.stop();
+    redirectClient8080.print("HTTP/1.1 301 Moved Permanently\r\nLocation: http://");
+    redirectClient8080.print(host);
+    redirectClient8080.print(path);
+    redirectClient8080.print("\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+    redirectClient8080.stop();
+    redirectClient8080 = WiFiClient();
 }
 #endif
 // ------旧PCB印刷地址访问 :8080 → 301跳转到80端口；旧地址全部淘汰后可删除------------

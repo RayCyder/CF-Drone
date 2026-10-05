@@ -68,14 +68,38 @@ assert.match(source,
   /async function handleButton\(idx\)[\s\S]*idx===0&&!currentArmed[\s\S]*leftStick\.rawY=-100[\s\S]*if\(!await sendJoystickData\(\)\)[\s\S]*未发送解锁[\s\S]*sendButtonData\(idx, 1\)/,
   'arming explicitly sends and confirms zero throttle before the arm command');
 assert.match(source,
-  /function sendJoystickData\(\)[\s\S]*const request=sendToESP[\s\S]*lastSentValues = \{\.\.\.currentValues\};[\s\S]*packetStats\.sent\+\+;[\s\S]*return request;/,
-  'joystick send accounting remains reachable while returning the request result');
+  /function sendJoystickData\(\)[\s\S]*lastSentValues = values;[\s\S]*packetStats\.sent\+\+;[\s\S]*return joystickRequestPromise;/,
+  'joystick send accounting remains reachable while returning the serialized request');
 assert.match(source,
   /webRCStopToken = localStorage\.getItem\('cfDroneStopToken'\)[\s\S]*sessionStorage\.getItem\('cfDroneStopToken'\)/,
   'the flight continuity token survives an accidental page refresh or browser restart');
 assert.match(source,
   /web_rc_flight_takeover_forbidden[\s\S]*飞行中禁止其他页面抢占/,
   'the controller explains why a different page cannot take over in flight');
+assert.match(source,
+  /new URL\(raw, location\.href\)[\s\S]*url\.origin === location\.origin && flightRequestPaths\.has\(url\.pathname\)/,
+  'the armed-request filter normalizes relative and absolute request URLs');
+assert.match(source,
+  /nativeFetch\(`\$\{location\.protocol\}\/\/\$\{location\.hostname\}:82\/\$\{action\}/,
+  'emergency stop bypasses the page request filter on its dedicated port');
+assert.match(source,
+  /const CONTROL_REQUEST_TIMEOUT_MS = \d+;[\s\S]*function fetchWithTimeout\([\s\S]*controller\.abort\(\)/,
+  'control requests have a bounded browser-side timeout');
+assert.match(source,
+  /function recoverExpiredLease\([\s\S]*webRCLeaseToken = ''[\s\S]*webRCLeaseBlocked = false/,
+  'an expired lease is cleared without permanently blocking recovery');
+assert.match(source,
+  /web_rc_lease_in_use[\s\S]*handleLeaseConflict\('遥控控制权已被其他页面占用'/,
+  'only an explicit active-owner response is shown as occupied');
+assert.match(source,
+  /let joystickRequestPromise = null;[\s\S]*let joystickSendPending = false;[\s\S]*while \(joystickSendPending\)/,
+  'joystick requests are serialized and coalesce to the latest stick state');
+assert.match(source,
+  /let selfCheckRequestInFlight = false;[\s\S]*function loadSelfCheckStatus\(showLoading\)[\s\S]*if \(selfCheckRequestInFlight\) return/,
+  'status polling keeps at most one request in flight');
+assert.match(source,
+  /setInterval\(\(\) => \{[\s\S]*if \(heartbeatRequestPromise\) return;[\s\S]*sendToESP\('\/web_rc\/heartbeat'/,
+  'heartbeats continue probing after a temporary disconnect without accumulating');
 assert.match(source,
   /id="calibration-readiness"[\s\S]*陀螺静止校准、六面加速度计校准和机身水平校准/,
   'the preflight page has a dedicated calibration checklist');

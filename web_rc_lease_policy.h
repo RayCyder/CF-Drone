@@ -6,6 +6,13 @@
 
 #define WEB_RC_LEASE_TOKEN_CHARS 16
 
+enum WebRCLeaseValidation : uint8_t {
+    WEB_RC_LEASE_VALID = 0,
+    WEB_RC_LEASE_REQUIRED,
+    WEB_RC_LEASE_EXPIRED,
+    WEB_RC_LEASE_IN_USE,
+};
+
 struct WebRCLeasePolicy {
     char token[WEB_RC_LEASE_TOKEN_CHARS + 1] = {};
     uint32_t lastSeenMs = 0;
@@ -29,10 +36,19 @@ struct WebRCLeasePolicy {
     }
 
     bool validateAndTouch(const char *candidate, uint32_t nowMs, uint32_t timeoutMs) {
-        if (!candidate || !*candidate || !active(nowMs, timeoutMs)) return false;
-        if (strncmp(token, candidate, WEB_RC_LEASE_TOKEN_CHARS + 1) != 0) return false;
+        if (validate(candidate, nowMs, timeoutMs) != WEB_RC_LEASE_VALID) return false;
         lastSeenMs = nowMs;
         return true;
+    }
+
+    WebRCLeaseValidation validate(const char *candidate, uint32_t nowMs,
+                                  uint32_t timeoutMs) const {
+        if (!candidate || !*candidate || strlen(candidate) != WEB_RC_LEASE_TOKEN_CHARS)
+            return WEB_RC_LEASE_REQUIRED;
+        if (!active(nowMs, timeoutMs)) return WEB_RC_LEASE_EXPIRED;
+        if (strncmp(token, candidate, WEB_RC_LEASE_TOKEN_CHARS + 1) != 0)
+            return WEB_RC_LEASE_IN_USE;
+        return WEB_RC_LEASE_VALID;
     }
 };
 
