@@ -1003,6 +1003,7 @@ extern void scheduleWiFiRestart();
 extern const char *wifiConfigLastError();
 extern int getWiFiProfileCount();
 extern bool getWiFiProfileSsid(int index, char *destination, size_t capacity);
+extern bool connectSavedWiFiProfile(const char *ssid);
 extern bool removeWiFiProfile(const char *ssid);
 extern size_t getWiFiProfileStorageUsedBytes();
 extern size_t getWiFiProfileStorageTotalBytes();
@@ -1803,6 +1804,21 @@ void setupWebRC() {
         webRCServer.send(200, "application/json", apOnly
             ? "{\"ok\":1,\"message\":\"已删除最后一个网络；飞控即将重启并启用 Drone_WiFi，可通过 192.168.4.1 访问。\"}"
             : "{\"ok\":1,\"message\":\"已删除网络配置；飞控即将重启并连接剩余的优先网络。\"}");
+        scheduleWiFiRestart();
+    });
+    webRCServer.on("/wifi/connect", HTTP_POST, []() {
+        if (rejectWiFiMaintenanceWhileActive()) return;
+        const String ssid = webRCServer.arg("ssid");
+        if (!connectSavedWiFiProfile(ssid.c_str())) {
+            const char *reason = wifiConfigLastError();
+            String message = "切换失败（" + String(reason) + "）；飞控未重启。";
+            String json = "{\"ok\":0,\"reason\":" + wifiJsonQuote(reason) +
+                ",\"message\":" + wifiJsonQuote(message.c_str()) + "}";
+            webRCServer.send(500, "application/json", json);
+            return;
+        }
+        webRCServer.send(200, "application/json",
+            "{\"ok\":1,\"message\":\"已选择该网络并切换到 Wi-Fi 连接模式；飞控即将重启。\"}");
         scheduleWiFiRestart();
     });
     webRCServer.on("/wifi/mode", HTTP_POST, []() {

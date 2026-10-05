@@ -884,6 +884,26 @@ bool getWiFiProfileSsid(int index, char *destination, size_t capacity) {
 	return true;
 }
 
+bool connectSavedWiFiProfile(const char *ssid) {
+	strncpy(wifiSaveError, "none", sizeof(wifiSaveError));
+	if (!ssid || !*ssid) {
+		strncpy(wifiSaveError, "invalid_input", sizeof(wifiSaveError));
+		return false;
+	}
+	WifiProfileRecord profiles[WIFI_PROFILE_LIMIT] = {};
+	const uint8_t count = loadWifiProfiles(profiles);
+	for (uint8_t i = 0; i < count; ++i) {
+		char savedSsid[33] = {};
+		char savedPassword[64] = {};
+		wifiProfileStrings(profiles[i], savedSsid, sizeof(savedSsid),
+			savedPassword, sizeof(savedPassword));
+		if (strcmp(savedSsid, ssid) == 0)
+			return configWiFi(false, savedSsid, savedPassword);
+	}
+	strncpy(wifiSaveError, "profile_not_found", sizeof(wifiSaveError));
+	return false;
+}
+
 bool removeWiFiProfile(const char *ssid) {
 	extern bool armed;
 	extern bool motorTestActive;
