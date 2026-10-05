@@ -6,7 +6,9 @@ using portMUX_TYPE = int;
 #define portENTER_CRITICAL(mux) ((void)(mux))
 #define portEXIT_CRITICAL(mux) ((void)(mux))
 #define WEB_RC_ENABLED 1
+#ifndef WIFI_ENABLED
 #define WIFI_ENABLED 0
+#endif
 #include "../vector.h"
 #include "../quaternion.h"
 #include "../diagnostics.h"
@@ -29,6 +31,10 @@ uint32_t millis(){return nowMs;}
 uint32_t imuValidSampleAgeMs(uint32_t){return imuSampleValid?0:UINT32_MAX;}
 uint32_t micros(){return nowMs*1000;}
 bool webRCEnabled=false,useWebRC=false;
+#if WIFI_ENABLED
+bool wifiRestartQueued=false;
+bool wifiRestartPending(){return wifiRestartQueued;}
+#endif
 bool webRCFastStopReady(){return true;}
 bool localSequenceActive=false;
 bool isLocalSequenceRunning(){return localSequenceActive;}
@@ -136,6 +142,12 @@ int main(){
 	assert(!requestArm());
 	assert(motorCutoffClearCount==clearsBeforeBlockedArm);
 	controlThrottle=0.0f;
+#if WIFI_ENABLED
+	wifiRestartQueued=true;
+	assert(!requestArm());
+	assert(armBlockReason() != nullptr);
+	wifiRestartQueued=false;
+#endif
 	gyroBiasCalibrated=false;
 	assert(!requestArm());
 	assert(armBlockReason() != nullptr);
@@ -419,12 +431,19 @@ int main(){
     assert(mode==AUTO && isControlledLandingActive()); // unsupported ALTHOLD cannot take over
     webRCEnabled=useWebRC=false;
     const float landingThrust=thrustTarget;
-    assert(!canAcceptMavlinkManualControl());
+    assert(canAcceptMavlinkManualControl());
     for(int i=0;i<3;i++){nowMs+=50;submitAutoAttitudeTarget(cmd);}
     assert(isControlledLandingActive() && thrustTarget==landingThrust);
     updateDiagnostics(); assert(getActiveDiagnosticFaults() & DIAG_AUTO_TARGET_TIMEOUT);
-    assert(setFlightMode(STAB)); assert(!isControlledLandingActive());
-    disarm();
+    controlThrottle=.2f; controlRoll=controlPitch=controlYaw=0; controlMode=NAN;
+    for(uint32_t i=0;i<LANDING_MANUAL_TAKEOVER_HOLD_MS;i++){
+        ++nowMs; t+=.001; controlTime=t; markManualControlInput(CONTROL_SOURCE_MAVLINK_MANUAL); control();
+    }
+    assert(isControlledLandingActive() && mode==AUTO);
+    ++nowMs; t+=.001; controlTime=t; markManualControlInput(CONTROL_SOURCE_MAVLINK_MANUAL); control();
+    assert(!isControlledLandingActive() && mode==STAB);
+    assert(getCurrentControlSource()==CONTROL_SOURCE_MAVLINK_MANUAL);
+    disarm(); controlThrottle=0;
     // Fresh candidate packets must not keep an old applied command alive forever.
     setFlightMode(STAB); controlTime=0;
     for(int i=0;i<3;i++){nowMs+=50;submitAutoAttitudeTarget(cmd);}

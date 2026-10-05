@@ -1645,6 +1645,11 @@ void setupWebRC() {
     });
 
     webRCServer.on("/", HTTP_GET, []() {
+        if (armed || motorsActive()) {
+            webRCServer.sendHeader("Cache-Control", "no-store");
+            webRCServer.send_P(200, "text/html; charset=utf-8", webRCRecoveryHtml);
+            return;
+        }
         // send_P performs one large write for this 100+ KiB page and ignores
         // a short write. A truncated response leaves later JS functions
         // undefined in the browser. Send bounded pieces and account for every
@@ -2398,7 +2403,11 @@ void setupWebRC() {
 #endif
         const WebRCHoverThrottleReturn hoverReturn =
             computeWebRCHoverThrottleReturn(hoverThrottleInput(), webRCThrottleScale);
-        char json[928];
+        const uint64_t deviceMac = ESP.getEfuseMac();
+        char deviceId[13];
+        snprintf(deviceId, sizeof(deviceId), "%04X%08X",
+            (unsigned)((deviceMac >> 32) & 0xFFFFU), (unsigned)(deviceMac & 0xFFFFFFFFU));
+        char json[1088];
         const char *armReason = armBlockReason();
         const bool armReady = armed || !armReason;
         snprintf(json, sizeof(json),
@@ -2406,6 +2415,7 @@ void setupWebRC() {
             "\"voltage\":%.2f,\"throttle\":%.1f,\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,"
             "\"faults\":%lu,\"uptime_ms\":%lu,\"wifi_connected\":%s,\"wifi_mode\":\"%s\","
             "\"wifi_disconnects\":%lu,\"wifi_last_disconnect_ms\":%lu,"
+            "\"device_id\":\"%s\",\"firmware_build\":\"%s %s\","
             "\"stick_age_ms\":%ld,\"packet_age_ms\":%ld,\"http_idle_drops\":%lu,"
             "\"http_max_handle_us\":%lu,\"http_slow_handles\":%lu,"
             "\"http_rc_max_request_us\":%lu,\"http_rc_slow_requests\":%lu,"
@@ -2423,6 +2433,7 @@ void setupWebRC() {
             (unsigned long)getActiveDiagnosticFaults(), now,
             wifiConnected ? "true" : "false", wifiControlMode,
             (unsigned long)wifiDisconnects, (unsigned long)wifiLastDisconnectMs,
+            deviceId, __DATE__, __TIME__,
             stickUpdated ? (long)(now - lastStickUpdate) : -1L,
             updated ? (long)(now - lastUpdate) : -1L,
             (unsigned long)responsiveWebRCServer.idleDropCount(),

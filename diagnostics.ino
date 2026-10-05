@@ -642,12 +642,17 @@ static void printDiagnosticFaultSummaryLine() {
 void printDiagnosticsBrief() {
 	updateDiagnostics();
 	extern bool armed, imuOK, motorOutputsOK;
+	extern const char* armBlockReason();
 	extern float batteryVoltage;
+	const char *armReason = armBlockReason();
+	const bool armReady = armed || !armReason;
 	const uint32_t batteryMilliVolts = isfinite(batteryVoltage) && batteryVoltage > 0.0f
 		? (uint32_t)(batteryVoltage * 1000.0f) : 0;
-	print("PREFLIGHT armed=%u imu_ok=%u motor_ok=%u battery_mv=%lu faults=0x%08lx\n",
-		armed ? 1 : 0, imuOK ? 1 : 0, motorOutputsOK ? 1 : 0,
+	print("PREFLIGHT armed=%u arm_ready=%u imu_ok=%u motor_ok=%u battery_mv=%lu faults=0x%08lx\n",
+		armed ? 1 : 0, armReady ? 1 : 0, imuOK ? 1 : 0, motorOutputsOK ? 1 : 0,
 		(unsigned long)batteryMilliVolts, (unsigned long)getActiveDiagnosticFaults());
+	print("PREFLIGHT_REASON %s\n", armed ? "飞控已解锁" :
+		(armReason ? armReason : "当前解锁条件已满足"));
 }
 
 void printDiagnostics() {

@@ -8,6 +8,7 @@
 #include "diagnostics.h"
 #include "system_log.h"
 #include "control.h"
+#include "wifi_recovery_policy.h"
 
 extern bool isLevelCalibrationActive();
 extern bool parameterPersistencePending();
@@ -108,6 +109,7 @@ static ControlSource currentControlSource = CONTROL_SOURCE_NONE;
 static ControlSource latestManualControlSource = CONTROL_SOURCE_NONE;
 static uint32_t physicalRCManualInputMs = 0;
 static uint32_t mavlinkManualInputMs = 0;
+static uint32_t landingManualTakeoverStartedMs = 0;
 
 // ============== 软件配平参数 ==============
 // 用于补偿机械不对称（重心偏移、电机/桨叶推力差异、IMU 安装偏斜等）引起的固定方向漂移。
@@ -435,6 +437,11 @@ const char* armBlockReason() {
 	if (isAccelCalibrationActive()) return "加速度计校准正在运行";
 	if (isLevelCalibrationActive()) return "水平校准进行中或已保存安装角，重启飞控后才可解锁";
 	if (imuRotationRestartPending()) return "IMU 安装角已改变，重启飞控后才可解锁";
+	#if WIFI_ENABLED
+	extern bool wifiRestartPending();
+	if (WifiRecoveryPolicy::restartBlocksArming(wifiRestartPending()))
+		return "Wi-Fi 配置已更新，等待飞控重启，暂不可解锁";
+	#endif
 	extern bool safetyHardStopReady();
 	if (!safetyHardStopReady()) return "独立飞行安全停机任务未就绪，禁止解锁";
 	#if WEB_RC_ENABLED
@@ -506,6 +513,7 @@ void disarm(DisarmReason reason) {
 	extern void clearSafetyHardStopDeadlines();
 	clearSafetyHardStopDeadlines();
 	clearControlledLanding();
+	landingManualTakeoverStartedMs = 0;
 	thrustTarget = 0.0f;
 	memset(motors, 0, sizeof(float) * 4);
 	torqueTarget.invalidate();
@@ -599,7 +607,6 @@ void interpretControls() {
 	} // Local sequence values must not trigger RC mode changes or arm gestures.
 #endif
 
-	static uint32_t landingManualTakeoverStartedMs = 0;
 	if (isControlledLandingActive()) {
 		const uint32_t nowMs = millis();
 		const ControlSource takeoverSource = selectedManualControlSource();

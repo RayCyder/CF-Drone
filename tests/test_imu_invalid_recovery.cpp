@@ -170,7 +170,9 @@ int main() {
 	assert(!imuSampleValid);
 	assert(getActiveDiagnosticFaults() & DIAG_IMU_INVALID);
 	estimate();
-	assert(!armed);
+	// A single bad frame keeps the last finite estimate. The safety layer owns
+	// the 100 ms outage debounce and bounded landing transition.
+	assert(armed);
 	assertQuaternionNear(attitude, attitudeAfterGood);
 	assertVectorNear(rates, ratesAfterGood);
 

@@ -4,4 +4,5 @@
 #include "web_rc_html_wifi.h"
 #include "web_rc_html_telemetry.h"
 #include "web_rc_html_controller.h"
+#include "web_rc_recovery_html.h"
 #endif

@@ -555,8 +555,10 @@ void serviceWiFi() {
 	// request. The AP and HTTP/Web RC remain available while armed; DNS portal
 	// work can safely wait until disarm instead of stalling the control loop.
 	if (configPortalActive && !armed) wifiDnsServer.processNextRequest();
-	if (WifiRecoveryPolicy::restartReady(wifiRestartScheduled,
-		(int32_t)(now - wifiRestartAtMs) >= 0, armed, motorsActive())) {
+	const bool restartScheduled = __atomic_load_n(&wifiRestartScheduled, __ATOMIC_ACQUIRE);
+	const uint32_t restartAtMs = __atomic_load_n(&wifiRestartAtMs, __ATOMIC_RELAXED);
+	if (WifiRecoveryPolicy::restartReady(restartScheduled,
+		(int32_t)(now - restartAtMs) >= 0, armed, motorsActive())) {
 		print("WIFI_STATE state=RESTARTING reason=credentials_saved\n");
 		recordSystemLogEvent("WIFI", "state=RESTARTING reason=credentials_saved");
 		ESP.restart();
@@ -695,9 +697,13 @@ uint32_t getWiFiLastDisconnectMs() {
 }
 
 void scheduleWiFiRestart() {
-	wifiRestartScheduled = true;
-	wifiRestartAtMs = millis() + WIFI_RESTART_DELAY_MS;
+	__atomic_store_n(&wifiRestartAtMs, millis() + WIFI_RESTART_DELAY_MS, __ATOMIC_RELAXED);
+	__atomic_store_n(&wifiRestartScheduled, true, __ATOMIC_RELEASE);
 	recordSystemLogEvent("WIFI", "state=RESTART_SCHEDULED delay_ms=1500");
+}
+
+bool wifiRestartPending() {
+	return __atomic_load_n(&wifiRestartScheduled, __ATOMIC_ACQUIRE);
 }
 
 bool isWiFiConfigPortalActive() {

@@ -15,4 +15,14 @@ assert "redirectClientAcceptedMs = millis();" in handler
 assert "millis() - redirectClientAcceptedMs" in handler
 assert "vTaskDelay" not in handler
 
+portal_policy_start = source.index("static bool rejectFlightApiInConfigPortal()")
+portal_policy_end = source.index("// ------旧PCB印刷地址访问", portal_policy_start)
+portal_policy = source[portal_policy_start:portal_policy_end]
+assert "return false;" in portal_policy
+assert "WifiRecoveryPolicy::maintenanceAllowed(armed, motorsActive())" in portal_policy
+
+assert 'webRCServer.on("/", HTTP_GET' in source
+assert 'webRCServer.on("/web_rc",' in source
+assert 'webRCServer.on("/web_rc/heartbeat",' in source
+
 print("web HTTP responsiveness contracts passed")

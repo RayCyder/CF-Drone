@@ -101,11 +101,21 @@ assert.match(source,
   /setInterval\(\(\) => \{[\s\S]*if \(heartbeatRequestPromise\) return;[\s\S]*sendToESP\('\/web_rc\/heartbeat'/,
   'heartbeats continue probing after a temporary disconnect without accumulating');
 assert.match(source,
+  /function releaseControlsForPageExit\(\)[\s\S]*rightStick=\{x:0,y:0,rawX:0,rawY:0\}[\s\S]*leftStick\.rawY=hoverThrottleRaw[\s\S]*sendJoystickData\(\)[\s\S]*stickInputActivated=false/,
+  'leaving the page sends neutral attitude and hover throttle once, then stops stale stick renewal');
+for (const eventName of ['visibilitychange', 'pagehide', 'blur']) {
+  assert.ok(source.includes(`addEventListener('${eventName}'`),
+    `the controller handles ${eventName} lifecycle loss`);
+}
+assert.match(source,
   /id="calibration-readiness"[\s\S]*陀螺静止校准、六面加速度计校准和机身水平校准/,
   'the preflight page has a dedicated calibration checklist');
 assert.match(source,
   /gyro_bias_ready[\s\S]*accel_calibration_stored[\s\S]*level_calibration_stored/,
   'the preflight checklist renders all required calibration states');
+assert.match(source,
+  /DESCENT_CALIBRATION_MAX_AGE_MS = 30\*24\*60\*60\*1000[\s\S]*device_id===currentDeviceId[\s\S]*firmware_build===currentFirmwareBuild[\s\S]*point\.airframe===config\.airframe[\s\S]*point\.prop===config\.prop/,
+  'descent calibration recommendations reject expired or mismatched device, build, airframe, and propeller data');
 assert.match(source,
   /PID 查看与调整：[\s\S]*p CTL_R_RATE_P[\s\S]*p CTL_R_RATE_P 0\.06/,
   'the Web debug console explains how to inspect and change PID parameters');

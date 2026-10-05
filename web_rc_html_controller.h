@@ -384,7 +384,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <div class="calibration-card"><strong>飞手手动下降，飞控只记录</strong><p>仅在自稳模式且已解锁时开始记录。开始后请关闭此页回到摇杆操作；可从顶部“停止标定”结束采集。单次最多 30 秒，记录每秒约 20 个样本。该功能不会自动改变飞行控制。</p><small>完成后输入这段记录对应的实测下降高度差，页面用高度差 ÷ 记录时长计算平均下降速度。IMU 不会提供可靠的垂直速度或离地高度。</small></div>
       <div id="descent-calibration-status" class="route-status" role="status">正在读取标定状态…</div>
       <div class="calibration-actions"><button id="descent-calibration-start" class="primary" onclick="startDescentCalibrationCapture()">开始记录当前手动下降</button><button id="descent-calibration-stop" onclick="stopDescentCalibrationCapture()">停止记录</button><button id="descent-calibration-download" onclick="downloadDescentCalibrationCsv()">下载原始记录</button></div>
-      <div class="calibration-card"><strong>记录测量结果</strong><div class="calibration-fields"><label for="descent-drop-distance">实测高度差（米）</label><input id="descent-drop-distance" type="number" min="0.1" max="100" step="0.1" placeholder="例如 2.0"><button onclick="addDescentCalibrationPoint()">添加实测点</button></div><p id="descent-calibration-measurement" class="route-status">需要一段有效且稳定的标定记录。</p></div>
+      <div class="calibration-card"><strong>记录测量结果</strong><div class="calibration-fields"><label for="descent-airframe-id">机体标识</label><input id="descent-airframe-id" maxlength="32" placeholder="例如 frame-a"><label for="descent-prop-id">桨叶配置</label><input id="descent-prop-id" maxlength="32" placeholder="例如 55mm-2blade"><label for="descent-drop-distance">实测高度差（米）</label><input id="descent-drop-distance" type="number" min="0.1" max="100" step="0.1" placeholder="例如 2.0"><button onclick="addDescentCalibrationPoint()">添加实测点</button></div><p id="descent-calibration-measurement" class="route-status">需要一段有效且稳定的标定记录。标定点仅用于相同设备、固件、机体和桨叶配置，并在 30 天后过期。</p></div>
       <div class="calibration-card"><strong>实测点与推力建议</strong><div id="descent-calibration-points" class="calibration-points">此浏览器还没有保存实测点。</div><div class="calibration-fields"><label for="descent-target-speed">期望最大下降速度（米/秒）</label><input id="descent-target-speed" type="number" min="0.05" max="5" step="0.05" placeholder="输入目标"><button onclick="recommendDescentCalibrationPoint()">查找实测点</button></div><p id="descent-calibration-recommendation" class="route-status">只会推荐速度不超过目标值的实测点；不会插值或外推。</p><div class="calibration-actions"><button id="descent-calibration-apply" class="primary" onclick="applyDescentCalibrationRecommendation()" disabled>确认保存下降推力</button><button onclick="clearDescentCalibrationPoints()">清除此浏览器的实测点</button></div></div>
       <div class="calibration-card"><strong>能力边界</strong><p>这是经验推力标定，不是自动着陆。迫降仍是定推力下降；飞控没有高度、垂直速度或触地反馈，不能据此保证下降速度或避免撞地。飞手必须保持接管能力，并在触地后明确上锁。电池、载荷、螺旋桨、风和地面效应变化都会影响结果。</p></div>
     </div>
@@ -561,7 +561,10 @@ let descentCalibrationTimer = null;
 let vibrationCalibrationTimer = null;
 let descentCalibrationRecommendation = null;
 let descentCalibrationLatestStatus = null;
-const DESCENT_CALIBRATION_POINTS_KEY = 'cfDroneDescentCalibrationPointsV1';
+let currentDeviceId='',currentFirmwareBuild='';
+const DESCENT_CALIBRATION_POINTS_KEY = 'cfDroneDescentCalibrationPointsV2';
+const DESCENT_CALIBRATION_CONFIG_KEY = 'cfDroneDescentCalibrationConfigV1';
+const DESCENT_CALIBRATION_MAX_AGE_MS = 30*24*60*60*1000;
 let flightRouteRunning = false;
 let routeStarting = false;
 let routeHold = false;
@@ -816,6 +819,7 @@ function handleDescentCalibrationEntry(){
 }
 function openDescentCalibrationPage(){
   const page=document.getElementById('descent-calibration-page');page.style.display='block';page.setAttribute('aria-hidden','false');
+  loadDescentCalibrationConfig();
   renderDescentCalibrationPoints();refreshDescentCalibrationStatus();
 }
 function closeDescentCalibrationPage(){
@@ -872,28 +876,52 @@ async function stopDescentCalibrationCapture(){
 }
 function readDescentCalibrationPoints(){try{const value=JSON.parse(localStorage.getItem(DESCENT_CALIBRATION_POINTS_KEY)||'[]');return Array.isArray(value)?value:[];}catch(_){return [];}}
 function saveDescentCalibrationPoints(points){try{localStorage.setItem(DESCENT_CALIBRATION_POINTS_KEY,JSON.stringify(points.slice(-12)));}catch(_){throw new Error('浏览器无法保存标定点');}}
+function loadDescentCalibrationConfig(){
+  try{const value=JSON.parse(localStorage.getItem(DESCENT_CALIBRATION_CONFIG_KEY)||'{}');document.getElementById('descent-airframe-id').value=value.airframe||'';document.getElementById('descent-prop-id').value=value.prop||'';}catch(_){}
+}
+function readDescentCalibrationConfig(){
+  const airframe=document.getElementById('descent-airframe-id').value.trim();
+  const prop=document.getElementById('descent-prop-id').value.trim();
+  if(!airframe||!prop)throw new Error('请填写机体标识和桨叶配置');
+  if(airframe.length>32||prop.length>32||/[<>\x00-\x1f]/.test(airframe)||/[<>\x00-\x1f]/.test(prop))throw new Error('机体和桨叶标识不能超过 32 个字符或包含控制字符和尖括号');
+  try{localStorage.setItem(DESCENT_CALIBRATION_CONFIG_KEY,JSON.stringify({airframe,prop}));}catch(_){throw new Error('浏览器无法保存机体配置');}
+  return {airframe,prop};
+}
+function descentPointMatch(point,config){
+  const age=Date.now()-Number(point.at);
+  return Number.isFinite(age)&&age>=0&&age<=DESCENT_CALIBRATION_MAX_AGE_MS&&point.device_id===currentDeviceId&&point.firmware_build===currentFirmwareBuild&&point.airframe===config.airframe&&point.prop===config.prop;
+}
 function renderDescentCalibrationPoints(){
   const points=readDescentCalibrationPoints();const root=document.getElementById('descent-calibration-points');
-  root.innerHTML=points.length?points.map((point,index)=>`<div>点 ${index+1}：${Number(point.speed).toFixed(2)} m/s，推力 ${Number(point.thrust).toFixed(2)}，电池 ${Number(point.battery).toFixed(2)} V，${new Date(point.at).toLocaleString()}</div>`).join(''):'此浏览器还没有保存实测点。';
+  let config=null;try{config=readDescentCalibrationConfig();}catch(_){}
+  root.innerHTML=points.length?points.map((point,index)=>`<div>点 ${index+1}：${Number(point.speed).toFixed(2)} m/s，推力 ${Number(point.thrust).toFixed(2)}，电池 ${Number(point.battery).toFixed(2)} V，${new Date(point.at).toLocaleString()}；${config&&descentPointMatch(point,config)?'当前配置可用':'设备、固件、机体、桨叶不匹配或已过期'}</div>`).join(''):'此浏览器还没有保存实测点。';
 }
 async function addDescentCalibrationPoint(){
   const distance=Number(document.getElementById('descent-drop-distance').value);
   if(!Number.isFinite(distance)||distance<0.1||distance>100){showToast('请输入 0.1 到 100 米之间的实测高度差');return;}
   try{
-    const response=await fetch('/descent-calibration/status',{cache:'no-store'});const data=await response.json();
+    const config=readDescentCalibrationConfig();
+    const [response,identityResponse]=await Promise.all([fetch('/descent-calibration/status',{cache:'no-store'}),fetch('/web_rc/status',{cache:'no-store'})]);
+    const data=await response.json();const identity=await identityResponse.json();
     if(!response.ok||!data.usable)throw new Error('当前记录不满足质量条件');
+    if(!identityResponse.ok||!identity.device_id||!identity.firmware_build)throw new Error('无法确认当前设备和固件身份');
+    currentDeviceId=String(identity.device_id);currentFirmwareBuild=String(identity.firmware_build);
     const duration=Number(data.duration_ms)/1000;const speed=distance/duration;
     if(!Number.isFinite(speed)||speed<=0||speed>5)throw new Error('计算速度超出 0 到 5 m/s 范围，请检查高度差和记录区间');
-    const points=readDescentCalibrationPoints();points.push({speed,thrust:Number(data.median_thrust),battery:Number(data.mean_battery_v),tilt:Number(data.max_tilt_deg),at:Date.now()});
+    const points=readDescentCalibrationPoints();points.push({speed,thrust:Number(data.median_thrust),battery:Number(data.mean_battery_v),tilt:Number(data.max_tilt_deg),at:Date.now(),device_id:currentDeviceId,firmware_build:currentFirmwareBuild,airframe:config.airframe,prop:config.prop});
     saveDescentCalibrationPoints(points);renderDescentCalibrationPoints();
     document.getElementById('descent-calibration-recommendation').textContent=`已保存实测点：平均下降速度 ${speed.toFixed(2)} m/s，对应推力 ${Number(data.median_thrust).toFixed(2)}。`;
   }catch(error){showToast(error.message||'无法添加实测点');}
 }
-function recommendDescentCalibrationPoint(){
+async function recommendDescentCalibrationPoint(){
   const target=Number(document.getElementById('descent-target-speed').value);
   if(!Number.isFinite(target)||target<0.05||target>5){showToast('请输入 0.05 到 5 m/s 的目标最大下降速度');return;}
-  const candidates=readDescentCalibrationPoints().filter(point=>Number.isFinite(Number(point.speed))&&Number(point.speed)<=target);
-  if(!candidates.length){descentCalibrationRecommendation=null;document.getElementById('descent-calibration-recommendation').textContent='没有速度不超过目标值的实测点；请补充更慢的实测下降数据。';refreshDescentCalibrationSaveState();return;}
+  let config;try{config=readDescentCalibrationConfig();}catch(error){showToast(error.message);return;}
+  if(!currentDeviceId||!currentFirmwareBuild){
+    try{const response=await fetch('/web_rc/status',{cache:'no-store'});const identity=await response.json();if(!response.ok||!identity.device_id||!identity.firmware_build)throw new Error();currentDeviceId=String(identity.device_id);currentFirmwareBuild=String(identity.firmware_build);}catch(_){showToast('无法确认当前设备和固件身份');return;}
+  }
+  const candidates=readDescentCalibrationPoints().filter(point=>Number.isFinite(Number(point.speed))&&Number(point.speed)<=target&&descentPointMatch(point,config));
+  if(!candidates.length){descentCalibrationRecommendation=null;document.getElementById('descent-calibration-recommendation').textContent='当前设备、固件、机体和桨叶配置没有未过期且速度不超过目标值的实测点。';refreshDescentCalibrationSaveState();return;}
   candidates.sort((a,b)=>Number(b.speed)-Number(a.speed));descentCalibrationRecommendation=candidates[0];
   document.getElementById('descent-calibration-recommendation').textContent=`推荐已测点：${Number(descentCalibrationRecommendation.speed).toFixed(2)} m/s，对应 SF_DESCEND_THRUST=${Number(descentCalibrationRecommendation.thrust).toFixed(2)}。不会外推。`;
   refreshDescentCalibrationSaveState();
@@ -1352,6 +1380,18 @@ function handlePointerEnd(e, side) {
   }
 }
 
+function releaseControlsForPageExit() {
+  if (!stickInputActivated) return;
+  touches.clear();
+  leftThrottleReturnGeneration++;
+  rightStick={x:0,y:0,rawX:0,rawY:0};
+  leftStick.rawX=0;
+  leftStick.rawY=hoverThrottleRaw;
+  processJoystickInput();
+  sendJoystickData();
+  stickInputActivated=false;
+}
+
 function returnLeftStickToHover(){
   const generation=++leftThrottleReturnGeneration;
   const startRawY=leftStick.rawY;
@@ -1645,6 +1685,8 @@ function loadSelfCheckStatus(showLoading) {
       document.getElementById('hover-throttle-label').textContent=Math.round(bounded);
     }
     if (typeof data.armed === 'boolean') setArmedState(data.armed);
+    if (data.device_id) currentDeviceId=String(data.device_id);
+    if (data.firmware_build) currentFirmwareBuild=String(data.firmware_build);
     if (typeof data.wifi_mode === 'string') updateWifiModeButton(data.wifi_mode);
     consecutiveFails = 0;
     updateConnectionStatus(true);
@@ -2086,6 +2128,9 @@ function runConsoleCommand(command){
 /*======================== 事件绑定 ========================*/
 document.addEventListener('DOMContentLoaded', init);
 document.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseControlsForPageExit(); });
+window.addEventListener('pagehide', releaseControlsForPageExit);
+window.addEventListener('blur', releaseControlsForPageExit);
 
 // 心跳：2000ms，连续3次失败才判定断连
 setInterval(() => {

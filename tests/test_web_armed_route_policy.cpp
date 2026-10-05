@@ -25,8 +25,7 @@ int main() {
     assert(!webArmedRouteAllowed("/logs.csv", true, false));
     assert(!webArmedRouteAllowed("/diag/trace.csv", true, false));
     assert(!webArmedRouteAllowed("/route/upload", false, true));
-    assert(!webArmedRouteAllowed("/route/stop", false, true));
-    assert(!webArmedRouteAllowed("/route/start", false, true));
+    assert(!webArmedRouteAllowed("/route/plan", true, false));
     assert(!webArmedRouteAllowed("/level-calibration/apply", false, true));
     assert(!webArmedRouteAllowed(nullptr, true, false));
 }
