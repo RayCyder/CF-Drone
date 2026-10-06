@@ -5,3 +5,4 @@
 #include "drivers/invensense_imu.cpp"
 #include "drivers/SBUS.cpp"
 #include "drivers/external_sensors.cpp"
+#include "drivers/supplementary_sensor_probe.cpp"

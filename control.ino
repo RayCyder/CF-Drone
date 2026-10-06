@@ -9,6 +9,7 @@
 #include "system_log.h"
 #include "control.h"
 #include "wifi_recovery_policy.h"
+#include "vertical_flight.h"
 
 extern bool isLevelCalibrationActive();
 extern bool parameterPersistencePending();
@@ -282,7 +283,7 @@ static void markAutoTargetApplied() {
 
 bool isSupportedFlightMode(int requestedMode) {
 	return requestedMode == RAW || requestedMode == ACRO ||
-		requestedMode == STAB || requestedMode == AUTO;
+		requestedMode == STAB || requestedMode == ALTHOLD || requestedMode == AUTO;
 }
 
 static bool applyAutoTarget() {
@@ -322,6 +323,10 @@ static bool applyAutoTarget() {
 
 bool setFlightMode(int requestedMode) {
 	if (!isSupportedFlightMode(requestedMode)) return false;
+	// ALTHOLD is a flying-mode handoff. Entering it while disarmed would make
+	// the first armed frame jump from idle to the hover feed-forward thrust.
+	if (requestedMode == ALTHOLD &&
+		(!armed || thrustTarget <= motThrMin || !verticalFlightHealthy())) return false;
 	#if WEB_RC_ENABLED
 	extern bool isLocalSequenceReadyForAuto();
 	const bool localAutoReady = requestedMode == AUTO && isLocalSequenceReadyForAuto();
@@ -347,6 +352,8 @@ bool setFlightMode(int requestedMode) {
 
 	if (mode == requestedMode) return true;
 
+	leaveAltitudeHold();
+	if (requestedMode != AUTO) clearRouteNavigationTarget();
 	mode = requestedMode;
 	resetAllPids();
 	resetControlTargets();
@@ -521,6 +528,8 @@ void disarm(DisarmReason reason) {
 	extern void clearSafetyHardStopDeadlines();
 	clearSafetyHardStopDeadlines();
 	clearControlledLanding();
+	leaveAltitudeHold();
+	clearRouteNavigationTarget();
 	landingManualTakeoverStartedMs = 0;
 	thrustTarget = 0.0f;
 	memset(motors, 0, sizeof(float) * 4);
@@ -535,6 +544,28 @@ void control() {
 	interpretWebRC();
 #endif
 	failsafe();
+	if (!isControlledLandingActive() && armed) {
+		if (mode == ALTHOLD) {
+			if (!applyAltitudeHoldControl(controlThrottle, hoverThrottleInput(),
+				hoverThrustTarget(), thrustTarget)) {
+				setFlightMode(STAB);
+				#if WEB_RC_ENABLED
+				setWebRCWarn("高度估计失效，已退出定高并切回自稳");
+				#endif
+			}
+		}
+		#if WEB_RC_ENABLED
+		else if (mode == AUTO && isLocalSequenceRunning()) {
+			float routeAltitude = 0.0f, routeHeading = 0.0f;
+			if (routeNavigationTarget(routeAltitude, routeHeading) &&
+				!applyRouteAltitudeControl(hoverThrustTarget(), thrustTarget)) {
+				clearRouteNavigationTarget();
+				descend();
+				setWebRCWarn("航线高度估计失效，已转入迫降");
+			}
+		}
+		#endif
+	}
 	controlAttitude();
 	controlRates();
 	controlTorque();
@@ -559,10 +590,9 @@ void interpretControls() {
 		else if (controlMode <= 0.75f) controlModeSlot = 1;
 		else controlModeSlot = 2;
 	}
-	if (controlModeSlot >= 0 && controlModeSlot != lastControlModeSlot) {
-		int requestedMode = flightModes[controlModeSlot];
-		if (requestedMode == ALTHOLD) requestedMode = STAB;
-		setFlightMode(requestedMode);
+		if (controlModeSlot >= 0 && controlModeSlot != lastControlModeSlot) {
+			int requestedMode = flightModes[controlModeSlot];
+			setFlightMode(requestedMode);
 		lastControlModeSlot = controlModeSlot;
 	}
 
@@ -658,9 +688,13 @@ void interpretControls() {
 		thrustTarget = mapf(controlThrottle, 0.05f, 1.0f, motThrMin, motThrMax);
 	}
 
-	if (mode == STAB || (mode == AUTO && localSequenceRunning)) {
-		float yawTarget = attitudeTarget.getYaw();
-		if (!armed || invalid(yawTarget) || controlYaw != 0) yawTarget = attitude.getYaw(); // reset yaw target
+	if (mode == STAB || mode == ALTHOLD || (mode == AUTO && localSequenceRunning)) {
+			float yawTarget = attitudeTarget.getYaw();
+			float routeAltitude = 0.0f, routeHeading = 0.0f;
+			const bool routeHeadingActive = mode == AUTO && localSequenceRunning &&
+				routeNavigationTarget(routeAltitude, routeHeading);
+			if (routeHeadingActive) yawTarget = routeHeading;
+			else if (!armed || invalid(yawTarget) || controlYaw != 0) yawTarget = attitude.getYaw(); // reset yaw target
 		// trimRoll/trimPitch 叠加到摇杆指令上，补偿机械不对称引起的固定漂移
 		// 调整方式见变量声明处注释，或通过 CLI: set CTL_TRIM_ROLL / CTL_TRIM_PITCH
 		attitudeTarget = Quaternion::fromEuler(Vector(controlRoll * tiltMax + trimRoll, controlPitch * tiltMax + trimPitch, yawTarget));
@@ -702,7 +736,11 @@ void controlAttitude() {
 	#else
 	const bool localSequenceRunning = false;
 	#endif
-	if (mode == STAB || (mode == AUTO && localSequenceRunning)) {
+		float routeAltitude = 0.0f, routeHeading = 0.0f;
+		const bool routeHeadingActive = mode == AUTO && localSequenceRunning &&
+			routeNavigationTarget(routeAltitude, routeHeading);
+		if (mode == STAB || mode == ALTHOLD ||
+			(mode == AUTO && localSequenceRunning && !routeHeadingActive)) {
 		// There is no magnetometer heading correction in this estimator, so
 		// STAB's integrated yaw drifts under gyro bias/vibration. Command yaw
 		// rate from the pilot; do not turn that unobservable drift into torque.
@@ -870,9 +908,10 @@ void interpretWebRC() {
 		setFlightMode(ACRO);
 	}
 
-	// 按钮8保留给ALTHOLD；当前六轴硬件不支持，入口只告警，不切模式。
+	// 按钮8：定高。准入要求垂直估计器已连续获得可信高度观测。
 	if (risingEdge & 0x0100) {
-		setWebRCWarn("定高模式暂不支持");
+		if (setFlightMode(ALTHOLD)) clearWebRCWarn();
+		else setWebRCWarn("定高模式未进入：等待气压/测距与IMU融合稳定");
 	}
 
 	// 按钮9：已上传的单条序列进入 AUTO 后自动启动。

@@ -347,7 +347,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
       <div id="console-panel" class="console-panel">
     <div class="console-tools">
       <div class="console-tools-row"><strong>调试工具</strong><button class="primary" onclick="openVibrationCalibrationFromConsole()">电机扰动检测</button><button class="primary" onclick="startAccelCalibrationFromConsole()">六面加速度计校准</button><button class="primary" onclick="openLevelCalibrationFromConsole()">机身水平校准</button></div>
-      <div class="console-tools-row"><strong>常用命令</strong><button onclick="runConsoleCommand('diag brief')">快速预检</button><button onclick="runConsoleCommand('diag')">完整诊断</button><button onclick="runConsoleCommand('imu')">IMU</button><button onclick="runConsoleCommand('ps')">姿态</button><button onclick="runConsoleCommand('p CTL_TRIM_ROLL')">横滚配平值</button><button onclick="runConsoleCommand('p CTL_TRIM_PITCH')">俯仰配平值</button><button onclick="runConsoleCommand('rc')">遥控输入</button><button onclick="runConsoleCommand('mot')">电机输出</button><button onclick="runConsoleCommand('wifi')">Wi-Fi</button><button onclick="runConsoleCommand('time')">循环时间</button><button onclick="runConsoleCommand('sys')">系统任务</button><button onclick="runConsoleCommand('log status')">日志状态</button><button onclick="runConsoleCommand('p')">参数列表</button><button onclick="runConsoleCommand('help')">命令帮助</button><button onclick="restartFromConsole()">重启</button></div>
+      <div class="console-tools-row"><strong>常用命令</strong><button onclick="runConsoleCommand('diag brief')">快速预检</button><button onclick="runConsoleCommand('diag')">完整诊断</button><button onclick="runConsoleCommand('imu')">IMU</button><button onclick="runConsoleCommand('sensors')">扩展传感器</button><button onclick="runConsoleCommand('nav')">融合导航</button><button onclick="runConsoleCommand('ps')">姿态</button><button onclick="runConsoleCommand('p CTL_TRIM_ROLL')">横滚配平值</button><button onclick="runConsoleCommand('p CTL_TRIM_PITCH')">俯仰配平值</button><button onclick="runConsoleCommand('rc')">遥控输入</button><button onclick="runConsoleCommand('mot')">电机输出</button><button onclick="runConsoleCommand('wifi')">Wi-Fi</button><button onclick="runConsoleCommand('time')">循环时间</button><button onclick="runConsoleCommand('sys')">系统任务</button><button onclick="runConsoleCommand('log status')">日志状态</button><button onclick="runConsoleCommand('p')">参数列表</button><button onclick="runConsoleCommand('help')">命令帮助</button><button onclick="restartFromConsole()">重启</button></div>
       <div class="console-tools-note">磁力计为可选传感器；未安装磁力计仍可进行六面加速度计校准和机身水平校准，仅磁航向与 magcal 不可用。机身静置水平但姿态不为 0°：使用“机身水平校准”修正 IMU 安装角。只有实际飞行松杆后持续漂移时，才调整 CTL_TRIM_ROLL / CTL_TRIM_PITCH。</div>
       <div class="console-tools-note"><strong>PID 调整：</strong>使用顶部“PID”按钮集中修改 Roll、Pitch、Yaw 的内环 P/I/D；控制台“参数列表”仍可用于核对全部参数。</div>
       <div id="console-status" class="console-status" role="status">打开后将主动确认飞控处于上锁状态。</div>
@@ -413,6 +413,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
         <strong>正在检查起飞前标定…</strong>
         <small>检查陀螺静止校准、六面加速度计校准和机身水平校准。</small>
       </div>
+      <div id="expansion-probe-status" class="diagnostic-summary offline">等待光流与测距探测状态。</div>
       <div id="barometer-status" class="diagnostic-summary offline">
         <strong>正在读取气压高度保护…</strong>
         <small>气压计为可选传感器，不影响基础手动解锁。</small>
@@ -433,7 +434,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
   <section id="route-page" class="route-page" aria-hidden="true">
     <div class="route-shell">
       <div class="diagnostic-top"><h2>相对航线（遥控输出序列）</h2><div class="diagnostic-actions"><button onclick="closeRoutePage()">返回遥控器</button></div></div>
-      <p class="route-intro">这是按时间回放遥控输入，不是坐标航点。正常完成或异常中断时，飞控可能转入以定推力为主体的下降；可用的气压高度只会对过快下降做有限保护，不能定高或判断触地。手动接管会切回自稳，飞手需保持接管能力并在触地后上锁。</p>
+	      <p class="route-intro">V2 录制会把板端融合高度与相对航向写入关键段；回放时高度与相对航向闭环，横滚/俯仰仍按录制输入执行。光流水平位置当前只记录诊断，完成安装方向和尺度标定前不会直接控制水平航迹。手动接管会切回自稳。</p>
       <div class="route-state-card" aria-live="polite"><strong>当前飞控状态</strong><div class="route-status" id="route-status">正在读取飞控状态…</div><div class="route-status" id="route-message" role="status">当前内容尚未上传；上传不会解锁或启动。</div></div>
 
       <section class="route-step" aria-labelledby="route-step-edit-title">
@@ -441,7 +442,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
         <p class="route-step-note">可直接操作摇杆录制，也可在下方编辑每段遥控输入。</p>
         <div class="route-recorder"><div id="route-record-status" class="route-recorder-status">录制关闭；只在浏览器本地采样当前摇杆输出。</div><div class="route-recorder-actions"><button id="route-record-start" class="record" onclick="startRouteRecording()">开始录制</button><button id="route-record-stop" class="stop" onclick="stopRouteRecording('手动停止录制。')" disabled>停止录制</button></div></div>
         <textarea id="route-editor" class="route-editor" spellcheck="false" aria-label="开环控制序列"></textarea>
-        <details class="route-details"><summary>序列格式与录制规则</summary><p class="route-help">每行按顺序填写：持续秒数、油门百分比、横滚输入、俯仰输入、偏航输入。持续时间 0.1–600 秒，油门 0–100%，其余输入 -100–100（不是角度）。最多 128 段、总时长 30 分钟、正文 4096 字节；空行和 # 注释不执行。</p><p class="route-help">上锁时可在浏览器本地录制；飞行中录制需要处于自稳模式并由当前页面持有遥控控制权。停止录制后会裁掉开头低于 6% 油门死区的等待段，并将结果写入编辑框及浏览器。录制序列按每 100 ms 采样的遥控值回放；手写序列仍按原有限速执行。</p></details>
+	        <details class="route-details"><summary>序列格式与录制规则</summary><p class="route-help">V1 每行 5 列：持续秒数、油门%、横滚、俯仰、偏航。V2 每行再增加融合相对高度 m、相对航向 °。持续时间 0.1–600 秒，油门 0–100%，姿态输入 -100–100；最多 128 段、总时长 30 分钟、正文 4096 字节。</p><p class="route-help">飞行中录制需要自稳模式和当前页面控制权。页面以 10 Hz 请求板端高度/航向快照，并在高度变化约 3 cm、航向变化约 1°或摇杆改变时生成关键段。若高度快照失效，该段会退回 V1 开环行为。</p></details>
       </section>
 
       <section class="route-step" aria-labelledby="route-step-upload-title">
@@ -456,7 +457,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
         <div class="route-page-actions"><button id="route-auto" class="run" onclick="setAutoModeForRoute()">进入回放模式（AUTO）</button><button id="route-takeover" class="stop" onclick="takeManualControl()">接管摇杆</button></div>
       </section>
 
-      <details class="route-details"><summary>回放行为与能力边界</summary><p class="route-help">每段的数值会在该段持续使用，不是相对上一段的增量。飞控没有位置反馈或高度闭环，风、推力和机体响应都会影响实际轨迹；回放遥控指令不保证相同的飞行轨迹或着陆。序列正常完成、连接断开或执行周期中断时，飞控会转入以定推力为主体的下降；若气压估计可用，只会在高于相对基准 1 米且下降过快时有限增加推力。若末段油门低于设定的下降推力，进入下降时油门可能上升。手动接管会切回自稳。下降推力需先用带桨实测标定，飞手需确认着陆并手动上锁。设备序列只保存在运行内存，飞控重启后需重新上传；需要迫降时使用遥控器上的“迫降”按钮。</p></details>
+	      <details class="route-details"><summary>回放行为与能力边界</summary><p class="route-help">V2 回放以当前起点重新对齐首个高度与航向，随后闭环跟踪相对变化。无健康高度估计时禁止启动或转入迫降；无磁力计时航向来自陀螺积分，只适合短时相对转向。横向仍不是坐标航点闭环。无桨测试只能验证估计、目标、调度、混控和安全接管，不能证明真实定高或落点精度。</p></details>
     </div>
   </section>
   <section id="descent-calibration-page" class="descent-calibration-page" aria-hidden="true">
@@ -648,9 +649,10 @@ let routeHold = false;
 let routePending='',routeUploadedText=null,routeUploadedRevision=0,routeServerState='empty',routeStatusBusy=false;
 let routeRecording=false,routeRecordStartedArmed=false,routeRecordTimer=null,routeRecordStartMs=0,routeRecordSegmentStartMs=0,routeRecordLast=null,routeRecordSegments=[];
 let routeRecordTrimmedMs=0;
+let routeNavigationSample={valid:false,altitude:0,heading:0,flowX:0,flowY:0,receivedAt:0};
 const ROUTE_RECORD_SAMPLE_MS=100;
 const ROUTE_RECORD_IDLE_THROTTLE_PCT=6; // 与飞控 throttleDeadzone 保持一致
-const ROUTE_RECORD_HEADER='# WEB_RC_RECORDED_V1';
+const ROUTE_RECORD_HEADER='# WEB_RC_RECORDED_V2';
 const ROUTE_RECORD_MAX_SEGMENTS=128;
 const ROUTE_RECORD_MAX_BYTES=4096;
 const ROUTE_RECORD_MAX_DURATION_MS=1800000;
@@ -664,8 +666,8 @@ const buttonConfigs = [
   {icon:"🔓",label:"解锁",   color:"#00ff88",desc:"解锁电机"},
   {icon:"🔒",label:"上锁",   color:"#ff3333",desc:"锁定电机"},
   {icon:"🛑",label:"急停",   color:"#ff0055",desc:"紧急停止"},
-  {icon:"🛬",label:"迫降",   color:"#ff8c00",desc:"保持水平并进入自动下降；无高度/速度反馈"},
-  {icon:"🔄",label:"切换模式", color:"#00cfff",desc:"自稳与特技切换；不支持定高"},
+  {icon:"🛬",label:"迫降",   color:"#ff8c00",desc:"保持水平并进入受控下降；气压仅限制过快下降"},
+  {icon:"🔄",label:"切换模式", color:"#00cfff",desc:"自稳、定高与特技循环切换"},
   {icon:"⏺",label:"录制序列",color:"#ff5555",desc:"录制当前摇杆输出序列；再次点击停止"}
 ];
 
@@ -696,10 +698,11 @@ function parseRouteText(){
   for(let i=0;i<lines.length;i++){
     const line=lines[i].trim();if(!line||line.startsWith('#'))continue;
     const fields=line.split(/[\s,]+/);
-    if(fields.length!==5||fields.some(v=>v===''||!Number.isFinite(Number(v))))throw new Error(`第 ${i+1} 行需包含 5 个有限数字`);
-    const [duration,throttle,roll,pitch,yaw]=fields.map(Number);
+    if(![5,7].includes(fields.length)||fields.some(v=>v===''||!Number.isFinite(Number(v))))throw new Error(`第 ${i+1} 行需包含 5 个或 7 个有限数字`);
+    const [duration,throttle,roll,pitch,yaw,altitude,heading]=fields.map(Number);
     if(duration<0.1||duration>600||throttle<0||throttle>100||Math.abs(roll)>100||Math.abs(pitch)>100||Math.abs(yaw)>100)throw new Error(`第 ${i+1} 行参数超出范围`);
-    points.push({duration,throttle,roll,pitch,yaw});
+	if(fields.length===7&&(altitude<-20||altitude>20||heading<-360||heading>360))throw new Error(`第 ${i+1} 行高度或航向超出范围`);
+    points.push({duration,throttle,roll,pitch,yaw,altitude,heading});
   }
   if(!points.length)throw new Error('请至少填写一个有效动作段');
   if(points.length>128)throw new Error('最多支持 128 个动作段');
@@ -777,16 +780,23 @@ function closeRoutePage(){document.getElementById('route-page').style.display='n
 function routeRecordStatus(message){const el=document.getElementById('route-record-status');if(el)el.textContent=message;}
 function clampRouteValue(value,min,max){return Math.max(min,Math.min(max,value));}
 function routeRecordSnapshot(){
+	const navigationFresh=routeNavigationSample.valid&&performance.now()-routeNavigationSample.receivedAt<=350;
   return {
     throttle:clampRouteValue(Math.round((currentValues.throttle+100)/2),0,100),
     roll:clampRouteValue(Math.round(currentValues.roll),-100,100),
     pitch:clampRouteValue(Math.round(currentValues.pitch),-100,100),
-    yaw:clampRouteValue(Math.round(currentValues.yaw),-100,100)
+    yaw:clampRouteValue(Math.round(currentValues.yaw),-100,100),
+	altitude:navigationFresh?routeNavigationSample.altitude:null,
+	heading:navigationFresh?routeNavigationSample.heading:null
   };
 }
-function sameRouteRecordValue(a,b){return a&&b&&a.throttle===b.throttle&&a.roll===b.roll&&a.pitch===b.pitch&&a.yaw===b.yaw;}
+function angleDifferenceDegrees(a,b){let d=a-b;while(d>180)d-=360;while(d<-180)d+=360;return d;}
+function sameRouteRecordValue(a,b){return a&&b&&a.throttle===b.throttle&&a.roll===b.roll&&a.pitch===b.pitch&&a.yaw===b.yaw&&
+	((a.altitude===null&&b.altitude===null)||(a.altitude!==null&&b.altitude!==null&&Math.abs(a.altitude-b.altitude)<0.03))&&
+	((a.heading===null&&b.heading===null)||(a.heading!==null&&b.heading!==null&&Math.abs(angleDifferenceDegrees(a.heading,b.heading))<1.0));}
 function formatRouteRecordLine(segment){
-  return (segment.durationMs/1000).toFixed(1)+' '+segment.throttle+' '+segment.roll+' '+segment.pitch+' '+segment.yaw;
+	const base=(segment.durationMs/1000).toFixed(1)+' '+segment.throttle+' '+segment.roll+' '+segment.pitch+' '+segment.yaw;
+	return segment.altitude===null||segment.heading===null?base:base+' '+segment.altitude.toFixed(3)+' '+segment.heading.toFixed(2);
 }
 function routeRecordText(segments){return segments.length?ROUTE_RECORD_HEADER+'\n'+segments.map(formatRouteRecordLine).join('\n'):'';}
 function appendRouteRecordSegment(durationMs,value){
@@ -795,7 +805,7 @@ function appendRouteRecordSegment(durationMs,value){
     routeRecordTrimmedMs+=roundedMs;
     return '';
   }
-  const segment={durationMs:roundedMs,throttle:value.throttle,roll:value.roll,pitch:value.pitch,yaw:value.yaw};
+  const segment={durationMs:roundedMs,throttle:value.throttle,roll:value.roll,pitch:value.pitch,yaw:value.yaw,altitude:value.altitude,heading:value.heading};
   const candidate=routeRecordSegments.concat([segment]);
   if(candidate.length>ROUTE_RECORD_MAX_SEGMENTS)return '超过 128 段上限，录制已停止；新片段未写入。';
   const totalMs=candidate.reduce((sum,item)=>sum+item.durationMs,0);
@@ -831,7 +841,7 @@ function startRouteRecording(){
   routeRecordStartMs=performance.now();
   routeRecordSegmentStartMs=routeRecordStartMs;
   routeRecordTimer=setInterval(sampleRouteRecording,ROUTE_RECORD_SAMPLE_MS);
-  routeRecordStatus((routeRecordStartedArmed?'正在录制手动操作：':'正在本地录制：')+'0.0 秒，0 段。录制期间不发送额外设备消息。');
+  routeRecordStatus((routeRecordStartedArmed?'正在录制手动操作与板端高度/航向：':'正在本地录制：')+'0.0 秒，0 段。');
   routeMessage('正在录制当前摇杆输出；停止后会写入编辑器并保存到浏览器。');
   if(document.getElementById('route-page').getAttribute('aria-hidden')==='false')closeRoutePage();
   showToast('开始录制摇杆序列');
@@ -926,7 +936,7 @@ async function refreshDescentCalibrationStatus(){
     const response=await fetch('/descent-calibration/status',{cache:'no-store'});if(!response.ok)throw new Error('状态读取失败');
     const data=await response.json();descentCalibrationLatestStatus=data;
     if(typeof data.armed==='boolean')setArmedState(data.armed);
-    if(Number.isInteger(data.mode)){currentFlightMode=data.mode;document.getElementById('flight-mode').textContent=['直控','特技','自稳','不支持','自动'][data.mode]||'未知';}
+    if(Number.isInteger(data.mode)){currentFlightMode=data.mode;document.getElementById('flight-mode').textContent=['直控','特技','自稳','定高','自动'][data.mode]||'未知';}
     const active=['waiting_takeoff','takeoff_delay','hover_candidate','hover_ready','descent_tracking'].includes(data.state);
     setDescentCalibrationActive(active);
     const status=document.getElementById('descent-calibration-status');
@@ -1224,7 +1234,7 @@ async function refreshRouteStatus(){
     const response=await fetch('/route/status',{cache:'no-store'});if(!response.ok)throw new Error('状态不可用');
     const data=await response.json();routeServerState=data.state;
     if(data.arm!==undefined)setArmedState(data.arm);
-    if(data.mode!==undefined){if(routeRecording&&routeRecordStartedArmed&&data.mode!==2)stopRouteRecording('飞行模式已切换，录制已安全停止。',true);currentFlightMode=data.mode;document.getElementById('flight-mode').textContent=['直控','特技','自稳','不支持','自动'][data.mode]||'未知';}
+    if(data.mode!==undefined){if(routeRecording&&routeRecordStartedArmed&&data.mode!==2)stopRouteRecording('飞行模式已切换，录制已安全停止。',true);currentFlightMode=data.mode;document.getElementById('flight-mode').textContent=['直控','特技','自稳','定高','自动'][data.mode]||'未知';}
     flightRouteRunning=data.state==='running'||data.state==='start_pending';routeHold=flightRouteRunning||data.state==='landing';
     if(routeUploadedRevision&&data.plan_revision!==routeUploadedRevision){routeUploadedRevision=0;routeUploadedText=null;routeMessage('飞控中的序列已改变，请上锁后重新上传当前内容。');}
     const planKind=data.recorded?'录制输入':'手写输入';
@@ -1348,7 +1358,8 @@ function checkAndSendChanges() {
   if(flightRouteRunning||routeHold)return;
   const now = performance.now();
   // 有变化立即发；或超过强制重发间隔时也发一次（保持飞控侧数据新鲜，避免超时断连）
-  if (stickInputActivated && (hasSignificantChange(currentValues) || (now - lastForceSentTime >= FORCE_SEND_INTERVAL))) {
+  if (stickInputActivated && (hasSignificantChange(currentValues) ||
+	  (now - lastForceSentTime >= (routeRecording&&routeRecordStartedArmed?ROUTE_RECORD_SAMPLE_MS:FORCE_SEND_INTERVAL)))) {
     sendJoystickData();
     lastForceSentTime = now;
   }
@@ -1623,9 +1634,12 @@ function sendToESP(url, data, leaseRetry=false) {
     })
     .then(resp => {
       if (!resp) return;
+	  if(resp.rt===1&&resp.nav===true&&Number.isFinite(Number(resp.alt))&&Number.isFinite(Number(resp.hdg))){
+		routeNavigationSample={valid:true,altitude:Number(resp.alt),heading:Number(resp.hdg),flowX:Number(resp.fx)||0,flowY:Number(resp.fy)||0,receivedAt:performance.now()};
+	  }
       consecutiveFails = 0;
       updateConnectionStatus(true);
-      const names = ['直控','特技','自稳','不支持','自动'];
+      const names = ['直控','特技','自稳','定高','自动'];
 
       // 模式切换结果
       if (resp.m !== undefined && resp.rt !== 2) {
@@ -1792,6 +1806,19 @@ function renderSelfCheckStatus(data) {
     ? `<strong>起飞前标定未完成（${calibrationPending.length} 项）</strong><small>${calibrationChecks.map(item=>`${item.ok?'✓':'✗'} ${item.name}${item.ok?'':'：'+item.action}`).join('<br>')}</small>`
     : `<strong>起飞前标定已完成</strong><small>${calibrationChecks.map(item=>`✓ ${item.name}`).join('<br>')}</small>`;
   const barometerStatus = document.getElementById('barometer-status');
+  const detectedText = value => value===true?'已检测':value===false?'未检测':'未知';
+  const expansionStatus = document.getElementById('expansion-probe-status');
+  const flowAge = Number(data.optical_flow_age_ms), rangeAge = Number(data.downward_range_age_ms);
+  const flowQuality = Number(data.optical_flow_quality), rangeMeters = Number(data.downward_range_m);
+  const flowDetail = data.optical_flow_ready===true
+    ? `初始化成功；${data.optical_flow_usable===true?`有效 dx ${Number(data.optical_flow_dx)} / dy ${Number(data.optical_flow_dy)}，质量 ${flowQuality}，${flowAge} ms 前`:`当前样本无效或过期（质量 ${flowQuality}，年龄 ${flowAge} ms）`}`
+    : `${detectedText(data.optical_flow_detected)}，未就绪`;
+  const rangeDetail = data.downward_range_ready===true
+    ? `初始化成功；${data.downward_range_usable===true?`有效距离 ${rangeMeters.toFixed(3)} m，${rangeAge} ms 前`:`当前样本无效或过期（状态 ${Number(data.downward_range_status)} / 原始 ${Number(data.downward_range_raw_status)}，年龄 ${rangeAge} ms）`}`
+    : `${detectedText(data.downward_range_detected)}，未就绪`;
+  expansionStatus.className='diagnostic-summary '+
+    ((data.optical_flow_usable===true||data.downward_range_usable===true)?'ok':'offline');
+  expansionStatus.innerHTML=`<strong>扩展运动传感器</strong><small>PMW3901：${flowDetail}<br>VL53L1X：${rangeDetail}<br>读数仅用于诊断，尚未接入悬停或迫降控制。</small>`;
   const barometerReasons = {
     barometer_unavailable:'未检测到气压计',
     waiting_for_sample:'气压计已检测，正在等待首个样本',
@@ -1876,6 +1903,7 @@ function showSelfCheckUnavailable() {
   const barometerStatus = document.getElementById('barometer-status');
   barometerStatus.className = 'diagnostic-summary offline';
   barometerStatus.innerHTML = '<strong>无法读取气压高度保护状态</strong><small>连接恢复后刷新；气压计为可选传感器，不影响基础手动解锁。</small>';
+  document.getElementById('expansion-probe-status').textContent='光流与测距状态读取失败；连接恢复后刷新。';
   const activePanel = document.getElementById('diagnostic-active');
   activePanel.style.display = 'none';
   activePanel.innerHTML = '';
@@ -1911,10 +1939,11 @@ function resetLeftStick(targetRawY) {
 async function handleButton(idx) {
   if (idx === 5) { toggleRouteRecordingMain(); return; }
   if (idx === 4) {
-    // 六轴模式循环：自稳(2) ↔ 特技(1)
+    // 模式循环：自稳(2) → 定高(3) → 特技(1) → 自稳(2)
     // 不在点击时弹 toast，结果完全依赖后端 resp.m 确认后触发
     let nextBit;
-    if (currentFlightMode === 2)      nextBit = 7; // STAB→ACRO
+    if (currentFlightMode === 2)      nextBit = 8; // STAB→ALTHOLD
+    else if (currentFlightMode === 3) nextBit = 7; // ALTHOLD→ACRO
     else                              nextBit = 6; // 其他→STAB
     sendButtonData(nextBit, 1);
     setTimeout(() => sendButtonData(nextBit, 0), 100);

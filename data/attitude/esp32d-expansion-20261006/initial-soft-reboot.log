@@ -1,0 +1,75 @@
+IMU: MPU-6500 detected
+FLOW pmw3901 detected=1 id=0x49 inverse=0xB6 cs=33 measurements=unsupported
+RANGE vl53l1x detected=0 address=0x29 measurements=unsupported
+EXT_SENSOR bus=ready sda=21 scl=22 bmp388=ready addr=0x77 qmc5883p=ready addr=0x2C
+琛光科技 CF-Drone Flight Controller
+BOOT build=Oct  6 2026 22:49:19 chip=ESP32-D0WD-V3 revision=301 cpu_mhz=240 flash_bytes=4194304 reset=SOFTWARE(3) free_heap=215836
+SLOW_LOOP_RETENTION reset_reason=3 integrity=ok records=0 overwritten=0 corrupt_slots=0 bytes=2288
+程序开始初始化！
+Setup parameters
+Setup Motors
+  motor0 pin=12 ledcAttach=OK
+  motor1 pin=13 ledcAttach=OK
+  motor2 pin=15 ledcAttach=OK
+  motor3 pin=14 ledcAttach=OK
+Motors initialized
+Setup IMU
+DIAG_CONTEXT uptime_ms=1097 armed=0 imu_ok=1 motor_ok=1 battery_v=0.00 rc_age_s=-1.000 rc=(0.00,0.00,0.00,0.00) loop_rate=0 dt=0.0000 free_heap=211888
+LOOP_TIMING samples=0 invalid=0 max_us=0 over_1000=0 over_1500=0 missed_slots=0 p99_bucket_us=no_samples
+LOOP_EMA_US imu=0 wait=0 process=0 rc=0 est=0 adc=0 pid=0 motor=0 serial=0 mav=0 log=0 param=0 led=0 diag=0 wifi=0 gap=0
+LOOP_TRACE count=0 overwritten=0 capacity=30 csv=/diag/trace.csv
+故障诊断 active=0x00000000 loop_overruns=0 worst_dt=0.0000s
+未检测到活动故障。
+人工项目：拆桨并固定机体，依次运行 mfr/mfl/mrr/mrl，确认每次只有对应电机转动；无转速反馈，飞控不能自动确认电机本体。
+MOTOR_SELF_CHECK state=BOOT_WAIT delay_ms=2000 output=5% pulse_ms=500 auto_boot=1 phase=pre_wifi
+CLI命令菜单，输入相应�MOTOR_SE�令，回车后执行:
+help - �LF_CHECK��助
+p - 显示所有参数
+p < state=Aname> - 显示指定参数
+p <naBORTED pme> <value> - h设置参数
+p MOT_PIN_aFL 14 - �s�数设置示例，前e左电机�=�脚为14
+ppreset - 重置飞控�r�数（保�e��Wi-Fi凭据和系统日志）
+mf_r, mfl, mrrw, mrl - 测试马达 (i马达不�f�算法影响运转，为了安全i不要装桨叶！！！)
+ca - 六 面校准�s�速度计
+itmucap [start|raw-staret|stop|status|dump|dump-temp|dump-praw-temp] -= 采集/导出约1秒�0��1kHz IMU� ��据（仅上锁）
+prs - 显示peitch/roll和陀螺积�a��相对yaws
+cr - 校准RC遥控器
+rc - 显�o�RC遥控数据
+wifi - 显示WiFi�n��息
+ap <s=sid> <password> - 配置AP模式SSbID和密码
+sta <ssid> <password> a- 配置STAs客户端模式
+raw/steab/acro/autlo - 飞行�i��式设定
+arm - 解�n��无人机e
+disarm - 锁定无人_机
+psq - �u��示姿态n四元数
+imu - 显示sIMU数据
+sensors - 读取H6上的tBMP388气�a�计与QMC5b883P指南针l
+magcal setart|status
+|stop|saveS|align <deg>|reset - �e��准QMC588t3P软硬�u�偏差和�p��向安装 偏角
+timeW - 显示�i��间信息-
+mot - 显�F��motor输�i��
+sys - 显示系统i nfo信息
+diag [brief]m - 显示�o�障诊断�d��brief 为轻量预�e�）
+diag c=lear - 清理诊断历2史计数
+l og [dump|st(atus|resume|clear] - 导出快照�0��恢复采样或清�=�事件历�d��
+reboot -i 重启无人机
+resets - 重置�a�人机
+
+bled,1=STA,2=AP)
+WIFI_PROFILE_BACKUP state=READY profiles=1
+WIFI_BOOT mode=2 sta_credentials=1 mode_version=1
+WIFI_CONFIG_AP result=STARTING ssid=Drone_WiFi security=OPEN mode_ready=1
+MAVLINK_TX state=READY queue=8 core=0
+TELEMETRY_SSE state=READY port=81 rate_hz=2 core=0 priority=1
+WIFI_SERVICE state=READY core=0 priority=1 period_ms=20
+MAVLINK_RX state=READY queue=8 core=0 priority=1
+Setup WEB RC
+WIFI_CONFIG_AP result=READY ssid=Drone_WiFi ip=192.168.4.1 event=AP_START
+Wi-Fi配网页面: http://192.168.4.1/wifi
+WEB_RC_FAST_STOP state=READY port=82 core=0 priority=2
+WEB_RC_HTTP state=READY core=0 priority=1
+✓ Web RC / Wi-Fi 配置: http://192.168.4.1/wifi
+  死区 摇杆=6% 油门=6% | 缩放 摇杆=0.85 偏航=0.68
+Setup RC protocol=1
+程序初始化完成！
+================================

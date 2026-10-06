@@ -45,6 +45,11 @@ void MPU9250::config(SPIClass *spi, const uint8_t cs) {
 }
 bool MPU9250::begin() {
   setLogName("IMU");
+  // Startup retries must not carry an earlier initialization error into a
+  // successful initialization or interrupt setup.
+  status_ = 0;
+  who_am_i_ = 0;
+  is_mpu6500_ = false;
 
   imu_.Begin();
   /* 1 MHz for config */

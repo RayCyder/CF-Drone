@@ -1,0 +1,27 @@
+{
+  "date": "2026-10-06",
+  "base_commit": "05b9ec35dc34a6c7a4774117747e6ecf45c6714d",
+  "working_tree_modified": true,
+  "chip": "ESP32-D0WD-V3",
+  "mac": "20:50:0d:33:b4:dc",
+  "port": "/dev/cu.usbserial-10",
+  "app_offset": "0x10000",
+  "bytes": 1432240,
+  "sha256": "b61c5bcb6b98967331712fcae36dd66cb517880f3862df8b81d3681067c25fd4",
+  "flash_bytes": 1432059,
+  "static_ram_bytes": 115388,
+  "scope": "SPI isolation, bounded IMU startup retry, optical-flow and range identity probes only; no motion/ranging driver",
+  "write_hash_verified": true,
+  "nvs_and_partition_table_preserved": true,
+  "hard_reset_result": "IMU ERROR 2 persists after bounded retries; no flow identity",
+  "measurement_drivers_implemented": false,
+  "soft_reset_result": "IMU MPU6500 0x70 OK; optical flow identity 0x49/0xB6; BMP388 and QMC5883P ready; range identity read failed",
+  "final_armed": false,
+  "final_motor_outputs": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "final_faults": "0x00000000"
+}

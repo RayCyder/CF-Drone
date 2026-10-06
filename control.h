@@ -92,6 +92,7 @@ bool submitAutoActuatorTarget(const AutoActuatorCommand& target);
 bool autoTargetReady();
 bool autoTargetTimedOut();
 void resetAutoTargetState();
+void setLocalSequenceAltitudeTarget(bool enabled, float altitudeMeters);
 ControlSource getCurrentControlSource();
 void setCurrentControlSource(ControlSource source);
 void markManualControlInput(ControlSource source);

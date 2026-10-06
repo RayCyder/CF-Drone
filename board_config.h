@@ -54,6 +54,8 @@
 #define EXPANSION_BOARD_ENABLED      0    // C3 硬件引脚冲突，强制禁用扩展板
 #define BOARD_VL53_XSHUT_PIN   (-1)        // VL53L1X XSHUT，暂定 GPIO10
 #define BOARD_PMW_CS_PIN       (-1)        // PMW3901 CS，C3 暂未分配，设为 -1 禁用
+#define BOARD_OPTICAL_FLOW_ENABLED 0
+#define BOARD_DOWNWARD_RANGE_ENABLED 0
 
 #elif defined(CONFIG_IDF_TARGET_ESP32S3)
 // ---------------------- ESP32S3 -------------------------
@@ -106,6 +108,8 @@
 #define BOARD_COMPASS_ENABLED        0 // 当前 S3 设备未安装 QMC5883P
 #define BOARD_VL53_XSHUT_PIN   37      // VL53L1X XSHUT，暂定 GPIO37
 #define BOARD_PMW_CS_PIN       38      // PMW3901 CS，暂定 GPIO38
+#define BOARD_OPTICAL_FLOW_ENABLED 0 // 当前 S3 设备未安装 PMW3901
+#define BOARD_DOWNWARD_RANGE_ENABLED 0 // 当前 S3 设备未安装 VL53L1X
 
 #else  // ---- ESP32 默认配置 ----
 // ---------------------- 默认ESP32 -------------------------
@@ -145,6 +149,8 @@
 #define EXPANSION_BOARD_ENABLED      1 // 1 = 启用扩展板传感器探测（BMP388/VL53L1X/QMC5883L/PMW3901）;0 = 跳过探测，所有能力标志保持 false，不影响基础飞行功能
 #define BOARD_VL53_XSHUT_PIN   32          // VL53L1X XSHUT（GPIO32）
 #define BOARD_PMW_CS_PIN       33          // PMW3901 SPI CS（GPIO33）
+#define BOARD_OPTICAL_FLOW_ENABLED EXPANSION_BOARD_ENABLED
+#define BOARD_DOWNWARD_RANGE_ENABLED EXPANSION_BOARD_ENABLED
 
 #endif
 
@@ -185,6 +191,12 @@
 #endif
 #if !defined(BOARD_COMPASS_ENABLED)
 #define BOARD_COMPASS_ENABLED EXPANSION_BOARD_ENABLED
+#endif
+#if !defined(BOARD_OPTICAL_FLOW_ENABLED)
+#define BOARD_OPTICAL_FLOW_ENABLED EXPANSION_BOARD_ENABLED
+#endif
+#if !defined(BOARD_DOWNWARD_RANGE_ENABLED)
+#define BOARD_DOWNWARD_RANGE_ENABLED EXPANSION_BOARD_ENABLED
 #endif
 
 // ---- WiFi / Web RC 开关兜底（未知芯片默认全开）----

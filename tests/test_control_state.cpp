@@ -48,6 +48,13 @@ bool isUsingWebRC(){return webRCEnabled && useWebRC;}
 uint16_t webEdges=0;
 uint16_t takeWebRCButtonPressEdges(uint16_t* buttons){*buttons=webEdges; const uint16_t result=webEdges; webEdges=0;return result;}
 void setWebRCWarn(const char*){} void clearWebRCWarn(){}
+bool verticalHealthy=false;
+bool verticalFlightHealthy(){return verticalHealthy;}
+void leaveAltitudeHold(){}
+void clearRouteNavigationTarget(){}
+bool applyAltitudeHoldControl(float,float,float,float&){return true;}
+bool applyRouteAltitudeControl(float,float&){return true;}
+bool routeNavigationTarget(float&,float&){return false;}
 void webRCLossFailsafe();
 bool motorOutputsOK=true;
 bool gyroBiasCalibrated=true;
@@ -351,6 +358,12 @@ int main(){
     disarm();
     controlMode=NAN; controlThrottle=0;
     assert(!setFlightMode(ALTHOLD));
+    verticalHealthy=true;
+    assert(!setFlightMode(ALTHOLD)); // Disarmed ALTHOLD must not become an implicit takeoff.
+    armed=true; thrustTarget=.5f;
+    assert(setFlightMode(ALTHOLD));
+    assert(setFlightMode(STAB));
+    disarm();
     assert(!setFlightMode(AUTO)); // no preflight target stream
     assert(setFlightMode(STAB));
     // A connected, uploaded local plan admits AUTO without an external target.

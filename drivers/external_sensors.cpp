@@ -162,6 +162,7 @@ void externalSensorTask(void *) {
 	uint32_t lastSampleUs = 0;
 	for (;;) {
 		vTaskDelayUntil(&wake, pdMS_TO_TICKS(BARO_SAMPLE_INTERVAL_MS));
+		pollDownwardRangeSensor();
 		if (!bmpAddress) continue;
 		BarometerSample sample;
 		if (!readBmp388(bmpAddress, sample)) {
@@ -285,16 +286,21 @@ void loadMagCalibration() {
 } // namespace
 
 void setupExternalSensors() {
-#if !BOARD_BAROMETER_ENABLED && !BOARD_COMPASS_ENABLED
-	Serial.println("EXT_SENSOR barometer=disabled compass=disabled board_config=1");
+#if !BOARD_BAROMETER_ENABLED && !BOARD_COMPASS_ENABLED && \
+    !BOARD_OPTICAL_FLOW_ENABLED && !BOARD_DOWNWARD_RANGE_ENABLED
+    Serial.println("EXT_SENSOR all_optional_sensors=disabled board_config=1");
 	return;
 #endif
 #if BOARD_I2C_SDA >= 0 && BOARD_I2C_SCL >= 0
 	externalSensorI2cMutex = xSemaphoreCreateMutex();
 	const bool i2cReady = Wire.begin(BOARD_I2C_SDA, BOARD_I2C_SCL, 100000);
+	Wire.setTimeOut(20);
 #else
 	const bool i2cReady = false;
 #endif
+	// Initialize optional devices before background I2C sampling starts. PMW3901
+	// remains on the control-loop task so it never races the IMU on shared SPI.
+	setupSupplementarySensors(i2cReady, externalSensorI2cMutex);
 	if (!i2cReady) {
 		Serial.println("EXT_SENSOR bus=unavailable");
 		return;
@@ -316,14 +322,16 @@ void setupExternalSensors() {
 	Serial.printf("EXT_SENSOR bus=ready sda=%d scl=%d bmp388=%s addr=0x%02X qmc5883p=%s addr=0x%02X\n",
 		BOARD_I2C_SDA, BOARD_I2C_SCL, bmpReady ? "ready" : "not_found", bmpAddress,
 		qmcReady ? "ready" : "not_found", qmcReady ? QMC5883P_ADDR : 0);
-	if (bmpReady && xTaskCreatePinnedToCore(externalSensorTask, "barometer", 3072,
+	if ((bmpReady || downwardRangeAvailable()) && xTaskCreatePinnedToCore(externalSensorTask, "ext-i2c", 3072,
 		nullptr, 1, nullptr, 0) != pdPASS) {
 		bmpAddress = 0;
-		Serial.println("BARO bmp388 task=start_failed");
+		markDownwardRangeUnavailable();
+		Serial.println("EXT_SENSOR task=start_failed");
 	}
 }
 
 void updateExternalSensors() {
+	updateSupplementarySensors();
 	if (!magCalibrationActive) return;
 	if (armed || motorTestActive || motorsActive()) {
 		magCalibrationActive = false;
@@ -437,6 +445,31 @@ bool alignMagHeading(float knownHeadingDegrees, float rollRadians, float pitchRa
 }
 
 void printExternalSensorReadings(float rollRadians, float pitchRadians) {
+	const uint32_t nowUs = micros();
+	OpticalFlowSample flow;
+	DownwardRangeSample range;
+	uint32_t flowSamples = 0, flowFailures = 0, rangeSamples = 0, rangeFailures = 0;
+	const bool haveFlow = getOpticalFlowSample(flow, flowSamples, flowFailures);
+	const bool haveRange = getDownwardRangeSample(range, rangeSamples, rangeFailures);
+	Serial.printf("EXT_CAPABILITY optical_flow_detected=%u optical_flow_ready=%u downward_range_detected=%u downward_range_ready=%u\n",
+		opticalFlowDetected(), opticalFlowAvailable(), downwardRangeDetected(), downwardRangeAvailable());
+	if (haveFlow) {
+		Serial.printf("FLOW pmw3901 dx=%d dy=%d delta_x_rad=%.6f delta_y_rad=%.6f quality=%u motion=%u valid=%u age_ms=%lu samples=%lu failures=%lu\n",
+			flow.deltaX, flow.deltaY, flow.deltaXAngularRadians, flow.deltaYAngularRadians,
+			flow.quality, flow.motionDetected, flow.valid,
+			(unsigned long)((uint32_t)(nowUs - flow.timestampUs) / 1000U),
+			(unsigned long)flowSamples, (unsigned long)flowFailures);
+	} else {
+		Serial.printf("FLOW pmw3901 read=%s\n", opticalFlowAvailable() ? "waiting_for_sample" : "unavailable");
+	}
+	if (haveRange) {
+		Serial.printf("RANGE vl53l1x distance_m=%.3f status=%u raw_status=%u quality=%u valid=%u age_ms=%lu samples=%lu failures=%lu\n",
+			range.distanceMeters, range.rangeStatus, range.rawRangeStatus, range.quality, range.valid,
+			(unsigned long)((uint32_t)(nowUs - range.timestampUs) / 1000U),
+			(unsigned long)rangeSamples, (unsigned long)rangeFailures);
+	} else {
+		Serial.printf("RANGE vl53l1x read=%s\n", downwardRangeAvailable() ? "waiting_for_sample" : "unavailable");
+	}
 	if (bmpAddress) {
 		BarometerEstimate estimate;
 		if (getBarometerEstimate(estimate) && estimate.sample.valid) {

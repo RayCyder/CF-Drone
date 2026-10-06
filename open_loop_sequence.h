@@ -22,9 +22,18 @@ struct OpenLoopPackedStep {
     int16_t rollCentipercent;
     int16_t pitchCentipercent;
     int16_t yawCentipercent;
+    int16_t altitudeCentimeters;
+    int16_t headingDecidegrees;
 };
 
-static_assert(sizeof(OpenLoopPackedStep) == 12, "Open-loop route step must stay 12 bytes");
+static_assert(sizeof(OpenLoopPackedStep) == 16, "Open-loop route step must stay 16 bytes");
+
+#define OPEN_LOOP_ALTITUDE_SENTINEL_CM INT16_MIN
+#define OPEN_LOOP_HEADING_SENTINEL_DDEG INT16_MIN
+#define OPEN_LOOP_MIN_ALTITUDE_M -20.0f
+#define OPEN_LOOP_MAX_ALTITUDE_M 20.0f
+#define OPEN_LOOP_MIN_HEADING_DEG -360.0f
+#define OPEN_LOOP_MAX_HEADING_DEG 360.0f
 
 struct OpenLoopParseResult {
     bool ok;
@@ -38,6 +47,10 @@ struct OpenLoopControls {
     float pitch;
     float yaw;
     float throttle;
+    bool hasAltitude;
+    float altitudeMeters;
+    bool hasHeading;
+    float headingDegrees;
 };
 
 enum OpenLoopRunState : uint8_t {
@@ -72,6 +85,22 @@ static inline float openLoopClampFloat(float value, float low, float high) {
     return value;
 }
 
+static inline bool openLoopStepHasAltitude(const OpenLoopPackedStep &step) {
+    return step.altitudeCentimeters != OPEN_LOOP_ALTITUDE_SENTINEL_CM;
+}
+
+static inline bool openLoopStepHasHeading(const OpenLoopPackedStep &step) {
+    return step.headingDecidegrees != OPEN_LOOP_HEADING_SENTINEL_DDEG;
+}
+
+static inline float openLoopStepAltitudeMeters(const OpenLoopPackedStep &step) {
+    return openLoopStepHasAltitude(step) ? step.altitudeCentimeters / 100.0f : NAN;
+}
+
+static inline float openLoopStepHeadingDegrees(const OpenLoopPackedStep &step) {
+    return openLoopStepHasHeading(step) ? step.headingDecidegrees / 10.0f : NAN;
+}
+
 static inline float openLoopApplyDeadzone(float norm, float deadzone) {
     if (fabsf(norm) < deadzone) return 0.0f;
     const float sign = norm > 0.0f ? 1.0f : -1.0f;
@@ -96,6 +125,10 @@ static inline void openLoopMapStepToControls(const OpenLoopPackedStep &step,
     out.pitch = openLoopClampFloat(openLoopApplyDeadzone(pitchRaw, stickDeadzone) * stickScale, -1.0f, 1.0f);
     out.yaw = openLoopClampFloat(openLoopApplyDeadzone(yawRaw, stickDeadzone) * yawScale, -1.0f, 1.0f);
     out.throttle = throttlePct / 100.0f;
+    out.hasAltitude = openLoopStepHasAltitude(step);
+    out.altitudeMeters = openLoopStepAltitudeMeters(step);
+    out.hasHeading = openLoopStepHasHeading(step);
+    out.headingDegrees = openLoopStepHeadingDegrees(step);
 }
 
 static inline float openLoopSlewOne(float current, float target, float maxDelta) {
@@ -114,6 +147,10 @@ static inline void openLoopSlewControls(OpenLoopControls &current,
     current.pitch = openLoopSlewOne(current.pitch, target.pitch, axisDelta);
     current.yaw = openLoopSlewOne(current.yaw, target.yaw, axisDelta);
     current.throttle = openLoopSlewOne(current.throttle, target.throttle, throttleDelta);
+    current.hasAltitude = target.hasAltitude;
+    current.altitudeMeters = target.altitudeMeters;
+    current.hasHeading = target.hasHeading;
+    current.headingDegrees = target.headingDegrees;
 }
 
 static inline void openLoopSkipSeparators(char *&cursor) {
@@ -140,16 +177,30 @@ static inline bool openLoopParseLine(char *line, OpenLoopPackedStep &step, uint3
     openLoopSkipSeparators(cursor);
     if (!*cursor || *cursor == '#') return false;
 
-    float values[5];
-    for (int i = 0; i < 5; ++i) {
-        if (!openLoopParseFloat(cursor, values[i])) return false;
+    float values[7];
+    int valueCount = 0;
+    for (; valueCount < 7; ++valueCount) {
+        if (!openLoopParseFloat(cursor, values[valueCount])) return false;
+        char *lookahead = cursor;
+        openLoopSkipSeparators(lookahead);
+        if (!*lookahead) {
+            ++valueCount;
+            break;
+        }
+        cursor = lookahead;
     }
     openLoopSkipSeparators(cursor);
     if (*cursor) return false;
+    if (valueCount != 5 && valueCount != 7) return false;
 
     if (values[0] < 0.1f || values[0] > 600.0f ||
         values[1] < 0.0f || values[1] > 100.0f ||
         fabsf(values[2]) > 100.0f || fabsf(values[3]) > 100.0f || fabsf(values[4]) > 100.0f) {
+        return false;
+    }
+    if (valueCount == 7 &&
+        (values[5] < OPEN_LOOP_MIN_ALTITUDE_M || values[5] > OPEN_LOOP_MAX_ALTITUDE_M ||
+         values[6] < OPEN_LOOP_MIN_HEADING_DEG || values[6] > OPEN_LOOP_MAX_HEADING_DEG)) {
         return false;
     }
 
@@ -160,6 +211,12 @@ static inline bool openLoopParseLine(char *line, OpenLoopPackedStep &step, uint3
     step.rollCentipercent = (int16_t)openLoopRoundToInt(values[2] * 100.0f);
     step.pitchCentipercent = (int16_t)openLoopRoundToInt(values[3] * 100.0f);
     step.yawCentipercent = (int16_t)openLoopRoundToInt(values[4] * 100.0f);
+    step.altitudeCentimeters = valueCount == 7
+        ? (int16_t)openLoopRoundToInt(values[5] * 100.0f)
+        : OPEN_LOOP_ALTITUDE_SENTINEL_CM;
+    step.headingDecidegrees = valueCount == 7
+        ? (int16_t)openLoopRoundToInt(values[6] * 10.0f)
+        : OPEN_LOOP_HEADING_SENTINEL_DDEG;
     return true;
 }
 

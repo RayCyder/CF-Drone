@@ -11,6 +11,9 @@
 #include "calibration_sensor_policy.h"
 #include "imu_capture.h"
 #include "stationary_imu_detector.h"
+#if defined(ARDUINO)
+#include "spi_bus_startup.h"
+#endif
 
 MPU9250 imu(SPI, BOARD_SPI_CS);
 ImuCaptureBuffer imuCapture;
@@ -76,8 +79,21 @@ void updateAccelCalibration();
 
 void setupIMU() {
 	print("Setup IMU\n");
+	#if defined(ARDUINO)
+	prepareImuSpiChipSelects();
+	#endif
 	SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI, BOARD_SPI_CS);
-	if (!imu.begin()) {
+	// Only during boot, before control/interrupt setup. Allow peripherals sharing
+	// the supply to settle; a missing IMU still fails closed after three attempts.
+	bool initialized = false;
+	for (unsigned attempt = 1; attempt <= 3; ++attempt) {
+		if (imu.begin()) { initialized = true; break; }
+		print("IMU_STARTUP attempt=%u status=%d result=FAIL\n", attempt, imu.status());
+		#if defined(ARDUINO)
+		if (attempt < 3) delay(100);
+		#endif
+	}
+	if (!initialized) {
 		print("IMU_INIT_DETAIL result=FAIL driver_status=%d whoami=0x%02X model=%s\n",
 			imu.status(), imu.whoAmI(), imu.getModel());
 		print("⚠ IMU初始化失败！请检查 IMU 硬件连接！\n");

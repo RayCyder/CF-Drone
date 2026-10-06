@@ -12,6 +12,7 @@
 #include "imu_capture.h"
 #include "console_output_queue.h"
 #include "external_sensors.h"
+#include "vertical_flight.h"
 
 extern LowPassFilter<Vector> gyroBiasFilter;
 static LogOutputChunk serialLogChunk;
@@ -133,7 +134,8 @@ const char* motd =
 "disarm - 锁定无人机\n"
 "psq - 显示姿态四元数\n"
 "imu - 显示IMU数据\n"
-"sensors - 读取H6上的BMP388气压计与QMC5883P指南针\n"
+"sensors - 读取IMU扩展板的气压计、磁力计、光流与下视测距\n"
+"nav - 显示融合高度、垂直速度、定高目标和光流影子位置\n"
 "magcal start|status|stop|save|align <deg>|reset - 校准QMC5883P软硬铁偏差和航向安装偏角\n"
 "time - 显示时间信息\n"
 "mot - 显示motor输出\n"
@@ -272,6 +274,20 @@ void doCommand(String str, bool echo = false) {
 		print("landed: %d\n", landed);
 	} else if (command == "sensors") {
 		printExternalSensorReadings(attitude.getRoll(), attitude.getPitch());
+	} else if (command == "nav") {
+		VerticalFlightState state;
+		if (!getVerticalFlightState(state)) {
+			print("VERTICAL state=unavailable\n");
+		} else {
+			print("VERTICAL healthy=%d degraded=%d source=%u altitude_m=%.3f vz_mps=%.3f az_mps2=%.3f target_m=%.3f target_vz_mps=%.3f thrust=%.3f range_valid=%d range_m=%.3f flow_valid=%d flow_quality=%u flow_x_m=%.3f flow_y_m=%.3f flow_vx_mps=%.3f flow_vy_mps=%.3f\n",
+				state.healthy, state.degraded, state.heightSource, state.altitudeMeters,
+				state.verticalSpeedMps, state.verticalAccelerationMps2,
+				state.altitudeTargetMeters, state.verticalSpeedTargetMps,
+				state.thrustCommand, state.rangeValid, state.rangeAglMeters,
+				state.flowValid, (unsigned)state.flowQuality,
+				state.flowPositionXMeters, state.flowPositionYMeters,
+				state.flowVelocityXMps, state.flowVelocityYMps);
+		}
 	} else if (command == "magcal") {
 		if (arg0 == "start") {
 			if (startMagCalibration()) print("MAG_CAL started; keep motors stopped and slowly rotate the aircraft through all axes for 30-60 seconds.\n");

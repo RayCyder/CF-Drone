@@ -1,9 +1,26 @@
 #pragma once
 
 #include <stdint.h>
+#if defined(ARDUINO)
+#include <freertos/semphr.h>
+#else
+typedef void *SemaphoreHandle_t;
+#endif
 #include "flight_sensor_interfaces.h"
 
 void setupExternalSensors();
+void setupSupplementarySensors(bool i2cReady, SemaphoreHandle_t i2cMutex);
+void updateSupplementarySensors();
+void pollDownwardRangeSensor();
+void markDownwardRangeUnavailable();
+bool opticalFlowDetected();
+bool downwardRangeDetected();
+bool opticalFlowAvailable();
+bool downwardRangeAvailable();
+bool getOpticalFlowSample(OpticalFlowSample &sample, uint32_t &sampleCount,
+	uint32_t &failureCount);
+bool getDownwardRangeSample(DownwardRangeSample &sample, uint32_t &sampleCount,
+	uint32_t &failureCount);
 void updateExternalSensors();
 void printExternalSensorReadings(float rollRadians, float pitchRadians);
 bool compassAvailable();

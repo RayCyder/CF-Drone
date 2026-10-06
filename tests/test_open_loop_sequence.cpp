@@ -18,6 +18,23 @@ static void parser_tests() {
     assert(steps[1].rollCentipercent == 1000);
     assert(steps[1].pitchCentipercent == -2000);
     assert(steps[1].yawCentipercent == 3000);
+    assert(!openLoopStepHasAltitude(steps[1]));
+    assert(!openLoopStepHasHeading(steps[1]));
+
+    const char *v2 = "# WEB_RC_RECORDED_V2\n0.5 48 0 0 0 -1.23 -91.5\n";
+    result = parseOpenLoopSequenceText(v2, strlen(v2), steps, OPEN_LOOP_MAX_STEPS);
+    assert(result.ok);
+    assert(result.count == 1);
+    assert(steps[0].altitudeCentimeters == -123);
+    assert(steps[0].headingDecidegrees == -915);
+    assert(openLoopStepHasAltitude(steps[0]));
+    assert(openLoopStepHasHeading(steps[0]));
+    assert(fabsf(openLoopStepAltitudeMeters(steps[0]) + 1.23f) < 1e-6f);
+    assert(fabsf(openLoopStepHeadingDegrees(steps[0]) + 91.5f) < 1e-6f);
+
+    const char *badV2 = "0.5 48 0 0 0 21 0\n";
+    result = parseOpenLoopSequenceText(badV2, strlen(badV2), steps, OPEN_LOOP_MAX_STEPS);
+    assert(!result.ok && strcmp(result.reason, "invalid_row") == 0);
 
     OpenLoopPackedStep retained = steps[0];
     const char *bad = "0.1 20 0 0 0\nnan 0 0 0 0\n";
@@ -43,15 +60,24 @@ static void parser_tests() {
 }
 
 static void mapping_and_slew_tests() {
-    OpenLoopPackedStep step{1000, 5000, 10000, -10000, 5000};
+    OpenLoopPackedStep step{1000, 5000, 10000, -10000, 5000,
+        OPEN_LOOP_ALTITUDE_SENTINEL_CM, OPEN_LOOP_HEADING_SENTINEL_DDEG};
     OpenLoopControls target{};
     openLoopMapStepToControls(step, 0.06f, 0.06f, 0.85f, 0.68f, 1.0f, target);
     assert(fabsf(target.roll - 0.85f) < 1e-6f);
     assert(fabsf(target.pitch + 0.85f) < 1e-6f);
     assert(target.yaw > 0.31f && target.yaw < 0.33f);
     assert(fabsf(target.throttle - 0.5f) < 1e-6f);
+    assert(!target.hasAltitude);
+    assert(!target.hasHeading);
 
-    OpenLoopControls current{0, 0, 0, 0};
+    step.altitudeCentimeters = 200;
+    step.headingDecidegrees = -1234;
+    openLoopMapStepToControls(step, 0.06f, 0.06f, 0.85f, 0.68f, 1.0f, target);
+    assert(target.hasAltitude && fabsf(target.altitudeMeters - 2.0f) < 1e-6f);
+    assert(target.hasHeading && fabsf(target.headingDegrees + 123.4f) < 1e-5f);
+
+    OpenLoopControls current{0, 0, 0, 0, false, NAN, false, NAN};
     openLoopSlewControls(current, target, 100);
     assert(fabsf(current.roll - 0.1f) < 1e-6f);
     assert(fabsf(current.pitch + 0.1f) < 1e-6f);
@@ -68,7 +94,7 @@ static void wrap_and_deadline_tests() {
 }
 
 int main() {
-    static_assert(sizeof(OpenLoopPackedStep) == 12, "packed route step size");
+    static_assert(sizeof(OpenLoopPackedStep) == 16, "packed route step size");
     parser_tests();
     mapping_and_slew_tests();
     wrap_and_deadline_tests();

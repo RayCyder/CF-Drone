@@ -76,12 +76,15 @@ unsigned long webRCLastStickUpdate = 0; // 最后一次摇杆包的时间戳
 // Browser-uploaded open-loop sequence. Fixed double buffers avoid heap churn and
 // keep route execution local to the flight loop after upload.
 static OpenLoopPackedStep openLoopBuffers[2][OPEN_LOOP_MAX_STEPS];
-static_assert(sizeof(openLoopBuffers) <= 3072, "Open-loop buffers static RAM budget");
+static_assert(sizeof(openLoopBuffers) <= 4096, "Open-loop buffers static RAM budget");
 static portMUX_TYPE openLoopMux = portMUX_INITIALIZER_UNLOCKED;
 static uint8_t openLoopActiveBuffer = 0;
 static uint16_t openLoopCount = 0;
 static char *openLoopUploadedText = nullptr;
 static bool openLoopRecordedInput = false;
+static bool openLoopNavigationInput = false;
+static float openLoopAltitudeOffsetMeters = 0.0f;
+static float openLoopHeadingOffsetRadians = 0.0f;
 static uint16_t openLoopIndex = 0;
 static uint32_t openLoopTotalMs = 0;
 static uint32_t openLoopRevision = 0;
@@ -555,7 +558,8 @@ bool isLocalSequenceReadyForAuto() {
     const bool ready = openLoopState == OPEN_LOOP_STATE_READY && openLoopCount > 0 &&
         !openLoopUploadInProgress;
     portEXIT_CRITICAL(&openLoopMux);
-    return ready && !isControlledLandingActive() && isWebRCEnabled();
+    return ready && !isControlledLandingActive() && isWebRCEnabled() &&
+		(!openLoopNavigationInput || verticalFlightHealthy());
 }
 
 static void setOpenLoopReason(const char *reason) {
@@ -563,6 +567,7 @@ static void setOpenLoopReason(const char *reason) {
 }
 
 void cancelLocalSequenceForManualMode() {
+	bool clearNavigation = false;
     portENTER_CRITICAL(&openLoopMux);
     if (openLoopState == OPEN_LOOP_STATE_RUNNING || openLoopState == OPEN_LOOP_STATE_START_PENDING ||
         openLoopState == OPEN_LOOP_STATE_LANDING) {
@@ -570,8 +575,10 @@ void cancelLocalSequenceForManualMode() {
         openLoopTakeoverRequested = false;
         openLoopLandingStarted = false;
         setOpenLoopReason("manual_takeover");
+		clearNavigation = true;
     }
     portEXIT_CRITICAL(&openLoopMux);
+	if (clearNavigation) clearRouteNavigationTarget();
 }
 
 static void applyOpenLoopControls(const OpenLoopControls &controls) {
@@ -588,8 +595,19 @@ static void startOpenLoopNow(uint32_t now) {
     openLoopStartMs = now;
     openLoopLastSchedulerMs = now;
     openLoopLandingStarted = false;
-    openLoopAppliedControls = {controlRoll, controlPitch, controlYaw, controlThrottle};
+    openLoopAppliedControls = {controlRoll, controlPitch, controlYaw, controlThrottle,
+		false, NAN, false, NAN};
     openLoopCurrentDeadlineMs = now + openLoopBuffers[openLoopActiveBuffer][0].durationMs;
+	if (openLoopNavigationInput && openLoopStepHasAltitude(openLoopBuffers[openLoopActiveBuffer][0]) &&
+		openLoopStepHasHeading(openLoopBuffers[openLoopActiveBuffer][0])) {
+		VerticalFlightState navigation;
+		if (getVerticalFlightState(navigation)) {
+			openLoopAltitudeOffsetMeters = navigation.altitudeMeters -
+				openLoopStepAltitudeMeters(openLoopBuffers[openLoopActiveBuffer][0]);
+			openLoopHeadingOffsetRadians = attitude.getYaw() -
+				radians(openLoopStepHeadingDegrees(openLoopBuffers[openLoopActiveBuffer][0]));
+		}
+	}
     openLoopState = OPEN_LOOP_STATE_RUNNING;
     setOpenLoopReason("running");
 }
@@ -934,8 +952,11 @@ static void stepOpenLoopSequence() {
     }
     portEXIT_CRITICAL(&openLoopMux);
 
-    if (requestManualStab) setFlightMode(STAB);
-    if (beginLanding) descend();
+	if (requestManualStab) setFlightMode(STAB);
+	if (beginLanding) {
+		clearRouteNavigationTarget();
+		descend();
+	}
     if (applyStep) {
         OpenLoopControls target;
         openLoopMapStepToControls(step, stickDeadzone, throttleDeadzone,
@@ -944,11 +965,17 @@ static void stepOpenLoopSequence() {
         // Browser recordings already contain the pilot's time-varying stick
         // values. A second slew changes their amplitude and timing. Keep the
         // existing slew for authored plans that lack the recording marker.
-        if (recordedInput) openLoopAppliedControls = target;
+		if (recordedInput) openLoopAppliedControls = target;
         else openLoopSlewControls(openLoopAppliedControls, target, elapsedForSlew);
         OpenLoopControls controls = openLoopAppliedControls;
         portEXIT_CRITICAL(&openLoopMux);
-        applyOpenLoopControls(controls);
+		applyOpenLoopControls(controls);
+		if (openLoopNavigationInput && target.hasAltitude && target.hasHeading) {
+			setRouteNavigationTarget(target.altitudeMeters + openLoopAltitudeOffsetMeters,
+				radians(target.headingDegrees) + openLoopHeadingOffsetRadians, true);
+		} else {
+			clearRouteNavigationTarget();
+		}
     }
 }
 
@@ -1621,8 +1648,18 @@ static void handleWebRCRequestBody() {
                     "{\"s\":\"ok\",\"m\":%d,\"arm\":%d,\"rt\":%d,\"warn\":\"%s\"}",
                     mode, (int)armed, lastProcType, warning);
             }
-        } else {
-            if (lastProcButtonIdx >= 0) {
+		} else {
+			if (lastProcType == 1) {
+				VerticalFlightState navigation;
+				const bool haveNavigation = getVerticalFlightState(navigation);
+				snprintf(resp, sizeof(resp),
+					"{\"s\":\"ok\",\"m\":%d,\"arm\":%d,\"rt\":1,\"nav\":%s,\"alt\":%.3f,\"hdg\":%.2f,\"fx\":%.3f,\"fy\":%.3f}",
+					mode, (int)armed, haveNavigation && navigation.healthy ? "true" : "false",
+					haveNavigation ? navigation.altitudeMeters : 0.0f,
+					degrees(attitude.getYaw()),
+					haveNavigation ? navigation.flowPositionXMeters : 0.0f,
+					haveNavigation ? navigation.flowPositionYMeters : 0.0f);
+			} else if (lastProcButtonIdx >= 0) {
                 snprintf(resp, sizeof(resp),
                     "{\"s\":\"ok\",\"m\":%d,\"arm\":%d,\"rt\":%d,\"bi\":%d,\"bs\":%d}",
                     mode, (int)armed, lastProcType, lastProcButtonIdx, lastProcButtonState);
@@ -2078,7 +2115,8 @@ void setupWebRC() {
             return;
         }
         const String body = webRCServer.arg("plain");
-        const bool recordedInput = body.startsWith("# WEB_RC_RECORDED_V1\n");
+		const bool navigationInput = body.startsWith("# WEB_RC_RECORDED_V2\n");
+		const bool recordedInput = navigationInput || body.startsWith("# WEB_RC_RECORDED_V1\n");
         const OpenLoopParseResult parsed = parseOpenLoopSequenceText(
             body.c_str(), body.length(), openLoopBuffers[stagingIndex], OPEN_LOOP_MAX_STEPS);
         if (!parsed.ok || armed || motorsActive()) {
@@ -2108,7 +2146,8 @@ void setupWebRC() {
         openLoopCount = parsed.count;
         previousText = openLoopUploadedText;
         openLoopUploadedText = uploadedText;
-        openLoopRecordedInput = recordedInput;
+		openLoopRecordedInput = recordedInput;
+		openLoopNavigationInput = navigationInput;
         openLoopTotalMs = parsed.totalMs;
         openLoopIndex = 0;
         openLoopRevision++;
@@ -2166,7 +2205,7 @@ void setupWebRC() {
         uint16_t count, index;
         uint32_t totalMs, revision;
         const char *reason;
-        bool pending, recordedInput;
+		bool pending, recordedInput, navigationInput;
         portENTER_CRITICAL(&openLoopMux);
         state = openLoopState;
         count = openLoopCount;
@@ -2175,15 +2214,17 @@ void setupWebRC() {
         revision = openLoopRevision;
         reason = openLoopReason;
         pending = openLoopTakeoverRequested;
-        recordedInput = openLoopRecordedInput;
+		recordedInput = openLoopRecordedInput;
+		navigationInput = openLoopNavigationInput;
         portEXIT_CRITICAL(&openLoopMux);
-        char response[288];
-        snprintf(response, sizeof(response),
-            "{\"state\":\"%s\",\"count\":%u,\"step\":%u,\"duration_s\":%.1f,\"plan_revision\":%lu,\"pending\":%s,\"reason\":\"%s\",\"arm\":%d,\"mode\":%d,\"recorded\":%s}",
+		char response[448];
+		snprintf(response, sizeof(response),
+			"{\"state\":\"%s\",\"count\":%u,\"step\":%u,\"duration_s\":%.1f,\"plan_revision\":%lu,\"pending\":%s,\"reason\":\"%s\",\"arm\":%d,\"mode\":%d,\"recorded\":%s,\"schema\":%u,\"vertical_ready\":%s}",
             openLoopStateName(state), (unsigned)count,
             (unsigned)(index < count ? index + 1 : count), totalMs / 1000.0,
             (unsigned long)revision, pending ? "true" : "false", reason, (int)armed, mode,
-            recordedInput ? "true" : "false");
+			recordedInput ? "true" : "false", navigationInput ? 2U : 1U,
+			verticalFlightHealthy() ? "true" : "false");
         webRCServer.send(200, "application/json", response);
     });
 
@@ -2672,11 +2713,29 @@ void setupWebRC() {
             !haveBarometerSample ? "waiting_for_sample" :
             !barometerUsable ? "sample_stale_or_invalid" :
             !barometerGuardReady ? "relative_altitude_below_1m" : "ready";
+        OpticalFlowSample opticalFlowSample;
+        DownwardRangeSample downwardRangeSample;
+        uint32_t opticalFlowSamples = 0, opticalFlowFailures = 0;
+        uint32_t downwardRangeSamples = 0, downwardRangeFailures = 0;
+        const bool haveOpticalFlowSample = getOpticalFlowSample(opticalFlowSample,
+            opticalFlowSamples, opticalFlowFailures);
+        const bool haveDownwardRangeSample = getDownwardRangeSample(downwardRangeSample,
+            downwardRangeSamples, downwardRangeFailures);
+        const bool opticalFlowUsable = haveOpticalFlowSample &&
+            opticalFlowSampleUsable(opticalFlowSample, sensorNowUs, 250000U, 1);
+        const bool downwardRangeUsable = haveDownwardRangeSample &&
+            downwardRangeSampleUsable(downwardRangeSample, sensorNowUs, 250000U, 1);
+        const long opticalFlowAgeMs = haveOpticalFlowSample ?
+            (long)((uint32_t)(sensorNowUs - opticalFlowSample.timestampUs) / 1000U) : -1L;
+		const long downwardRangeAgeMs = haveDownwardRangeSample ?
+			(long)((uint32_t)(sensorNowUs - downwardRangeSample.timestampUs) / 1000U) : -1L;
+		VerticalFlightState verticalState;
+		const bool haveVerticalState = getVerticalFlightState(verticalState);
         const uint64_t deviceMac = ESP.getEfuseMac();
         char deviceId[13];
         snprintf(deviceId, sizeof(deviceId), "%04X%08X",
             (unsigned)((deviceMac >> 32) & 0xFFFFU), (unsigned)(deviceMac & 0xFFFFFFFFU));
-        char json[1536];
+		char json[2944];
         const char *armReason = armBlockReason();
         const bool armReady = armed || !armReason;
         snprintf(json, sizeof(json),
@@ -2691,11 +2750,28 @@ void setupWebRC() {
             "\"control_source\":%u,\"thrust_target\":%.3f,\"hover_throttle_pct\":%.1f,"
             "\"hover_throttle_reachable\":%s,"
             "\"compass_available\":%s,"
+            "\"optical_flow_detected\":%s,\"optical_flow_ready\":%s,"
+            "\"optical_flow_usable\":%s,\"optical_flow_dx\":%d,\"optical_flow_dy\":%d,"
+            "\"optical_flow_quality\":%u,\"optical_flow_motion\":%s,"
+            "\"optical_flow_age_ms\":%ld,\"optical_flow_failures\":%lu,"
+            "\"downward_range_detected\":%s,\"downward_range_ready\":%s,"
+            "\"downward_range_usable\":%s,\"downward_range_m\":%.3f,"
+            "\"downward_range_status\":%u,\"downward_range_raw_status\":%u,"
+            "\"downward_range_age_ms\":%ld,"
+            "\"downward_range_failures\":%lu,"
             "\"barometer_available\":%s,\"barometer_usable\":%s,"
             "\"barometer_guard_ready\":%s,\"barometer_reason\":\"%s\","
-            "\"barometer_age_ms\":%ld,\"relative_altitude_m\":%.3f,"
-            "\"vertical_speed_mps\":%.3f,"
-            "\"gyro_bias_ready\":%s,\"accel_calibration_stored\":%s,"
+			"\"barometer_age_ms\":%ld,\"relative_altitude_m\":%.3f,"
+			"\"vertical_speed_mps\":%.3f,"
+			"\"vertical_estimator_ready\":%s,\"vertical_estimator_degraded\":%s,"
+			"\"fused_altitude_m\":%.3f,\"fused_vertical_speed_mps\":%.3f,"
+			"\"vertical_acceleration_mps2\":%.3f,\"height_source\":%u,"
+			"\"altitude_control_active\":%s,\"altitude_target_m\":%.3f,"
+			"\"vertical_speed_target_mps\":%.3f,\"altitude_thrust_command\":%.3f,"
+			"\"flow_position_x_m\":%.3f,\"flow_position_y_m\":%.3f,"
+			"\"flow_velocity_x_mps\":%.3f,\"flow_velocity_y_mps\":%.3f,"
+			"\"attitude_yaw_deg\":%.2f,"
+			"\"gyro_bias_ready\":%s,\"accel_calibration_stored\":%s,"
             "\"level_calibration_stored\":%s,"
             "\"arm_ready\":%s,\"arm_reason\":\"%s\"}",
             armed ? "true" : "false",
@@ -2717,14 +2793,41 @@ void setupWebRC() {
             (unsigned)getCurrentControlSource(), thrustTarget, hoverReturn.percent,
             hoverReturn.reachable ? "true" : "false",
             compassAvailable() ? "true" : "false",
+            opticalFlowDetected() ? "true" : "false",
+            opticalFlowAvailable() ? "true" : "false",
+            opticalFlowUsable ? "true" : "false", opticalFlowSample.deltaX,
+            opticalFlowSample.deltaY, opticalFlowSample.quality,
+            opticalFlowSample.motionDetected ? "true" : "false", opticalFlowAgeMs,
+            (unsigned long)opticalFlowFailures,
+            downwardRangeDetected() ? "true" : "false",
+            downwardRangeAvailable() ? "true" : "false",
+            downwardRangeUsable ? "true" : "false", downwardRangeSample.distanceMeters,
+            downwardRangeSample.rangeStatus, downwardRangeSample.rawRangeStatus,
+            downwardRangeAgeMs,
+            (unsigned long)downwardRangeFailures,
             barometerDetected ? "true" : "false",
             barometerUsable ? "true" : "false",
             barometerGuardReady ? "true" : "false", barometerReason,
             barometerAgeMs,
             haveBarometerSample && isfinite(barometerEstimate.relativeAltitudeMeters) ?
                 barometerEstimate.relativeAltitudeMeters : 0.0f,
-            haveBarometerSample && isfinite(barometerEstimate.verticalSpeedMps) ?
-                barometerEstimate.verticalSpeedMps : 0.0f,
+			haveBarometerSample && isfinite(barometerEstimate.verticalSpeedMps) ?
+				barometerEstimate.verticalSpeedMps : 0.0f,
+			haveVerticalState && verticalState.healthy ? "true" : "false",
+			haveVerticalState && verticalState.degraded ? "true" : "false",
+			haveVerticalState ? verticalState.altitudeMeters : 0.0f,
+			haveVerticalState ? verticalState.verticalSpeedMps : 0.0f,
+			haveVerticalState ? verticalState.verticalAccelerationMps2 : 0.0f,
+			haveVerticalState ? verticalState.heightSource : 0U,
+			haveVerticalState && verticalState.controlActive ? "true" : "false",
+			haveVerticalState ? verticalState.altitudeTargetMeters : 0.0f,
+			haveVerticalState ? verticalState.verticalSpeedTargetMps : 0.0f,
+			haveVerticalState ? verticalState.thrustCommand : 0.0f,
+			haveVerticalState ? verticalState.flowPositionXMeters : 0.0f,
+			haveVerticalState ? verticalState.flowPositionYMeters : 0.0f,
+			haveVerticalState ? verticalState.flowVelocityXMps : 0.0f,
+			haveVerticalState ? verticalState.flowVelocityYMps : 0.0f,
+			degrees(attitude.getYaw()),
             gyroBiasReady() ? "true" : "false",
             accelCalibrationStored() ? "true" : "false",
             levelCalibrationStored() ? "true" : "false",

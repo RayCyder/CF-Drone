@@ -13,7 +13,7 @@ int main() {
     const char *postAllowed[] = {
         "/web_rc", "/web_rc/heartbeat", "/web_rc/lease",
         "/route/takeover", "/descent-calibration/start",
-        "/descent-calibration/stop", "/console/disable"
+        "/descent-calibration/abort", "/console/disable"
     };
     for (const char *path : postAllowed) {
         assert(webArmedRouteAllowed(path, false, true));
