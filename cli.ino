@@ -136,6 +136,7 @@ const char* motd =
 "imu - 显示IMU数据\n"
 "sensors - 读取IMU扩展板的气压计、磁力计、光流与下视测距\n"
 "nav - 显示融合高度、垂直速度、定高目标和光流影子位置\n"
+"flowcal start|stop|status|reset - 采集PMW3901实物标定统计（上锁、无桨）\n"
 "magcal start|status|stop|save|align <deg>|reset - 校准QMC5883P软硬铁偏差和航向安装偏角\n"
 "time - 显示时间信息\n"
 "mot - 显示motor输出\n"
@@ -279,14 +280,53 @@ void doCommand(String str, bool echo = false) {
 		if (!getVerticalFlightState(state)) {
 			print("VERTICAL state=unavailable\n");
 		} else {
-			print("VERTICAL healthy=%d degraded=%d source=%u altitude_m=%.3f vz_mps=%.3f az_mps2=%.3f target_m=%.3f target_vz_mps=%.3f thrust=%.3f range_valid=%d range_m=%.3f flow_valid=%d flow_quality=%u flow_x_m=%.3f flow_y_m=%.3f flow_vx_mps=%.3f flow_vy_mps=%.3f\n",
+			print("VERTICAL healthy=%d degraded=%d source=%u altitude_m=%.3f vz_mps=%.3f az_mps2=%.3f target_m=%.3f target_vz_mps=%.3f thrust=%.3f range_raw_valid=%d range_raw_agl_m=%.3f range_ref=%u range_ground_m=%.3f range_relative_m=%.3f range_fusion_valid=%d flow_valid=%d flow_quality=%u flow_x_m=%.3f flow_y_m=%.3f flow_vx_mps=%.3f flow_vy_mps=%.3f\n",
 				state.healthy, state.degraded, state.heightSource, state.altitudeMeters,
 				state.verticalSpeedMps, state.verticalAccelerationMps2,
 				state.altitudeTargetMeters, state.verticalSpeedTargetMps,
 				state.thrustCommand, state.rangeValid, state.rangeAglMeters,
+				(unsigned)state.rangeReferenceSource, state.rangeGroundBaselineMeters,
+				state.rangeRelativeHeightMeters, state.rangeFusionValid,
 				state.flowValid, (unsigned)state.flowQuality,
 				state.flowPositionXMeters, state.flowPositionYMeters,
 				state.flowVelocityXMps, state.flowVelocityYMps);
+		}
+	} else if (command == "flowcal") {
+		if (arg0 == "start") {
+			if (startOpticalFlowCalibration())
+				print("FLOW_CAL started. Keep motors stopped; run one trial at a time: static, move body +X 1m, move body +Y 1m, or rotate in place. Then use flowcal stop/status.\n");
+			else print("FLOW_CAL start rejected: disarm and stop all motor output first.\n");
+		} else if (arg0 == "stop") {
+			stopOpticalFlowCalibration();
+			print("FLOW_CAL stopped; use flowcal status.\n");
+		} else if (arg0 == "reset") {
+			resetOpticalFlowCalibration();
+			print("FLOW_CAL reset.\n");
+		} else if (arg0 == "status") {
+			OpticalFlowCalibrationStats stats;
+			if (!getOpticalFlowCalibrationStats(stats)) {
+				print("FLOW_CAL state=empty\n");
+			} else {
+				const float qualityAverage = stats.validSampleCount ?
+					stats.qualitySum / stats.validSampleCount : 0.0f;
+				const float rangeAverage = stats.rangeSampleCount ?
+					stats.rangeSumMeters / stats.rangeSampleCount : 0.0f;
+				const float durationSeconds = ((stats.active ? micros() : stats.endedUs) - stats.startedUs) * 1e-6f;
+				print("FLOW_CAL active=%u duration_s=%.2f samples=%lu valid=%lu usable=%lu motion=%lu pixels_x=%lld pixels_y=%lld image_angle_x_rad=%.5f image_angle_y_rad=%.5f gyro_angle_x_rad=%.5f gyro_angle_y_rad=%.5f corrected_angle_x_rad=%.5f corrected_angle_y_rad=%.5f estimated_body_x_m=%.4f estimated_body_y_m=%.4f quality_avg=%.1f quality_min=%u quality_max=%u agl_avg_m=%.3f agl_min_m=%.3f agl_max_m=%.3f\n",
+					stats.active, durationSeconds, (unsigned long)stats.sampleCount,
+					(unsigned long)stats.validSampleCount, (unsigned long)stats.usableSampleCount,
+					(unsigned long)stats.motionSampleCount, (long long)stats.pixelX, (long long)stats.pixelY,
+					stats.imageAngleXRad, stats.imageAngleYRad,
+					stats.gyroAngleXRad, stats.gyroAngleYRad,
+					stats.correctedAngleXRad, stats.correctedAngleYRad,
+					stats.estimatedBodyXMeters, stats.estimatedBodyYMeters,
+					qualityAverage, stats.validSampleCount ? stats.qualityMinimum : 0,
+					stats.qualityMaximum, rangeAverage,
+					stats.rangeSampleCount ? stats.rangeMinimumMeters : 0.0f,
+					stats.rangeSampleCount ? stats.rangeMaximumMeters : 0.0f);
+			}
+		} else {
+			print("Usage: flowcal start|stop|status|reset\n");
 		}
 	} else if (command == "magcal") {
 		if (arg0 == "start") {

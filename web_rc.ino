@@ -2793,7 +2793,7 @@ void setupWebRC() {
         char deviceId[13];
         snprintf(deviceId, sizeof(deviceId), "%04X%08X",
             (unsigned)((deviceMac >> 32) & 0xFFFFU), (unsigned)(deviceMac & 0xFFFFFFFFU));
-		char json[3456];
+		char json[3840];
         const char *armReason = armBlockReason();
         const bool armReady = armed || !armReason;
         snprintf(json, sizeof(json),
@@ -2829,6 +2829,9 @@ void setupWebRC() {
 			"\"vertical_estimator_ready\":%s,\"vertical_estimator_degraded\":%s,"
 			"\"fused_altitude_m\":%.3f,\"fused_vertical_speed_mps\":%.3f,"
 			"\"vertical_acceleration_mps2\":%.3f,\"height_source\":%u,"
+			"\"range_raw_agl_m\":%.3f,\"range_ground_baseline_m\":%.3f,"
+			"\"range_relative_height_m\":%.3f,\"range_reference_source\":%u,"
+			"\"range_fusion_valid\":%s,"
 			"\"altitude_control_active\":%s,\"altitude_target_m\":%.3f,"
 			"\"vertical_speed_target_mps\":%.3f,\"altitude_thrust_command\":%.3f,"
 			"\"flow_position_x_m\":%.3f,\"flow_position_y_m\":%.3f,"
@@ -2892,6 +2895,11 @@ void setupWebRC() {
 			haveVerticalState ? verticalState.verticalSpeedMps : 0.0f,
 			haveVerticalState ? verticalState.verticalAccelerationMps2 : 0.0f,
 			haveVerticalState ? verticalState.heightSource : 0U,
+			haveVerticalState ? verticalState.rangeAglMeters : 0.0f,
+			haveVerticalState ? verticalState.rangeGroundBaselineMeters : 0.0f,
+			haveVerticalState ? verticalState.rangeRelativeHeightMeters : 0.0f,
+			haveVerticalState ? verticalState.rangeReferenceSource : 0U,
+			haveVerticalState && verticalState.rangeFusionValid ? "true" : "false",
 			haveVerticalState && verticalState.controlActive ? "true" : "false",
 			haveVerticalState ? verticalState.altitudeTargetMeters : 0.0f,
 			haveVerticalState ? verticalState.verticalSpeedTargetMps : 0.0f,

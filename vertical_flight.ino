@@ -3,6 +3,8 @@
 #include "external_sensors.h"
 #include "flight_sensor_interfaces.h"
 #include "navigation_origin.h"
+#include "optical_flow_calibration.h"
+#include "range_reference.h"
 #include "quaternion.h"
 #include "vertical_navigation.h"
 #include "vector.h"
@@ -20,7 +22,8 @@ VerticalFlightState verticalSnapshot;
 portMUX_TYPE verticalFlightMux = portMUX_INITIALIZER_UNLOCKED;
 uint32_t lastUpdateUs = 0;
 uint32_t lastFlowTimestampUs = 0;
-float rangeGroundOffsetMeters = NAN;
+RangeReferenceTracker rangeReference;
+OpticalFlowCalibrationAccumulator flowCalibration;
 NavigationOriginState flowOrigin;
 float routeAltitudeMeters = 0.0f;
 float routeHeadingRadians = 0.0f;
@@ -44,13 +47,14 @@ float wrapRadians(float angle) {
 
 void updateFlowShadow(const OpticalFlowSample &flow, const DownwardRangeSample &range,
 	uint32_t nowUs, float roll, float pitch, float yaw, VerticalFlightState &next) {
-	const bool rangeUsable = downwardRangeSampleUsable(range, nowUs, SENSOR_MAX_AGE_US, 1) &&
+	const bool rangeScaleUsable = downwardRangeSampleUsable(range, nowUs, SENSOR_MAX_AGE_US, 1) &&
 		range.distanceMeters >= RANGE_MIN_METERS && range.distanceMeters <= RANGE_MAX_METERS &&
 		fabsf(roll) <= FLOW_MAX_TILT_RAD && fabsf(pitch) <= FLOW_MAX_TILT_RAD;
 	const bool flowUsable = opticalFlowSampleUsable(flow, nowUs, 100000U, FLOW_MIN_QUALITY) &&
-		rangeUsable && flow.timestampUs != lastFlowTimestampUs;
-	next.rangeValid = rangeUsable;
-	next.rangeAglMeters = rangeUsable ? range.distanceMeters * cosf(roll) * cosf(pitch) : 0.0f;
+		rangeScaleUsable && flow.timestampUs != lastFlowTimestampUs;
+	flowCalibration.observe(flow.timestampUs, flow.valid, flow.motionDetected,
+		flow.deltaX, flow.deltaY, flow.deltaXAngularRadians, flow.deltaYAngularRadians,
+		flow.quality, gyro.x, gyro.y, next.rangeAglMeters, rangeScaleUsable, flowUsable);
 	if (!flowUsable) {
 		next.flowValid = false;
 		flowOrigin.vxMps *= 0.95f;
@@ -103,16 +107,15 @@ void updateVerticalFlightState() {
 	const bool haveFlow = getOpticalFlowSample(flow, flowCount, flowFailures);
 	const bool barometerUsable = haveBarometer &&
 		barometerEstimateUsable(barometer, nowUs, SENSOR_MAX_AGE_US);
-	bool rangeUsable = haveRange && downwardRangeSampleUsable(range, nowUs, SENSOR_MAX_AGE_US, 1) &&
-		range.distanceMeters >= RANGE_MIN_METERS && range.distanceMeters <= RANGE_MAX_METERS &&
+	const bool rawRangeUsable = haveRange && downwardRangeSampleUsable(range, nowUs, SENSOR_MAX_AGE_US, 1) &&
+		range.distanceMeters <= RANGE_MAX_METERS &&
 		fabsf(roll) <= FLOW_MAX_TILT_RAD && fabsf(pitch) <= FLOW_MAX_TILT_RAD;
-	float rangeRelative = 0.0f;
-	if (rangeUsable) {
-		const float corrected = range.distanceMeters * cosf(roll) * cosf(pitch);
-		if (!armed) rangeGroundOffsetMeters = corrected;
-		if (isfinite(rangeGroundOffsetMeters)) rangeRelative = corrected - rangeGroundOffsetMeters;
-		else rangeUsable = false;
-	}
+	const float correctedRawAgl = rawRangeUsable ?
+		range.distanceMeters * cosf(roll) * cosf(pitch) : 0.0f;
+	const VerticalNavigationState previousEstimate = verticalEstimator.state();
+	const RangeReferenceState &rangeState = rangeReference.update(correctedRawAgl, rawRangeUsable,
+		armed, previousEstimate.altitudeMeters, previousEstimate.initialized && previousEstimate.healthy);
+	const bool rangeUsable = rangeReferenceFusionUsable(rangeState, armed);
 
 	VerticalNavigationInput input;
 	input.nowUs = nowUs;
@@ -123,9 +126,9 @@ void updateVerticalFlightState() {
 		input.barometer = barometer.sample;
 		input.barometer.altitudeMeters = barometer.relativeAltitudeMeters;
 	}
-	if (rangeUsable && rangeRelative > 0.001f) {
+	if (rangeUsable) {
 		input.range = range;
-		input.range.distanceMeters = rangeRelative;
+		input.range.distanceMeters = rangeState.relativeHeightMeters;
 	}
 	if (haveFlow) input.flow = flow;
 	verticalEstimator.update(input);
@@ -143,7 +146,13 @@ void updateVerticalFlightState() {
 	next.rangeAgeMs = haveRange ? (uint32_t)(nowUs - range.timestampUs) / 1000U : UINT32_MAX;
 	next.flowAgeMs = haveFlow ? (uint32_t)(nowUs - flow.timestampUs) / 1000U : UINT32_MAX;
 	next.flowQuality = haveFlow ? flow.quality : 0;
-	if (haveFlow && haveRange) updateFlowShadow(flow, range, nowUs, roll, pitch, yaw, next);
+	next.rangeValid = rangeState.rawValid;
+	next.rangeFusionValid = rangeUsable;
+	next.rangeAglMeters = rangeState.rawAglMeters;
+	next.rangeGroundBaselineMeters = rangeState.groundBaselineMeters;
+	next.rangeRelativeHeightMeters = rangeState.relativeHeightMeters;
+	next.rangeReferenceSource = (uint8_t)rangeState.source;
+	if (haveFlow) updateFlowShadow(flow, range, nowUs, roll, pitch, yaw, next);
 	next.flowPositionXMeters = flowOrigin.xMeters;
 	next.flowPositionYMeters = flowOrigin.yMeters;
 	next.flowVelocityXMps = flowOrigin.vxMps;
@@ -174,6 +183,25 @@ bool resetNavigationOrigin(bool taskActive) {
 	verticalSnapshot.flowVelocityYMps = 0.0f;
 	portEXIT_CRITICAL(&verticalFlightMux);
 	return true;
+}
+
+bool startOpticalFlowCalibration() {
+	if (armed || motorsActive()) return false;
+	flowCalibration.start(micros());
+	return true;
+}
+
+void stopOpticalFlowCalibration() {
+	flowCalibration.stop(micros());
+}
+
+void resetOpticalFlowCalibration() {
+	if (!armed && !motorsActive()) flowCalibration.reset();
+}
+
+bool getOpticalFlowCalibrationStats(OpticalFlowCalibrationStats &stats) {
+	stats = flowCalibration.stats();
+	return stats.sampleCount > 0 || stats.active;
 }
 
 bool verticalFlightHealthy() {

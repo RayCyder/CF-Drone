@@ -1,5 +1,7 @@
 #pragma once
 
+#include "optical_flow_calibration.h"
+
 #include <stdint.h>
 
 struct VerticalFlightState {
@@ -7,6 +9,8 @@ struct VerticalFlightState {
 	float verticalSpeedMps = 0.0f;
 	float verticalAccelerationMps2 = 0.0f;
 	float rangeAglMeters = 0.0f;
+	float rangeGroundBaselineMeters = 0.0f;
+	float rangeRelativeHeightMeters = 0.0f;
 	float flowPositionXMeters = 0.0f;
 	float flowPositionYMeters = 0.0f;
 	float flowVelocityXMps = 0.0f;
@@ -20,9 +24,11 @@ struct VerticalFlightState {
 	uint32_t flowAgeMs = UINT32_MAX;
 	uint8_t heightSource = 0;
 	uint8_t flowQuality = 0;
+	uint8_t rangeReferenceSource = 0;
 	bool healthy = false;
 	bool degraded = false;
 	bool rangeValid = false;
+	bool rangeFusionValid = false;
 	bool flowValid = false;
 	bool controlActive = false;
 };
@@ -39,3 +45,7 @@ void clearRouteNavigationTarget();
 bool routeNavigationTarget(float &altitudeMeters, float &headingRadians);
 bool applyRouteAltitudeControl(float hoverThrust, float &thrust);
 bool resetNavigationOrigin(bool taskActive);
+bool startOpticalFlowCalibration();
+void stopOpticalFlowCalibration();
+void resetOpticalFlowCalibration();
+bool getOpticalFlowCalibrationStats(OpticalFlowCalibrationStats &stats);
