@@ -100,6 +100,10 @@ void setup() {
 		__DATE__, __TIME__, ESP.getChipModel(), ESP.getChipRevision(),
 		(unsigned long)ESP.getCpuFreqMHz(), (unsigned long)ESP.getFlashChipSize(),
 		resetReasonName(esp_reset_reason()), (int)esp_reset_reason(), (unsigned long)ESP.getFreeHeap());
+	print("BOARD sensor_profile=%s barometer=%u compass=%u optical_flow=%u downward_range=%u\n",
+		BOARD_SENSOR_PROFILE_NAME, (unsigned)BOARD_BAROMETER_ENABLED,
+		(unsigned)BOARD_COMPASS_ENABLED, (unsigned)BOARD_OPTICAL_FLOW_ENABLED,
+		(unsigned)BOARD_DOWNWARD_RANGE_ENABLED);
 	initializeSlowLoopRetention((uint32_t)esp_reset_reason());
 	print("程序开始初始化！\n");
 	initializeSystemLog(); // 恢复上次启动的故障/系统事件历史

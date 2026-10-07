@@ -87,6 +87,8 @@ static bool openLoopNavigationInput = false;
 static uint8_t openLoopSchemaVersion = 0;
 static uint8_t openLoopSourceKind = 0;
 static uint8_t openLoopControlPolicy = 0;
+static uint8_t openLoopAdvancePolicy = OPEN_LOOP_ADVANCE_TIMED;
+static uint8_t openLoopHeadingPolicy = OPEN_LOOP_HEADING_MAGNETIC;
 static float openLoopAltitudeOffsetMeters = 0.0f;
 static float openLoopHeadingOffsetRadians = 0.0f;
 static uint16_t openLoopIndex = 0;
@@ -94,7 +96,11 @@ static uint32_t openLoopTotalMs = 0;
 static uint32_t openLoopRevision = 0;
 static uint32_t openLoopStartMs = 0;
 static uint32_t openLoopCurrentDeadlineMs = 0;
+static uint32_t openLoopStepStartedMs = 0;
 static uint32_t openLoopLastSchedulerMs = 0;
+static bool openLoopArrivalGateActive = false;
+static float openLoopArrivalTargetMeters = NAN;
+static OpenLoopArrivalGate openLoopArrivalGate;
 static OpenLoopControls openLoopAppliedControls = {0, 0, 0, 0};
 static bool openLoopLandingStarted = false;
 static bool openLoopTakeoverRequested = false;
@@ -111,6 +117,8 @@ static uint8_t openLoopReasonCode(const char *reason) {
 	if (strcmp(reason, "mode_changed") == 0) return 5;
 	if (strcmp(reason, "scheduler_gap") == 0 || strcmp(reason, "multiple_expired_segments") == 0) return 6;
 	if (strcmp(reason, "landing_interrupted") == 0) return 7;
+	if (strcmp(reason, "arrival_timeout") == 0) return 8;
+	if (strcmp(reason, "vertical_unhealthy") == 0) return 9;
 	return 255;
 }
 
@@ -597,6 +605,14 @@ bool isLocalSequenceRunning() {
     return running;
 }
 
+bool localRouteRequiresTrustedHeading() {
+    portENTER_CRITICAL(&openLoopMux);
+    const bool required = openLoopNavigationInput &&
+        openLoopHeadingPolicy == OPEN_LOOP_HEADING_MAGNETIC;
+    portEXIT_CRITICAL(&openLoopMux);
+    return required;
+}
+
 bool isLocalSequenceReadyForAuto() {
     portENTER_CRITICAL(&openLoopMux);
     const bool ready = openLoopState == OPEN_LOOP_STATE_READY && openLoopCount > 0 &&
@@ -610,6 +626,12 @@ static void setOpenLoopReason(const char *reason) {
     openLoopReason = reason ? reason : "unknown";
 }
 
+static void resetOpenLoopArrivalLocked() {
+    openLoopArrivalGateActive = false;
+    openLoopArrivalTargetMeters = NAN;
+    openLoopArrivalGate.reset();
+}
+
 void cancelLocalSequenceForManualMode() {
 	bool clearNavigation = false;
     portENTER_CRITICAL(&openLoopMux);
@@ -618,7 +640,8 @@ void cancelLocalSequenceForManualMode() {
         openLoopState = OPEN_LOOP_STATE_ABORTED;
         openLoopTakeoverRequested = false;
         openLoopLandingStarted = false;
-        setOpenLoopReason("manual_takeover");
+		setOpenLoopReason("manual_takeover");
+		resetOpenLoopArrivalLocked();
 		clearNavigation = true;
     }
     portEXIT_CRITICAL(&openLoopMux);
@@ -644,6 +667,8 @@ static void startOpenLoopNow(uint32_t now) {
 	openLoopResetStartOffsets(openLoopAltitudeOffsetMeters, openLoopHeadingOffsetRadians);
 	resetNavigationOrigin(false);
     openLoopCurrentDeadlineMs = now + openLoopBuffers[openLoopActiveBuffer][0].durationMs;
+    openLoopStepStartedMs = now;
+    resetOpenLoopArrivalLocked();
 	if (openLoopNavigationInput && openLoopStepHasAltitude(openLoopBuffers[openLoopActiveBuffer][0]) &&
 		openLoopStepHasHeading(openLoopBuffers[openLoopActiveBuffer][0])) {
 		VerticalFlightState navigation;
@@ -917,7 +942,21 @@ static void enterOpenLoopLandingLocked(const char *reason) {
     openLoopState = OPEN_LOOP_STATE_LANDING;
     openLoopTakeoverRequested = false;
     openLoopLandingStarted = false;
+    resetOpenLoopArrivalLocked();
     setOpenLoopReason(reason);
+}
+
+static void prepareOpenLoopStepLocked(uint16_t previousIndex, uint32_t now) {
+    openLoopStepStartedMs = now;
+    openLoopCurrentDeadlineMs = now + openLoopBuffers[openLoopActiveBuffer][openLoopIndex].durationMs;
+    openLoopArrivalGate.reset();
+    openLoopArrivalGateActive = openLoopStepUsesArrivalGate(openLoopAdvancePolicy,
+        openLoopBuffers[openLoopActiveBuffer][previousIndex],
+        openLoopBuffers[openLoopActiveBuffer][openLoopIndex]);
+    openLoopArrivalTargetMeters = openLoopArrivalGateActive
+        ? openLoopStepAltitudeMeters(openLoopBuffers[openLoopActiveBuffer][openLoopIndex]) +
+            openLoopAltitudeOffsetMeters
+        : NAN;
 }
 
 static void stepOpenLoopSequence() {
@@ -928,6 +967,13 @@ static void stepOpenLoopSequence() {
     OpenLoopPackedStep step;
     uint32_t elapsedForSlew = 0;
     const uint32_t now = millis();
+    VerticalFlightState verticalState;
+    bool verticalStateFresh = false;
+    if (openLoopArrivalGateActive) {
+        const bool verticalStateAvailable = getVerticalFlightState(verticalState);
+        verticalStateFresh = verticalStateAvailable && verticalState.healthy &&
+            (uint32_t)(micros() - verticalState.timestampUs) <= 200000UL;
+    }
 
     portENTER_CRITICAL(&openLoopMux);
     if (openLoopTakeoverRequested) {
@@ -958,30 +1004,56 @@ static void stepOpenLoopSequence() {
         } else if (!armed) {
             openLoopState = OPEN_LOOP_STATE_COMPLETE;
             setOpenLoopReason("disarmed");
+            resetOpenLoopArrivalLocked();
         } else if (!isControlledLandingActive()) {
             openLoopState = OPEN_LOOP_STATE_ABORTED;
             setOpenLoopReason("landing_interrupted");
+            resetOpenLoopArrivalLocked();
         }
     } else if (openLoopState == OPEN_LOOP_STATE_RUNNING) {
         const uint32_t dtMs = now - openLoopLastSchedulerMs;
         if (!armed) {
             openLoopState = OPEN_LOOP_STATE_COMPLETE;
             setOpenLoopReason("disarmed");
+            resetOpenLoopArrivalLocked();
         } else if (mode != STAB && mode != AUTO) {
             openLoopState = OPEN_LOOP_STATE_ABORTED;
             setOpenLoopReason("mode_changed");
+            resetOpenLoopArrivalLocked();
         } else if (dtMs > OPEN_LOOP_SCHEDULER_GAP_MS) {
             enterOpenLoopLandingLocked("scheduler_gap");
             beginLanding = true;
         } else {
-            if (openLoopElapsed(now, openLoopCurrentDeadlineMs)) {
-                openLoopIndex++;
+            bool advanceStep = false;
+            if (openLoopArrivalGateActive) {
+                const OpenLoopArrivalDecision decision = openLoopArrivalGate.update(now,
+                    openLoopCurrentDeadlineMs, verticalStateFresh, verticalState.altitudeMeters,
+                    verticalState.verticalSpeedMps, openLoopArrivalTargetMeters);
+                if (decision == OPEN_LOOP_ARRIVAL_REACHED) advanceStep = true;
+                else if (decision == OPEN_LOOP_ARRIVAL_TIMEOUT) {
+                    enterOpenLoopLandingLocked("arrival_timeout");
+                    beginLanding = true;
+                } else if (decision == OPEN_LOOP_ARRIVAL_UNHEALTHY) {
+                    enterOpenLoopLandingLocked("vertical_unhealthy");
+                    beginLanding = true;
+                }
+            } else if (openLoopElapsed(now, openLoopCurrentDeadlineMs)) {
+                advanceStep = true;
+            }
+            if (advanceStep && openLoopState == OPEN_LOOP_STATE_RUNNING) {
+                const uint16_t previousIndex = openLoopIndex++;
                 if (openLoopIndex >= openLoopCount) {
                     enterOpenLoopLandingLocked("sequence_complete");
                     beginLanding = true;
                 } else {
-                    openLoopCurrentDeadlineMs += openLoopBuffers[openLoopActiveBuffer][openLoopIndex].durationMs;
-                    if (openLoopElapsed(now, openLoopCurrentDeadlineMs)) {
+                    if (openLoopAdvancePolicy == OPEN_LOOP_ADVANCE_ARRIVAL) {
+                        prepareOpenLoopStepLocked(previousIndex, now);
+                    } else {
+                        openLoopCurrentDeadlineMs = openLoopNextStepDeadline(openLoopAdvancePolicy, now,
+                            openLoopCurrentDeadlineMs,
+                            openLoopBuffers[openLoopActiveBuffer][openLoopIndex].durationMs);
+                    }
+                    if (!openLoopArrivalGateActive && openLoopElapsed(now, openLoopCurrentDeadlineMs)) {
                         enterOpenLoopLandingLocked("multiple_expired_segments");
                         beginLanding = true;
                     }
@@ -2193,6 +2265,8 @@ void setupWebRC() {
 		openLoopSchemaVersion = parsed.schemaVersion;
 		openLoopSourceKind = parsed.sourceKind;
 		openLoopControlPolicy = parsed.controlPolicy;
+		openLoopAdvancePolicy = parsed.advancePolicy;
+		openLoopHeadingPolicy = parsed.headingPolicy;
 		openLoopRecordedInput = parsed.sourceKind == OPEN_LOOP_SOURCE_RECORDED;
 		openLoopNavigationInput = parsed.schemaVersion == 2;
         openLoopTotalMs = parsed.totalMs;
@@ -2202,6 +2276,7 @@ void setupWebRC() {
         revision = openLoopRevision;
         openLoopState = OPEN_LOOP_STATE_READY;
         openLoopTakeoverRequested = false;
+        resetOpenLoopArrivalLocked();
         openLoopUploadInProgress = false;
         setOpenLoopReason("uploaded");
         portEXIT_CRITICAL(&openLoopMux);
@@ -2253,7 +2328,11 @@ void setupWebRC() {
         uint32_t totalMs, revision;
         const char *reason;
 		bool pending, recordedInput;
-		uint8_t schemaVersion, sourceKind, controlPolicy;
+		uint8_t schemaVersion, sourceKind, controlPolicy, headingPolicy;
+        uint8_t advancePolicy;
+        bool arrivalGateActive, arrivalStableStarted;
+        uint32_t stepStartedMs, deadlineMs, arrivalStableSinceMs;
+        float arrivalTargetMeters;
         portENTER_CRITICAL(&openLoopMux);
         state = openLoopState;
         count = openLoopCount;
@@ -2266,15 +2345,47 @@ void setupWebRC() {
 		schemaVersion = openLoopSchemaVersion;
 		sourceKind = openLoopSourceKind;
 		controlPolicy = openLoopControlPolicy;
+        headingPolicy = openLoopHeadingPolicy;
+        advancePolicy = openLoopAdvancePolicy;
+        arrivalGateActive = openLoopArrivalGateActive;
+        arrivalStableStarted = openLoopArrivalGate.stableStarted;
+        arrivalStableSinceMs = openLoopArrivalGate.stableSinceMs;
+        arrivalTargetMeters = openLoopArrivalTargetMeters;
+        stepStartedMs = openLoopStepStartedMs;
+        deadlineMs = openLoopCurrentDeadlineMs;
         portEXIT_CRITICAL(&openLoopMux);
-		char response[448];
+		const uint32_t now = millis();
+        VerticalFlightState vertical;
+        const bool haveVertical = getVerticalFlightState(vertical) && vertical.healthy &&
+            (uint32_t)(micros() - vertical.timestampUs) <= 200000UL;
+        const uint32_t elapsedMs = state == OPEN_LOOP_STATE_RUNNING ? now - stepStartedMs : 0;
+        const uint32_t remainingMs = state == OPEN_LOOP_STATE_RUNNING && !openLoopElapsed(now, deadlineMs)
+            ? deadlineMs - now : 0;
+        const uint32_t stableMs = arrivalGateActive && arrivalStableStarted
+            ? now - arrivalStableSinceMs : 0;
+        char targetAltitude[24], actualAltitude[24], verticalSpeed[24];
+        if (arrivalGateActive && isfinite(arrivalTargetMeters)) snprintf(targetAltitude, sizeof(targetAltitude), "%.3f", arrivalTargetMeters);
+        else strcpy(targetAltitude, "null");
+        if (haveVertical) {
+            snprintf(actualAltitude, sizeof(actualAltitude), "%.3f", vertical.altitudeMeters);
+            snprintf(verticalSpeed, sizeof(verticalSpeed), "%.3f", vertical.verticalSpeedMps);
+        } else {
+            strcpy(actualAltitude, "null");
+            strcpy(verticalSpeed, "null");
+        }
+		char response[768];
 		snprintf(response, sizeof(response),
-			"{\"state\":\"%s\",\"count\":%u,\"step\":%u,\"duration_s\":%.1f,\"plan_revision\":%lu,\"pending\":%s,\"reason\":\"%s\",\"arm\":%d,\"mode\":%d,\"recorded\":%s,\"schema\":%u,\"source\":%u,\"policy\":%u,\"vertical_ready\":%s}",
+			"{\"state\":\"%s\",\"count\":%u,\"step\":%u,\"duration_s\":%.1f,\"plan_revision\":%lu,\"pending\":%s,\"reason\":\"%s\",\"arm\":%d,\"mode\":%d,\"recorded\":%s,\"schema\":%u,\"source\":%u,\"policy\":%u,\"advance\":\"%s\",\"heading\":\"%s\",\"phase\":\"%s\",\"step_elapsed_ms\":%lu,\"stable_ms\":%lu,\"remaining_ms\":%lu,\"target_altitude_m\":%s,\"actual_altitude_m\":%s,\"vertical_speed_mps\":%s,\"vertical_ready\":%s}",
             openLoopStateName(state), (unsigned)count,
             (unsigned)(index < count ? index + 1 : count), totalMs / 1000.0,
             (unsigned long)revision, pending ? "true" : "false", reason, (int)armed, mode,
 			recordedInput ? "true" : "false", (unsigned)schemaVersion,
 			(unsigned)sourceKind, (unsigned)controlPolicy,
+			advancePolicy == OPEN_LOOP_ADVANCE_ARRIVAL ? "arrival" : "timed",
+            headingPolicy == OPEN_LOOP_HEADING_RELATIVE ? "relative" : "magnetic",
+            arrivalGateActive ? (arrivalStableStarted ? "stabilizing" : "waiting_arrival") : "timed",
+            (unsigned long)elapsedMs, (unsigned long)stableMs, (unsigned long)remainingMs,
+            targetAltitude, actualAltitude, verticalSpeed,
 			verticalFlightHealthy() ? "true" : "false");
         webRCServer.send(200, "application/json", response);
     });
@@ -2779,8 +2890,10 @@ void setupWebRC() {
             opticalFlowState == OpticalFlowSampleState::FreshMotion;
         const bool downwardRangeUsable = haveDownwardRangeSample &&
             downwardRangeSampleUsable(downwardRangeSample, sensorNowUs, 250000U, 1);
-		MagnetometerEstimate magnetometerEstimate;
-		const bool haveMagnetometer = getMagnetometerEstimate(magnetometerEstimate);
+			MagnetometerEstimate magnetometerEstimate;
+			const bool haveMagnetometer = getMagnetometerEstimate(magnetometerEstimate);
+			MagnetometerCalibrationStatus magCalibrationStatus;
+			getMagCalibrationStatus(magCalibrationStatus);
 		const long magnetometerAgeMs = haveMagnetometer && magnetometerEstimate.timestampUs ?
 			(long)((uint32_t)(sensorNowUs - magnetometerEstimate.timestampUs) / 1000U) : -1L;
         const long opticalFlowAgeMs = haveOpticalFlowSample ?
@@ -2793,10 +2906,15 @@ void setupWebRC() {
         char deviceId[13];
         snprintf(deviceId, sizeof(deviceId), "%04X%08X",
             (unsigned)((deviceMac >> 32) & 0xFFFFU), (unsigned)(deviceMac & 0xFFFFFFFFU));
-		char json[3840];
+			constexpr size_t statusJsonCapacity = 4352;
+		char *json = (char *)malloc(statusJsonCapacity);
+		if (!json) {
+			webRCServer.send(503, "application/json", "{\"ok\":0,\"error\":\"status_buffer_unavailable\"}");
+			return;
+		}
         const char *armReason = armBlockReason();
         const bool armReady = armed || !armReason;
-        snprintf(json, sizeof(json),
+		const int jsonLength = snprintf(json, statusJsonCapacity,
             "{\"armed\":%s,\"led_fast_blink\":%s,\"enabled\":%s,\"active\":%s,"
             "\"voltage\":%.2f,\"throttle\":%.1f,\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,"
             "\"faults\":%lu,\"uptime_ms\":%lu,\"wifi_connected\":%s,\"wifi_mode\":\"%s\","
@@ -2810,8 +2928,15 @@ void setupWebRC() {
             "\"compass_available\":%s,\"compass_detected\":%s,\"compass_ready\":%s,"
 			"\"compass_calibrated\":%s,\"compass_fresh\":%s,\"compass_trusted\":%s,"
 			"\"compass_age_ms\":%ld,\"compass_reject_reasons\":%u,"
-			"\"magnetic_heading_deg\":%.2f,\"navigation_heading_deg\":%.2f,"
-			"\"magnetic_innovation_deg\":%.2f,\"magnetic_field_norm\":%.1f,"
+				"\"magnetic_heading_deg\":%.2f,\"navigation_heading_deg\":%.2f,"
+				"\"magnetic_innovation_deg\":%.2f,\"magnetic_field_norm\":%.1f,"
+				"\"mag_cal_active\":%s,\"mag_cal_attempt_started\":%s,"
+				"\"mag_cal_candidate_ready\":%s,\"mag_cal_samples\":%lu,"
+				"\"mag_cal_elapsed_ms\":%lu,\"mag_cal_last_sample_age_ms\":%ld,"
+				"\"mag_cal_progress_pct\":%u,\"mag_cal_sample_progress_pct\":%u,"
+				"\"mag_cal_axis_x_pct\":%u,\"mag_cal_axis_y_pct\":%u,\"mag_cal_axis_z_pct\":%u,"
+				"\"mag_cal_span_x\":%u,\"mag_cal_span_y\":%u,\"mag_cal_span_z\":%u,"
+				"\"mag_cal_quality\":%.3f,"
             "\"optical_flow_detected\":%s,\"optical_flow_ready\":%s,"
             "\"optical_flow_usable\":%s,\"optical_flow_dx\":%d,\"optical_flow_dy\":%d,"
             "\"optical_flow_quality\":%u,\"optical_flow_motion\":%s,"
@@ -2865,9 +2990,24 @@ void setupWebRC() {
 			haveMagnetometer && magnetometerEstimate.fresh ? "true" : "false",
 			haveMagnetometer && magnetometerEstimate.trusted ? "true" : "false",
 			magnetometerAgeMs, (unsigned)magnetometerEstimate.rejectReasons,
-			degrees(magnetometerEstimate.magneticHeadingRadians),
-			degrees(magnetometerEstimate.navigationHeadingRadians),
-			degrees(magnetometerEstimate.innovationRadians), magnetometerEstimate.fieldNorm,
+				degrees(magnetometerEstimate.magneticHeadingRadians),
+				degrees(magnetometerEstimate.navigationHeadingRadians),
+				degrees(magnetometerEstimate.innovationRadians), magnetometerEstimate.fieldNorm,
+				magCalibrationStatus.collecting ? "true" : "false",
+				magCalibrationStatus.attemptStarted ? "true" : "false",
+				magCalibrationStatus.candidateReady ? "true" : "false",
+				(unsigned long)magCalibrationStatus.samples,
+				(unsigned long)magCalibrationStatus.elapsedMs,
+				magCalibrationStatus.lastSampleAgeMs == UINT32_MAX ? -1L :
+					(long)magCalibrationStatus.lastSampleAgeMs,
+				(unsigned)magCalibrationStatus.overallProgressPct,
+				(unsigned)magCalibrationStatus.sampleProgressPct,
+				(unsigned)magCalibrationStatus.axisProgressPct[0],
+				(unsigned)magCalibrationStatus.axisProgressPct[1],
+				(unsigned)magCalibrationStatus.axisProgressPct[2],
+				(unsigned)magCalibrationStatus.span[0],
+				(unsigned)magCalibrationStatus.span[1],
+				(unsigned)magCalibrationStatus.span[2], magCalibrationStatus.quality,
             opticalFlowDetected() ? "true" : "false",
             opticalFlowAvailable() ? "true" : "false",
             opticalFlowUsable ? "true" : "false", opticalFlowSample.deltaX,
@@ -2914,8 +3054,14 @@ void setupWebRC() {
             levelCalibrationStored() ? "true" : "false",
             armReady ? "true" : "false", armed ? "飞控已解锁" :
                 (armReason ? armReason : "当前解锁条件已满足"));
-        webRCServer.send(200, "application/json", json);
-    });
+		if (jsonLength < 0 || (size_t)jsonLength >= statusJsonCapacity) {
+			free(json);
+			webRCServer.send(500, "application/json", "{\"ok\":0,\"error\":\"status_response_too_large\"}");
+			return;
+		}
+		webRCServer.send(200, "application/json", json);
+		free(json);
+	});
 
     webRCServer.on("/logs/status", HTTP_GET, []() {
         const FlightLogStatus status = getFlightLogStatus();

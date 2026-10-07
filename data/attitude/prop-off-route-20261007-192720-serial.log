@@ -1,0 +1,7 @@
+IMU: MPU-6500 detected
+FLOW pmw3901 detected=1 ready=1 PREFLIGHT armed=0 arm_ready=1 imu_ok=1 motor_ok=1 battery_mv=4090 faults=0x00000000
+PREFLIGHT_REASON 当前解锁条件已满足
+front-right 0 front-left 0 rear-right 0 rear-left 0
+front-right 0 front-left 0 rear-right 0 rear-left 0
+PREFLIGHT armed=0 arm_ready=0 imu_ok=1 motor_ok=1 battery_mv=4090 faults=0x00000000
+PREFLIGHT_REASON 系统日志或参数正在

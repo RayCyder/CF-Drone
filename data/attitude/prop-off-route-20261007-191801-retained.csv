@@ -1,0 +1,4 @@
+type,capture_index,capture_sequence,loop_sequence,uptime_ms,dt_us,stage0_us,stage1_us,stage2_us,stage3_us,stage4_us,stage5_us,stage6_us,stage7_us,stage8_us,stage9_us,stage10_us,stage11_us,stage12_us,stage13_us,stage14_us,stage15_us,detail
+capture,0,0,64091,68870,1654,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1654,imu=unavailable
+capture,1,1,66066,71177,2263,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2263,imu=unavailable
+capture,2,2,71284,77256,5615,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5615,imu=unavailable

@@ -29,5 +29,11 @@ assert.match(source,
 assert.match(source,
   /resp\.nav===true[\s\S]*altitude:Number\(resp\.alt\)[\s\S]*heading:Number\(resp\.hdg\)/,
   'the recorder consumes fused height and attitude heading returned by the flight controller');
+assert.match(source, /schema=2 source=authored policy=slew advance=arrival heading=relative/,
+  'the editor accepts arrival-gated authored V2 routes');
+assert.match(source, /data\.phase==='waiting_arrival'\|\|data\.phase==='stabilizing'/,
+  'the route page reports arrival and stabilization progress');
+assert.match(source, /arrival_timeout:'未在限定时间到达目标高度，已转下降'/,
+  'the route page explains arrival timeout fallback');
 
 console.log('route V2 recording UI contracts passed');

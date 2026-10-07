@@ -186,7 +186,7 @@ bool resetNavigationOrigin(bool taskActive) {
 }
 
 bool startOpticalFlowCalibration() {
-	if (armed || motorsActive()) return false;
+	if (armed || motorsActive() || !opticalFlowAvailable()) return false;
 	flowCalibration.start(micros());
 	return true;
 }

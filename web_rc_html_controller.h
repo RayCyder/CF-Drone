@@ -185,6 +185,10 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
 .console-tools button{border:1px solid #526b7d;border-radius:6px;background:#263640;color:#e9f6ff;padding:5px 8px;font-size:.68rem;cursor:pointer;touch-action:manipulation}
 .console-tools button.primary{background:#1c5e8d;border-color:#58a9df}
 .console-tools-note{font-size:.64rem;line-height:1.35;color:#aebdca}
+.magcal-card{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid rgba(96,180,255,.28);border-radius:8px;background:rgba(12,42,62,.7);font-size:.67rem;color:#c9dced}
+.magcal-card.ok{border-color:rgba(98,216,149,.55);background:rgba(24,91,60,.28)}.magcal-card.busy{border-color:rgba(255,209,102,.6)}.magcal-card.error{border-color:rgba(255,100,100,.6);background:rgba(104,28,28,.25)}
+.magcal-card strong{font-size:.75rem;color:#f2f8fc}.magcal-progress{height:8px;overflow:hidden;border-radius:5px;background:#0b1115;border:1px solid rgba(255,255,255,.15)}.magcal-progress span{display:block;height:100%;width:0;background:#4ca9e8;transition:width .25s ease}.magcal-card.ok .magcal-progress span{background:#46c985}
+.magcal-axis{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}.magcal-axis span{padding:4px;border-radius:5px;background:rgba(255,255,255,.06);text-align:center;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
 .console-status{min-height:1.1em;font-size:.66rem;color:#9ab0bf}
 .console-status.ok{color:#62d895}.console-status.error{color:#ff8a8a}.console-status.busy{color:#ffd166}
 .console-command-row{display:flex;gap:6px;touch-action:pan-y}
@@ -348,7 +352,8 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
     <div class="console-tools">
       <div class="console-tools-row"><strong>调试工具</strong><button class="primary" onclick="openVibrationCalibrationFromConsole()">电机扰动检测</button><button class="primary" onclick="startAccelCalibrationFromConsole()">六面加速度计校准</button><button class="primary" onclick="openLevelCalibrationFromConsole()">机身水平校准</button></div>
       <div class="console-tools-row"><strong>常用命令</strong><button onclick="runConsoleCommand('diag brief')">快速预检</button><button onclick="runConsoleCommand('diag')">完整诊断</button><button onclick="runConsoleCommand('imu')">IMU</button><button onclick="runConsoleCommand('sensors')">扩展传感器</button><button onclick="runConsoleCommand('nav')">融合导航</button><button onclick="runConsoleCommand('ps')">姿态</button><button onclick="runConsoleCommand('p CTL_TRIM_ROLL')">横滚配平值</button><button onclick="runConsoleCommand('p CTL_TRIM_PITCH')">俯仰配平值</button><button onclick="runConsoleCommand('rc')">遥控输入</button><button onclick="runConsoleCommand('mot')">电机输出</button><button onclick="runConsoleCommand('wifi')">Wi-Fi</button><button onclick="runConsoleCommand('time')">循环时间</button><button onclick="runConsoleCommand('sys')">系统任务</button><button onclick="runConsoleCommand('log status')">日志状态</button><button onclick="runConsoleCommand('p')">参数列表</button><button onclick="runConsoleCommand('help')">命令帮助</button><button onclick="restartFromConsole()">重启</button></div>
-	  <div class="console-tools-row"><strong>磁力计</strong><button onclick="runConsoleCommand('magcal status')">状态</button><button onclick="runConsoleCommand('magcal start')">开始采集</button><button onclick="runConsoleCommand('magcal stop')">停止采集</button><button onclick="runConsoleCommand('magcal save')">保存校准</button><button onclick="runConsoleCommand('magcal reset')">清除校准</button></div>
+	  <div class="console-tools-row"><strong>磁力计校准</strong><button onclick="runConsoleCommand('magcal status')">输出详情</button><button id="magcal-start-button" onclick="startMagCalibrationFromConsole()">开始采集</button><button id="magcal-stop-button" onclick="stopMagCalibrationFromConsole()" disabled>停止采集</button><button id="magcal-save-button" onclick="saveMagCalibrationFromConsole()" disabled>保存校准</button><button id="magcal-reset-button" onclick="resetMagCalibrationFromConsole()">清除校准</button></div>
+	  <div id="magcal-console-status" class="magcal-card" role="status" aria-live="polite"><strong>正在读取磁力计状态…</strong><div class="magcal-progress"><span></span></div><div>旋转机体时将显示采样与三轴覆盖进度。</div></div>
       <div class="console-tools-note">磁力计为可选传感器；未安装磁力计仍可进行六面加速度计校准和机身水平校准，仅磁航向与 magcal 不可用。机身静置水平但姿态不为 0°：使用“机身水平校准”修正 IMU 安装角。只有实际飞行松杆后持续漂移时，才调整 CTL_TRIM_ROLL / CTL_TRIM_PITCH。</div>
       <div class="console-tools-note"><strong>PID 调整：</strong>使用顶部“PID”按钮集中修改 Roll、Pitch、Yaw 的内环 P/I/D；控制台“参数列表”仍可用于核对全部参数。</div>
       <div id="console-status" class="console-status" role="status">打开后将主动确认飞控处于上锁状态。</div>
@@ -704,7 +709,7 @@ function parseRouteText(){
   for(let i=0;i<lines.length;i++){
     const line=lines[i].trim();if(!line)continue;
     if(line.startsWith('#')){
-      const known=line==='# WEB_RC_RECORDED_V1'||line==='# WEB_RC_RECORDED_V2'||line==='# CF_ROUTE_META schema=2 source=authored policy=slew';
+      const known=line==='# WEB_RC_RECORDED_V1'||line==='# WEB_RC_RECORDED_V2'||line==='# CF_ROUTE_META schema=2 source=authored policy=slew'||line==='# CF_ROUTE_META schema=2 source=authored policy=slew advance=arrival heading=relative';
       const metadata=line.startsWith('# WEB_RC_RECORDED_')||line.startsWith('# CF_ROUTE_META');
       if(known){
         if(i!==0||metadataSeen||contentSeen)throw new Error(`第 ${i+1} 行元数据必须唯一且位于正文第一行`);
@@ -1268,13 +1273,21 @@ async function refreshRouteStatus(){
     if(routeUploadedRevision&&data.plan_revision!==routeUploadedRevision){routeUploadedRevision=0;routeUploadedText=null;routeMessage('飞控中的序列已改变，请上锁后重新上传当前内容。');}
     const planKind=data.recorded?'录制输入':'手写输入';
     const messages={empty:'尚无已上传的动作序列。',ready:`已校验${planKind} ${data.count} 段，共 ${Number(data.duration_s).toFixed(1)} 秒；等待操作者启动。`,start_pending:'正在确认启动条件…',running:`飞控本机回放${planKind}：第 ${data.step}/${data.count} 段，共 ${Number(data.duration_s).toFixed(1)} 秒。`,landing:'已停止动作序列，正在保持定推力下降；无法检测触地，需操作者上锁。',complete:'序列已停止，飞控已上锁；这不代表传感器确认着陆。',aborted:'序列已退出，控制已交还当前手动模式。'};
-    document.getElementById('route-status').textContent=(messages[data.state]||'状态未知')+(data.pending?' 正在处理请求…':'')+(data.reason?' 原因：'+routeReason(data.reason):'');
+    let progress='';
+    if(data.state==='running'&&data.advance==='arrival'){
+      if(data.phase==='waiting_arrival'||data.phase==='stabilizing'){
+        const actual=Number.isFinite(data.actual_altitude_m)?Number(data.actual_altitude_m).toFixed(2)+' m':'不可用';
+        const target=Number.isFinite(data.target_altitude_m)?Number(data.target_altitude_m).toFixed(2)+' m':'不可用';
+        progress=` 当前高度 ${actual} / 目标 ${target}，垂速 ${Number.isFinite(data.vertical_speed_mps)?Number(data.vertical_speed_mps).toFixed(2)+' m/s':'不可用'}，稳定 ${Math.min(500,Number(data.stable_ms)||0)} / 500 ms，超时剩余 ${(Number(data.remaining_ms||0)/1000).toFixed(1)} 秒。`;
+      }else progress=` 当前段定时执行，剩余 ${(Number(data.remaining_ms||0)/1000).toFixed(1)} 秒。`;
+    }
+    document.getElementById('route-status').textContent=(messages[data.state]||'状态未知')+progress+(data.pending?' 正在处理请求…':'')+(data.reason?' 原因：'+routeReason(data.reason):'');
     if(!routeHold&&document.getElementById('route-page').getAttribute('aria-hidden')==='true'&&routeTimer){clearInterval(routeTimer);routeTimer=null;}
     updateRouteControls();return data;
   }catch(_){document.getElementById('route-status').textContent='无法确认飞控状态；已上传序列可能仍在本机执行。请恢复连接。';return null;}
   finally{routeStatusBusy=false;}
 }
-function routeReason(reason){return ({sequence_complete:'动作段已执行完毕',operator_landing:'操作者触发迫降',takeover_requested:'手动接管',manual_takeover:'切换到手动模式',disarmed:'已上锁',mode_changed:'切换模式',scheduler_gap:'执行周期中断，已转下降',multiple_expired_segments:'错过多个动作段，已转下降',landing_interrupted:'下降流程被接管',revision_mismatch:'上传批次已变化',requires_armed_stab:'启动条件不满足',web_rc_link_required:'启动时遥控连接已超时'})[reason]||reason;}
+function routeReason(reason){return ({sequence_complete:'动作段已执行完毕',operator_landing:'操作者触发迫降',takeover_requested:'手动接管',manual_takeover:'切换到手动模式',disarmed:'已上锁',mode_changed:'切换模式',scheduler_gap:'执行周期中断，已转下降',multiple_expired_segments:'错过多个动作段，已转下降',arrival_timeout:'未在限定时间到达目标高度，已转下降',vertical_unhealthy:'高度估计失效，已转下降',landing_interrupted:'下降流程被接管',revision_mismatch:'上传批次已变化',requires_armed_stab:'启动条件不满足',web_rc_link_required:'启动时遥控连接已超时'})[reason]||reason;}
 
 async function confirmArmButton(buttonIndex, warning){
   const expectedArmed=buttonIndex===0;
@@ -1807,9 +1820,49 @@ function loadSelfCheckStatus(showLoading) {
   }).finally(() => { selfCheckRequestInFlight = false; });
 }
 
+function renderMagCalibrationStatus(data){
+  const card=document.getElementById('magcal-console-status');
+  if(!card)return;
+  const supported=typeof data.mag_cal_active==='boolean'&&Number.isFinite(Number(data.mag_cal_samples));
+  const available=data.compass_detected===true&&data.compass_ready===true;
+  const active=data.mag_cal_active===true;
+  const candidate=data.mag_cal_candidate_ready===true;
+  const attempted=data.mag_cal_attempt_started===true;
+  const saved=data.compass_calibrated===true;
+  const samples=Math.max(0,Number(data.mag_cal_samples)||0);
+  const elapsed=Math.max(0,Number(data.mag_cal_elapsed_ms)||0)/1000;
+  const progress=Math.max(0,Math.min(100,Number(data.mag_cal_progress_pct)||0));
+  const sampleProgress=Math.max(0,Math.min(100,Number(data.mag_cal_sample_progress_pct)||0));
+  const axes=['x','y','z'].map(axis=>({
+    pct:Math.max(0,Math.min(100,Number(data['mag_cal_axis_'+axis+'_pct'])||0)),
+    span:Math.max(0,Number(data['mag_cal_span_'+axis])||0)
+  }));
+  const quality=Math.max(0,Math.min(1,Number(data.mag_cal_quality)||0));
+  const age=Number(data.mag_cal_last_sample_age_ms);
+  const stalled=active&&samples>0&&Number.isFinite(age)&&age>1000;
+  let title='磁力计校准状态不可用',detail='当前固件未提供校准采集状态，请更新固件。',state='error';
+  if(supported&&!available){title='磁力计未就绪';detail='未检测到可用的 QMC5883P，不能开始磁力计校准。';state='error';}
+  else if(candidate){title=active?'覆盖已满足，可以停止采集':'覆盖已满足，可以保存校准';detail=`已采集 ${samples} 个样本，用时 ${elapsed.toFixed(1)} 秒；候选质量 ${(quality*100).toFixed(0)}%。`;state='ok';}
+  else if(active){title=stalled?'采样已停滞，请检查传感器':'正在采集磁力计数据';detail=`已采集 ${samples} 个样本，用时 ${elapsed.toFixed(1)} 秒；缓慢绕三个轴旋转机体，直到三轴均达到 100%。`;state=stalled?'error':'busy';}
+  else if(attempted){title='采集已停止，覆盖仍不足';detail=`已采集 ${samples} 个样本；继续采集并补足未达到 100% 的旋转轴。`;state='error';}
+  else if(saved){title='已保存磁力计校准';detail='可以重新采集覆盖以更新校准；磁航向仍会经过实时可信度门控。';state='ok';}
+  else if(supported){title='等待开始磁力计校准';detail='点击“开始采集”，然后在 30–60 秒内缓慢绕 X、Y、Z 三个轴旋转机体。';state='';}
+  card.className='magcal-card'+(state?' '+state:'');
+  card.innerHTML=`<strong>${title}</strong><div class="magcal-progress"><span style="width:${progress}%"></span></div><div>总体 ${progress}% · 样本 ${sampleProgress}% · ${samples} 个 · ${elapsed.toFixed(1)} 秒</div><div class="magcal-axis"><span>X ${axes[0].pct}%<br>跨度 ${axes[0].span}</span><span>Y ${axes[1].pct}%<br>跨度 ${axes[1].span}</span><span>Z ${axes[2].pct}%<br>跨度 ${axes[2].span}</span></div><div>${detail}</div>`;
+  const startButton=document.getElementById('magcal-start-button');
+  const stopButton=document.getElementById('magcal-stop-button');
+  const saveButton=document.getElementById('magcal-save-button');
+  const resetButton=document.getElementById('magcal-reset-button');
+  if(startButton)startButton.disabled=!available||active||currentArmed;
+  if(stopButton)stopButton.disabled=!active||currentArmed;
+  if(saveButton)saveButton.disabled=active||!candidate||currentArmed;
+  if(resetButton)resetButton.disabled=active||currentArmed;
+}
+
 function renderSelfCheckStatus(data) {
   const faults = data.faults;
   if (typeof faults !== 'number') return;
+	renderMagCalibrationStatus(data);
   const active = diagnosticChecks.filter(check => (faults & check.bit) !== 0);
   const armReadiness = document.getElementById('arm-readiness');
   if (typeof data.arm_ready === 'boolean' && typeof data.arm_reason === 'string') {
@@ -1838,8 +1891,11 @@ function renderSelfCheckStatus(data) {
 	const compassAge=Number(data.compass_age_ms), magneticHeading=Number(data.magnetic_heading_deg);
 	const navigationHeading=Number(data.navigation_heading_deg), magneticInnovation=Number(data.magnetic_innovation_deg);
 	const compassReasons=Number(data.compass_reject_reasons)||0;
+	const magCalProgress=Math.max(0,Math.min(100,Number(data.mag_cal_progress_pct)||0));
 	compassStatus.className='diagnostic-summary '+(data.compass_trusted===true?'ok':data.compass_detected===true?'offline':'fault');
-	compassStatus.innerHTML=data.compass_trusted===true
+	compassStatus.innerHTML=data.mag_cal_active===true
+	  ? `<strong>磁力计校准采集中：${magCalProgress}%</strong><small>样本 ${Number(data.mag_cal_samples)||0}；X/Y/Z 覆盖 ${Number(data.mag_cal_axis_x_pct)||0}% / ${Number(data.mag_cal_axis_y_pct)||0}% / ${Number(data.mag_cal_axis_z_pct)||0}%。缓慢绕三个轴旋转机体。</small>`
+	  : data.compass_trusted===true
 	  ? `<strong>磁航向可信</strong><small>磁航向 ${magneticHeading.toFixed(1)}°，融合航向 ${navigationHeading.toFixed(1)}°，创新 ${magneticInnovation.toFixed(1)}°，样本年龄 ${compassAge} ms。</small>`
 	  : data.compass_detected===true
 	  ? `<strong>磁力计已检测但尚不可信</strong><small>ready=${data.compass_ready===true?'是':'否'}，calibrated=${data.compass_calibrated===true?'是':'否'}，fresh=${data.compass_fresh===true?'是':'否'}，拒绝位 0x${compassReasons.toString(16).toUpperCase().padStart(4,'0')}。在控制台运行 magcal status 查看校准覆盖。</small>`
@@ -2222,8 +2278,9 @@ async function openConsole() {
   try{
     const statusResponse=await fetch('/web_rc/status',{cache:'no-store'});
     const flightStatus=await statusResponse.json().catch(()=>({}));
-    if(!statusResponse.ok||typeof flightStatus.armed!=='boolean')throw new Error('无法确认飞控上锁状态');
-    setArmedState(flightStatus.armed);
+	    if(!statusResponse.ok||typeof flightStatus.armed!=='boolean')throw new Error('无法确认飞控上锁状态');
+	    setArmedState(flightStatus.armed);
+	    renderMagCalibrationStatus(flightStatus);
     if(flightStatus.armed)throw new Error('请先上锁再打开调试控制台');
     const enableResponse=await controlFetch('/console/enable',{method:'POST'});
     const enabled=await enableResponse.json().catch(()=>({}));
@@ -2272,6 +2329,38 @@ function openLevelCalibrationFromConsole(){
 function startAccelCalibrationFromConsole(){
   if(!window.confirm('六面校准只使用 IMU，不需要磁力计。请依次按提示放稳机体的六个面，每面等待约 8 秒；成功后会自动保存加速度计偏置与比例参数。现在开始？'))return;
   runConsoleCommand('ca');
+}
+
+function refreshMagCalibrationSoon(){
+  setTimeout(()=>loadSelfCheckStatus(false),350);
+  setTimeout(()=>loadSelfCheckStatus(false),1200);
+}
+
+function startMagCalibrationFromConsole(){
+  if(currentArmed){showToast('请先上锁并停止全部电机');return;}
+  if(!window.confirm('请拆下桨叶并远离电机、电池大电流线和金属物体。开始后在 30–60 秒内缓慢绕 X、Y、Z 三个轴旋转机体，页面会显示三轴覆盖进度。现在开始？'))return;
+  runConsoleCommand('magcal start');
+  setConsoleStatus('磁力计采集命令已提交；等待实时进度…','busy');
+  refreshMagCalibrationSoon();
+}
+
+function stopMagCalibrationFromConsole(){
+  runConsoleCommand('magcal stop');
+  setConsoleStatus('正在停止磁力计采集并计算覆盖…','busy');
+  refreshMagCalibrationSoon();
+}
+
+function saveMagCalibrationFromConsole(){
+  if(!window.confirm('保存当前已满足覆盖要求的磁力计校准？保存期间请保持上锁并停止电机。'))return;
+  runConsoleCommand('magcal save');
+  setConsoleStatus('正在保存并读回验证磁力计校准…','busy');
+  refreshMagCalibrationSoon();
+}
+
+function resetMagCalibrationFromConsole(){
+  if(!window.confirm('确认清除已保存的磁力计校准？清除后绝对磁航向不可用，直到重新完成采集并保存。'))return;
+  runConsoleCommand('magcal reset');
+  refreshMagCalibrationSoon();
 }
 
 function restartFromConsole(){

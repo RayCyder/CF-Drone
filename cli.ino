@@ -293,7 +293,9 @@ void doCommand(String str, bool echo = false) {
 		}
 	} else if (command == "flowcal") {
 		if (arg0 == "start") {
-			if (startOpticalFlowCalibration())
+			if (!opticalFlowAvailable())
+				print("FLOW_CAL unavailable: PMW3901 is not detected or not initialized.\n");
+			else if (startOpticalFlowCalibration())
 				print("FLOW_CAL started. Keep motors stopped; run one trial at a time: static, move body +X 1m, move body +Y 1m, or rotate in place. Then use flowcal stop/status.\n");
 			else print("FLOW_CAL start rejected: disarm and stop all motor output first.\n");
 		} else if (arg0 == "stop") {
@@ -338,7 +340,11 @@ void doCommand(String str, bool echo = false) {
 		} else if (arg0 == "status") {
 			printMagCalibrationStatus();
 		} else if (arg0 == "save") {
-			print(saveMagCalibration() ? "MAG_CAL saved and verified in NVS.\n" : "MAG_CAL save rejected: stop collection and ensure all three axes have adequate coverage.\n");
+			if (saveMagCalibration()) print("MAG_CAL saved and verified in NVS.\n");
+			else {
+				print("MAG_CAL save rejected: stop collection and ensure samples plus all three axes reach 100%% coverage.\n");
+				printMagCalibrationStatus();
+			}
 		} else if (arg0 == "align") {
 			char *end = nullptr;
 			const float knownHeading = strtof(arg1.c_str(), &end);

@@ -15,6 +15,9 @@
 #define OPEN_LOOP_ROLL_PITCH_YAW_SLEW_PER_SEC 1.0f
 #define OPEN_LOOP_THROTTLE_SLEW_PER_SEC 0.2f
 #define OPEN_LOOP_SCHEDULER_GAP_MS 100UL
+#define OPEN_LOOP_ARRIVAL_ALTITUDE_TOLERANCE_M 0.10f
+#define OPEN_LOOP_ARRIVAL_VERTICAL_SPEED_TOLERANCE_MPS 0.15f
+#define OPEN_LOOP_ARRIVAL_STABLE_MS 500UL
 
 struct OpenLoopPackedStep {
     uint32_t durationMs;
@@ -43,6 +46,8 @@ struct OpenLoopParseResult {
     uint8_t schemaVersion = 0;
     uint8_t sourceKind = 0;
     uint8_t controlPolicy = 0;
+    uint8_t advancePolicy = 0;
+    uint8_t headingPolicy = 0;
 };
 
 enum OpenLoopSourceKind : uint8_t {
@@ -53,6 +58,16 @@ enum OpenLoopSourceKind : uint8_t {
 enum OpenLoopControlPolicy : uint8_t {
     OPEN_LOOP_POLICY_SLEW = 1,
     OPEN_LOOP_POLICY_DIRECT = 2,
+};
+
+enum OpenLoopAdvancePolicy : uint8_t {
+    OPEN_LOOP_ADVANCE_TIMED = 1,
+    OPEN_LOOP_ADVANCE_ARRIVAL = 2,
+};
+
+enum OpenLoopHeadingPolicy : uint8_t {
+    OPEN_LOOP_HEADING_MAGNETIC = 1,
+    OPEN_LOOP_HEADING_RELATIVE = 2,
 };
 
 struct OpenLoopControls {
@@ -97,6 +112,54 @@ static inline bool openLoopElapsed(uint32_t now, uint32_t deadline) {
     return (int32_t)(now - deadline) >= 0;
 }
 
+static inline uint32_t openLoopNextStepDeadline(uint8_t advancePolicy, uint32_t now,
+                                                uint32_t previousDeadline, uint32_t durationMs) {
+    return (advancePolicy == OPEN_LOOP_ADVANCE_ARRIVAL ? now : previousDeadline) + durationMs;
+}
+
+enum OpenLoopArrivalDecision : uint8_t {
+    OPEN_LOOP_ARRIVAL_WAITING = 0,
+    OPEN_LOOP_ARRIVAL_REACHED = 1,
+    OPEN_LOOP_ARRIVAL_TIMEOUT = 2,
+    OPEN_LOOP_ARRIVAL_UNHEALTHY = 3,
+};
+
+struct OpenLoopArrivalGate {
+    uint32_t stableSinceMs = 0;
+    bool stableStarted = false;
+
+    void reset() {
+        stableSinceMs = 0;
+        stableStarted = false;
+    }
+
+    OpenLoopArrivalDecision update(uint32_t now, uint32_t deadline,
+                                   bool healthy, float actualAltitudeMeters,
+                                   float verticalSpeedMps, float targetAltitudeMeters) {
+        if (!healthy || !isfinite(actualAltitudeMeters) || !isfinite(verticalSpeedMps) ||
+            !isfinite(targetAltitudeMeters)) {
+            reset();
+            return OPEN_LOOP_ARRIVAL_UNHEALTHY;
+        }
+        const bool withinBounds =
+            fabsf(actualAltitudeMeters - targetAltitudeMeters) <= OPEN_LOOP_ARRIVAL_ALTITUDE_TOLERANCE_M &&
+            fabsf(verticalSpeedMps) <= OPEN_LOOP_ARRIVAL_VERTICAL_SPEED_TOLERANCE_MPS;
+        if (!withinBounds) {
+            reset();
+        } else if (!stableStarted) {
+            stableSinceMs = now;
+            stableStarted = true;
+        } else if ((uint32_t)(now - stableSinceMs) >= OPEN_LOOP_ARRIVAL_STABLE_MS) {
+            return OPEN_LOOP_ARRIVAL_REACHED;
+        }
+        return openLoopElapsed(now, deadline) ? OPEN_LOOP_ARRIVAL_TIMEOUT : OPEN_LOOP_ARRIVAL_WAITING;
+    }
+
+    uint32_t stableMs(uint32_t now) const {
+        return stableStarted ? (uint32_t)(now - stableSinceMs) : 0;
+    }
+};
+
 static inline float openLoopClampFloat(float value, float low, float high) {
     if (value < low) return low;
     if (value > high) return high;
@@ -109,6 +172,14 @@ static inline bool openLoopStepHasAltitude(const OpenLoopPackedStep &step) {
 
 static inline bool openLoopStepHasHeading(const OpenLoopPackedStep &step) {
     return step.headingDecidegrees != OPEN_LOOP_HEADING_SENTINEL_DDEG;
+}
+
+static inline bool openLoopStepUsesArrivalGate(uint8_t advancePolicy,
+                                                const OpenLoopPackedStep &previous,
+                                                const OpenLoopPackedStep &current) {
+    return advancePolicy == OPEN_LOOP_ADVANCE_ARRIVAL &&
+        openLoopStepHasAltitude(previous) && openLoopStepHasAltitude(current) &&
+        previous.altitudeCentimeters != current.altitudeCentimeters;
 }
 
 static inline float openLoopStepAltitudeMeters(const OpenLoopPackedStep &step) {
@@ -273,9 +344,11 @@ static inline OpenLoopParseResult parseOpenLoopSequenceText(const char *text,
                 const bool legacyV2 = strcmp(trim, "# WEB_RC_RECORDED_V2") == 0;
                 const bool authoredV2 = strcmp(trim,
                     "# CF_ROUTE_META schema=2 source=authored policy=slew") == 0;
+                const bool arrivalV2 = strcmp(trim,
+                    "# CF_ROUTE_META schema=2 source=authored policy=slew advance=arrival heading=relative") == 0;
                 const bool routeMetadata = strncmp(trim, "# CF_ROUTE_META", 15) == 0 ||
                     strncmp(trim, "# WEB_RC_RECORDED_", 18) == 0;
-                if (legacyV1 || legacyV2 || authoredV2) {
+                if (legacyV1 || legacyV2 || authoredV2 || arrivalV2) {
                     if (lineNumber != 0 || metadataSeen || contentSeen || nonEmptyLineSeen) {
                         result.reason = "schema_mismatch";
                         return result;
@@ -286,16 +359,22 @@ static inline OpenLoopParseResult parseOpenLoopSequenceText(const char *text,
                         result.sourceKind = OPEN_LOOP_SOURCE_RECORDED;
                         result.controlPolicy = OPEN_LOOP_POLICY_DIRECT;
                         expectedColumns = 5;
+                        result.advancePolicy = OPEN_LOOP_ADVANCE_TIMED;
+                        result.headingPolicy = OPEN_LOOP_HEADING_MAGNETIC;
                     } else if (legacyV2) {
                         result.schemaVersion = 2;
                         result.sourceKind = OPEN_LOOP_SOURCE_RECORDED;
                         result.controlPolicy = OPEN_LOOP_POLICY_DIRECT;
                         expectedColumns = 7;
+                        result.advancePolicy = OPEN_LOOP_ADVANCE_TIMED;
+                        result.headingPolicy = OPEN_LOOP_HEADING_MAGNETIC;
                     } else {
                         result.schemaVersion = 2;
                         result.sourceKind = OPEN_LOOP_SOURCE_AUTHORED;
                         result.controlPolicy = OPEN_LOOP_POLICY_SLEW;
                         expectedColumns = 7;
+                        result.advancePolicy = arrivalV2 ? OPEN_LOOP_ADVANCE_ARRIVAL : OPEN_LOOP_ADVANCE_TIMED;
+                        result.headingPolicy = arrivalV2 ? OPEN_LOOP_HEADING_RELATIVE : OPEN_LOOP_HEADING_MAGNETIC;
                     }
                 } else if (routeMetadata) {
                     result.reason = "schema_mismatch";
@@ -321,6 +400,8 @@ static inline OpenLoopParseResult parseOpenLoopSequenceText(const char *text,
                     result.schemaVersion = 1;
                     result.sourceKind = OPEN_LOOP_SOURCE_AUTHORED;
                     result.controlPolicy = OPEN_LOOP_POLICY_SLEW;
+                    result.advancePolicy = OPEN_LOOP_ADVANCE_TIMED;
+                    result.headingPolicy = OPEN_LOOP_HEADING_RELATIVE;
                     expectedColumns = 5;
                 }
                 if (columnCount != expectedColumns) {

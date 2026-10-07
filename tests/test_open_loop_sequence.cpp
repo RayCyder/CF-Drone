@@ -15,6 +15,7 @@ static void parser_tests() {
     assert(result.schemaVersion == 1);
     assert(result.sourceKind == OPEN_LOOP_SOURCE_AUTHORED);
     assert(result.controlPolicy == OPEN_LOOP_POLICY_SLEW);
+    assert(result.advancePolicy == OPEN_LOOP_ADVANCE_TIMED);
     assert(steps[0].durationMs == 100);
     assert(steps[1].durationMs == 1250);
     assert(steps[1].throttleCentipercent == 5550);
@@ -30,6 +31,7 @@ static void parser_tests() {
     assert(result.schemaVersion == 2);
     assert(result.sourceKind == OPEN_LOOP_SOURCE_RECORDED);
     assert(result.controlPolicy == OPEN_LOOP_POLICY_DIRECT);
+    assert(result.advancePolicy == OPEN_LOOP_ADVANCE_TIMED);
     assert(result.count == 1);
     assert(steps[0].altitudeCentimeters == -123);
     assert(steps[0].headingDecidegrees == -915);
@@ -44,6 +46,19 @@ static void parser_tests() {
     assert(result.ok && result.schemaVersion == 2);
     assert(result.sourceKind == OPEN_LOOP_SOURCE_AUTHORED);
     assert(result.controlPolicy == OPEN_LOOP_POLICY_SLEW);
+    assert(result.advancePolicy == OPEN_LOOP_ADVANCE_TIMED);
+
+    const char *arrivalV2 = "# CF_ROUTE_META schema=2 source=authored policy=slew advance=arrival heading=relative\n"
+        "0.5 48 0 0 0 0.0 0\n8.0 48 0 0 0 0.3 0\n2.0 48 0 0 0 0.3 0\n";
+    result = parseOpenLoopSequenceText(arrivalV2, strlen(arrivalV2), steps, OPEN_LOOP_MAX_STEPS);
+    assert(result.ok && result.schemaVersion == 2);
+    assert(result.sourceKind == OPEN_LOOP_SOURCE_AUTHORED);
+    assert(result.controlPolicy == OPEN_LOOP_POLICY_SLEW);
+    assert(result.advancePolicy == OPEN_LOOP_ADVANCE_ARRIVAL);
+    assert(result.headingPolicy == OPEN_LOOP_HEADING_RELATIVE);
+    assert(!openLoopStepUsesArrivalGate(result.advancePolicy, steps[0], steps[0]));
+    assert(openLoopStepUsesArrivalGate(result.advancePolicy, steps[0], steps[1]));
+    assert(!openLoopStepUsesArrivalGate(result.advancePolicy, steps[1], steps[2]));
 
     const char *recordedV1 = "# WEB_RC_RECORDED_V1\n0.5 48 0 0 0\n";
     result = parseOpenLoopSequenceText(recordedV1, strlen(recordedV1), steps, OPEN_LOOP_MAX_STEPS);
@@ -144,11 +159,40 @@ static void start_offset_tests() {
     assert(altitudeOffset == 0.0f && headingOffset == 0.0f);
 }
 
+static void arrival_gate_tests() {
+    OpenLoopArrivalGate gate;
+    const uint32_t deadline = 8000;
+    assert(gate.update(1000, deadline, true, 0.19f, 0.10f, 0.30f) == OPEN_LOOP_ARRIVAL_WAITING);
+    assert(gate.stableMs(1200) == 0);
+    assert(gate.update(2000, deadline, true, 0.22f, 0.10f, 0.30f) == OPEN_LOOP_ARRIVAL_WAITING);
+    assert(gate.stableMs(2250) == 250);
+    assert(gate.update(2300, deadline, true, 0.22f, 0.16f, 0.30f) == OPEN_LOOP_ARRIVAL_WAITING);
+    assert(gate.stableMs(2300) == 0);
+    assert(gate.update(3000, deadline, true, 0.30f, 0.02f, 0.30f) == OPEN_LOOP_ARRIVAL_WAITING);
+    assert(gate.update(3499, deadline, true, 0.30f, 0.02f, 0.30f) == OPEN_LOOP_ARRIVAL_WAITING);
+    assert(gate.update(3500, deadline, true, 0.30f, 0.02f, 0.30f) == OPEN_LOOP_ARRIVAL_REACHED);
+
+    gate.reset();
+    assert(gate.update(8000, deadline, true, 0.0f, 0.0f, 0.30f) == OPEN_LOOP_ARRIVAL_TIMEOUT);
+    assert(gate.update(100, 1000, false, 0.30f, 0.0f, 0.30f) == OPEN_LOOP_ARRIVAL_UNHEALTHY);
+
+    gate.reset();
+    const uint32_t wrappedStart = UINT32_MAX - 300;
+    assert(gate.update(wrappedStart, 1000, true, 0.30f, 0.0f, 0.30f) == OPEN_LOOP_ARRIVAL_WAITING);
+    assert(gate.update(250, 1000, true, 0.30f, 0.0f, 0.30f) == OPEN_LOOP_ARRIVAL_REACHED);
+
+    // Arrival at 3.7 s starts a fresh 2.0 s hold; climb time is not consumed.
+    assert(openLoopNextStepDeadline(OPEN_LOOP_ADVANCE_ARRIVAL, 3700, 8500, 2000) == 5700);
+    // Legacy timed routes retain their accumulated absolute deadlines.
+    assert(openLoopNextStepDeadline(OPEN_LOOP_ADVANCE_TIMED, 3700, 8500, 2000) == 10500);
+}
+
 int main() {
     static_assert(sizeof(OpenLoopPackedStep) == 16, "packed route step size");
     parser_tests();
     mapping_and_slew_tests();
     wrap_and_deadline_tests();
     start_offset_tests();
+    arrival_gate_tests();
     puts("open-loop parser/slew regression: PASS");
 }

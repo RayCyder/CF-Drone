@@ -545,7 +545,7 @@ void control() {
 	static MagHeadingLossGuard routeMagHeadingLossGuard(500);
 	const bool localRouteActive = mode == AUTO && isLocalSequenceRunning();
 	const bool magneticHeadingLossExceeded = routeMagHeadingLossGuard.update(
-		localRouteActive, magHeadingTrusted(), millis());
+		localRouteActive && localRouteRequiresTrustedHeading(), magHeadingTrusted(), millis());
 	#endif
 	interpretControls();
 #if WEB_RC_ENABLED

@@ -3,3 +3,6 @@ docs/*
 !docs/hardware/
 .github/*
 .vscode/*
+.omx/
+.playwright-cli/
+tools/__pycache__/

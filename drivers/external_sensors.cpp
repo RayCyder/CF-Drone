@@ -34,6 +34,9 @@ constexpr uint32_t MAG_CAL_MAGIC_V2 = 0x4D414732; // MAG2
 constexpr uint32_t MAG_MAX_SAMPLE_AGE_US = 100000;
 constexpr float MAG_FIELD_NORM_TOLERANCE = 0.20f;
 constexpr float MAG_MAX_TILT_RADIANS = 1.04719755f; // 60 degrees
+constexpr uint32_t MAG_CAL_MIN_SAMPLES = 300;
+constexpr uint32_t MAG_CAL_TARGET_SAMPLES = 600;
+constexpr int32_t MAG_CAL_MIN_AXIS_SPAN = 500;
 
 struct MagCalibration {
 	float offset[3] = {};
@@ -68,7 +71,10 @@ struct MagRuntimeState {
 	int16_t maximum[3] = {INT16_MIN, INT16_MIN, INT16_MIN};
 	uint32_t samples = 0;
 	uint32_t lastSampleMs = 0;
+	uint32_t calibrationStartedMs = 0;
+	uint32_t calibrationStoppedMs = 0;
 	bool active = false;
+	bool calibrationAttemptStarted = false;
 	bool compassReady = false;
 	uint8_t barometerAddress = 0;
 	uint8_t consecutiveSuccesses = 0;
@@ -242,6 +248,7 @@ void externalSensorTask(void *) {
 						if (sample[axis] > magMaximum[axis]) magMaximum[axis] = sample[axis];
 					}
 					++magCalibrationSamples;
+					lastMagSampleMs = millis();
 				}
 				portEXIT_CRITICAL(&magSampleMux);
 			} else {
@@ -335,14 +342,14 @@ bool calculateMagCalibration(float offset[3], float scale[3], float &fieldNorm, 
 	memcpy(maximum, magMaximum, sizeof(maximum));
 	sampleCount = magCalibrationSamples;
 	portEXIT_CRITICAL(&magSampleMux);
-	if (sampleCount < 300) return false;
+	if (sampleCount < MAG_CAL_MIN_SAMPLES) return false;
 	float halfRange[3];
 	float meanHalfRange = 0.0f;
 	float minimumHalfRange = INFINITY;
 	float maximumHalfRange = 0.0f;
 	for (int axis = 0; axis < 3; ++axis) {
 		const int32_t span = (int32_t)maximum[axis] - (int32_t)minimum[axis];
-		if (span < 500) return false; // Require rotation that excites every sensor axis.
+		if (span < MAG_CAL_MIN_AXIS_SPAN) return false; // Require rotation that excites every sensor axis.
 		offset[axis] = ((float)maximum[axis] + (float)minimum[axis]) * 0.5f;
 		halfRange[axis] = (float)span * 0.5f;
 		meanHalfRange += halfRange[axis] / 3.0f;
@@ -356,7 +363,7 @@ bool calculateMagCalibration(float offset[3], float scale[3], float &fieldNorm, 
 	}
 	fieldNorm = meanHalfRange;
 	quality = maximumHalfRange > 0.0f ? minimumHalfRange / maximumHalfRange : 0.0f;
-	if (sampleCount < 600) quality *= (float)sampleCount / 600.0f;
+	if (sampleCount < MAG_CAL_TARGET_SAMPLES) quality *= (float)sampleCount / (float)MAG_CAL_TARGET_SAMPLES;
 	return true;
 }
 
@@ -473,7 +480,10 @@ void updateExternalSensors() {
 	updateSupplementarySensors();
 	if (armed || motorTestActive || motorsActive()) {
 		if (magCalibrationActive) {
+			portENTER_CRITICAL(&magSampleMux);
 			magCalibrationActive = false;
+			magRuntime.calibrationStoppedMs = millis();
+			portEXIT_CRITICAL(&magSampleMux);
 			Serial.println("MAG_CAL state=aborted reason=outputs_active");
 		}
 	}
@@ -542,14 +552,17 @@ void updateExternalSensors() {
 bool startMagCalibration() {
 	const CalibrationSensorAvailability sensors = {true, qmcReady};
 	if (!magneticHeadingCalibrationSensorsReady(sensors) ||
-		armed || motorTestActive || motorsActive()) return false;
+		armed || motorTestActive || motorsActive() || magCalibrationActive) return false;
 	portENTER_CRITICAL(&magSampleMux);
 	for (int axis = 0; axis < 3; ++axis) {
 		magMinimum[axis] = INT16_MAX;
 		magMaximum[axis] = INT16_MIN;
 	}
 	magCalibrationSamples = 0;
-	lastMagSampleMs = millis();
+	magRuntime.calibrationStartedMs = millis();
+	magRuntime.calibrationStoppedMs = 0;
+	lastMagSampleMs = magRuntime.calibrationStartedMs;
+	magRuntime.calibrationAttemptStarted = true;
 	magCalibrationActive = true;
 	portEXIT_CRITICAL(&magSampleMux);
 	return true;
@@ -558,17 +571,67 @@ bool startMagCalibration() {
 void stopMagCalibration() {
 	portENTER_CRITICAL(&magSampleMux);
 	magCalibrationActive = false;
+	magRuntime.calibrationStoppedMs = millis();
 	portEXIT_CRITICAL(&magSampleMux);
 }
 
+bool getMagCalibrationStatus(MagnetometerCalibrationStatus &status) {
+	status = MagnetometerCalibrationStatus();
+	uint32_t startedMs = 0, stoppedMs = 0, lastSampleMs = 0;
+	portENTER_CRITICAL(&magSampleMux);
+	status.available = qmcReady;
+	status.collecting = magCalibrationActive;
+	status.saved = magCalibration.valid;
+	status.attemptStarted = magRuntime.calibrationAttemptStarted;
+	status.samples = magCalibrationSamples;
+	startedMs = magRuntime.calibrationStartedMs;
+	stoppedMs = magRuntime.calibrationStoppedMs;
+	lastSampleMs = lastMagSampleMs;
+	for (int axis = 0; axis < 3; ++axis) {
+		status.minimum[axis] = magMinimum[axis];
+		status.maximum[axis] = magMaximum[axis];
+	}
+	portEXIT_CRITICAL(&magSampleMux);
+
+	const uint32_t nowMs = millis();
+	if (status.attemptStarted && startedMs) {
+		const uint32_t endedMs = status.collecting || !stoppedMs ? nowMs : stoppedMs;
+		status.elapsedMs = endedMs - startedMs;
+	}
+	status.lastSampleAgeMs = status.samples && lastSampleMs ? nowMs - lastSampleMs : UINT32_MAX;
+	status.sampleProgressPct = status.samples >= MAG_CAL_MIN_SAMPLES ? 100U :
+		(uint8_t)(status.samples * 100UL / MAG_CAL_MIN_SAMPLES);
+	status.overallProgressPct = status.sampleProgressPct;
+	for (int axis = 0; axis < 3; ++axis) {
+		const int32_t rawSpan = status.maximum[axis] >= status.minimum[axis] ?
+			status.maximum[axis] - status.minimum[axis] : 0;
+		status.span[axis] = (uint16_t)min((int32_t)UINT16_MAX, rawSpan);
+		status.axisProgressPct[axis] = (uint8_t)min(100L,
+			(long)(rawSpan * 100L / MAG_CAL_MIN_AXIS_SPAN));
+		if (status.axisProgressPct[axis] < status.overallProgressPct)
+			status.overallProgressPct = status.axisProgressPct[axis];
+	}
+	float offsets[3], scales[3];
+	status.candidateReady = calculateMagCalibration(offsets, scales, status.fieldNorm, status.quality);
+	if (status.candidateReady) status.overallProgressPct = 100;
+	return status.available;
+}
+
 void printMagCalibrationStatus() {
+	MagnetometerCalibrationStatus status;
+	getMagCalibrationStatus(status);
 	float offsets[3], scales[3], fieldNorm = 0.0f, quality = 0.0f;
 	const bool candidateValid = calculateMagCalibration(offsets, scales, fieldNorm, quality);
-	Serial.printf("MAG_CAL available=%u state=%s samples=%lu saved=%u candidate=%s", qmcReady ? 1U : 0U,
-		magCalibrationActive ? "collecting" : "stopped",
-		(unsigned long)magCalibrationSamples, magCalibration.valid ? 1 : 0, candidateValid ? "ready" : "insufficient_coverage");
+	Serial.printf("MAG_CAL available=%u state=%s samples=%lu elapsed_ms=%lu progress=%u sample_progress=%u axis_progress=%u,%u,%u saved=%u candidate=%s",
+		status.available ? 1U : 0U, status.collecting ? "collecting" : "stopped",
+		(unsigned long)status.samples, (unsigned long)status.elapsedMs,
+		(unsigned)status.overallProgressPct, (unsigned)status.sampleProgressPct,
+		(unsigned)status.axisProgressPct[0], (unsigned)status.axisProgressPct[1],
+		(unsigned)status.axisProgressPct[2], status.saved ? 1U : 0U,
+		candidateValid ? "ready" : "insufficient_coverage");
 	for (int axis = 0; axis < 3; ++axis) {
-		Serial.printf(" min%d=%d max%d=%d", axis, magMinimum[axis], axis, magMaximum[axis]);
+		Serial.printf(" min%d=%ld max%d=%ld span%d=%u", axis, (long)status.minimum[axis],
+			axis, (long)status.maximum[axis], axis, (unsigned)status.span[axis]);
 		if (candidateValid) Serial.printf(" off%d=%.1f scale%d=%.3f", axis, offsets[axis], axis, scales[axis]);
 	}
 	Serial.printf(" heading_offset_deg=%.2f field_norm=%.1f quality=%.3f\n",
@@ -583,7 +646,9 @@ bool saveMagCalibration() {
 	MagCalibration current;
 	portENTER_CRITICAL(&magSampleMux);
 	current = magCalibration;
+	const bool attemptedCollection = magRuntime.calibrationAttemptStarted;
 	portEXIT_CRITICAL(&magSampleMux);
+	if (attemptedCollection && !haveNewCalibration) return false;
 	if (!haveNewCalibration && !current.valid) return false;
 	PersistedMagCalibrationV2 record = {};
 	record.magic = MAG_CAL_MAGIC_V2;
@@ -632,6 +697,14 @@ bool resetMagCalibration() {
 	if (!removed) return false;
 	portENTER_CRITICAL(&magSampleMux);
 	magCalibration = MagCalibration();
+	magRuntime.calibrationAttemptStarted = false;
+	magRuntime.calibrationStartedMs = 0;
+	magRuntime.calibrationStoppedMs = 0;
+	magCalibrationSamples = 0;
+	for (int axis = 0; axis < 3; ++axis) {
+		magMinimum[axis] = INT16_MAX;
+		magMaximum[axis] = INT16_MIN;
+	}
 	headingEstimator.reset();
 	magEstimate.calibrated = false;
 	magEstimate.trusted = false;

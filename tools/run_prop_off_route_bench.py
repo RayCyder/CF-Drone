@@ -29,6 +29,37 @@ def build_plan(hold_duration_s, hold_throttle_pct):
             "0.8 10 0 0 0\n")
 
 
+def summarize_plan(plan):
+    rows = []
+    schema = 1
+    advance = 'timed'
+    total_s = 0.0
+    for raw_line in plan.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith('#'):
+            if line in ('# CF_ROUTE_META schema=2 source=authored policy=slew',
+                        '# CF_ROUTE_META schema=2 source=authored policy=slew advance=arrival heading=relative'):
+                schema = 2
+                advance = 'arrival' if ' advance=arrival' in line else 'timed'
+            continue
+        fields = line.replace(',', ' ').split()
+        expected = 7 if schema == 2 else 5
+        if len(fields) != expected:
+            raise ValueError(f'route row requires {expected} columns for schema {schema}: {line}')
+        values = [float(value) for value in fields]
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError(f'route row contains a non-finite value: {line}')
+        if not 0.1 <= values[0] <= 600.0:
+            raise ValueError(f'route duration is out of range: {line}')
+        rows.append(values)
+        total_s += values[0]
+    if not rows:
+        raise ValueError('route plan contains no executable rows')
+    return {'count': len(rows), 'schema': schema, 'advance': advance, 'total_s': total_s}
+
+
 def request(host, port, method, path, body=None, content_type=None, timeout=0.6):
     timings = {'tcp_connect_ms': 0.0}
 
@@ -89,15 +120,24 @@ def main():
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'data/attitude')
     parser.add_argument('--hold-duration-s', type=float, default=0.8)
     parser.add_argument('--hold-throttle-pct', type=float, default=20)
+    parser.add_argument('--plan-file', type=Path,
+                        help='upload this V1/V2 route instead of the built-in three-step V1 plan')
     parser.add_argument('--capture-web-attitude', action='store_true',
                         help='record one bounded read-only attitude snapshot per second')
     parser.add_argument('--confirm-no-props-fixed', action='store_true', required=True)
     parser.add_argument('--confirm-exclusive-control', action='store_true', required=True)
     args = parser.parse_args()
-    if (not math.isfinite(args.hold_duration_s) or not 0.8 <= args.hold_duration_s <= 10.0 or
-            not math.isfinite(args.hold_throttle_pct) or not 20 <= args.hold_throttle_pct <= 30):
-        parser.error('hold duration must be 0.8–10 s and hold throttle 20–30%')
-    plan = build_plan(args.hold_duration_s, args.hold_throttle_pct)
+    if args.plan_file:
+        plan = args.plan_file.read_text(encoding='utf-8')
+    else:
+        if (not math.isfinite(args.hold_duration_s) or not 0.8 <= args.hold_duration_s <= 10.0 or
+                not math.isfinite(args.hold_throttle_pct) or not 20 <= args.hold_throttle_pct <= 30):
+            parser.error('hold duration must be 0.8–10 s and hold throttle 20–30%')
+        plan = build_plan(args.hold_duration_s, args.hold_throttle_pct)
+    try:
+        plan_summary = summarize_plan(plan)
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
     url = urlsplit(args.url)
     if url.scheme != 'http' or not url.hostname or url.path != '/web_rc/status' or url.query or url.fragment:
         parser.error('--url must be a plain HTTP /web_rc/status URL')
@@ -157,10 +197,13 @@ def main():
             token = lease['lease']
             lease_query = '?' + urlencode({'lease': token})
             uploaded, _ = timed_request('POST', '/route/upload' + lease_query, plan, 'text/plain')
-            record(stream, 'uploaded', plan=plan, response=uploaded)
+            record(stream, 'uploaded', plan=plan, plan_summary=plan_summary, response=uploaded)
             revision = uploaded.get('plan_revision')
             route, _ = timed_request('GET', '/route/status')
-            if route.get('state') != 'ready' or route.get('count') != 3 or route.get('plan_revision') != revision:
+            if (route.get('state') != 'ready' or route.get('count') != plan_summary['count'] or
+                    route.get('schema') != plan_summary['schema'] or
+                    route.get('advance', 'timed') != plan_summary['advance'] or
+                    route.get('plan_revision') != revision):
                 raise RuntimeError(f'uploaded route mismatch: {route}')
             stick_zero(stream)
             state, _ = timed_request('GET', '/web_rc/status')
@@ -178,7 +221,7 @@ def main():
             if route.get('mode') != 4 or route.get('state') != 'ready':
                 raise RuntimeError(f'AUTO mode not ready before arming: {route}')
 
-            signal.alarm(math.ceil(1.0 + args.hold_duration_s + 0.8 + 12))
+            signal.alarm(math.ceil(plan_summary['total_s'] + 12))
             serial.send('arm')
             arm_command_sent = True
             time.sleep(0.2)
@@ -233,8 +276,9 @@ def main():
                     except (OSError, TimeoutError, RuntimeError, ValueError) as error:
                         record(stream, 'attitude_sample_unavailable', error=str(error))
                 time.sleep(0.12)
-            if seen_steps != {1, 2, 3}:
-                raise RuntimeError(f'not all three route steps observed: {sorted(seen_steps)}')
+            expected_steps = set(range(1, plan_summary['count'] + 1))
+            if seen_steps != expected_steps:
+                raise RuntimeError(f'not all route steps observed: {sorted(seen_steps)}')
         except (OSError, TimeoutError, RuntimeError, ValueError) as error:
             route_error = error
             record(stream, 'route_error', error=str(error))

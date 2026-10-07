@@ -49,30 +49,26 @@ bool MPU9250::begin() {
   // successful initialization or interrupt setup.
   status_ = 0;
   who_am_i_ = 0;
+  who_am_i_ak8963_ = 0;
   is_mpu6500_ = false;
 
   imu_.Begin();
   /* 1 MHz for config */
   spi_clock_ = SPI_CFG_CLOCK_;
+
+  // A controller reset can finish before the sensor supply and oscillator are
+  // ready.  Starting register writes immediately was reliable after a software
+  // reboot, but intermittently failed at USER_CTRL after an RTS reset.  Give the
+  // device its power-on interval, then reset it before reading its identity.
+  delay(100);
+  WriteRegister(PWR_MGMNT_1_, H_RESET_);
+  delay(100);
+
   /* Select clock source to gyro */
   if (!WriteRegister(PWR_MGMNT_1_, CLKSEL_PLL_)) {
     log(errorFmt, status_ = 1);
     return false;
   }
-  /* Enable I2C master mode */
-  if (!WriteRegister(USER_CTRL_, I2C_MST_EN_)) {
-    log(errorFmt, status_ = 2);
-    return false;
-  }
-  /* Set the I2C bus speed to 400 kHz */
-  if (!WriteRegister(I2C_MST_CTRL_, I2C_MST_CLK_)) {
-    log(errorFmt, status_ = 3);
-    return false;
-  }
-  /* Reset the MPU9250 */
-  WriteRegister(PWR_MGMNT_1_, H_RESET_);
-  /* Wait for MPU-9250 to come back up */
-  delay(1);
   /* Check the WHO AM I byte */
   if (!ReadRegisters(WHOAMI_, sizeof(who_am_i_), &who_am_i_)) {
     log(errorFmt, status_ = 4);
@@ -91,70 +87,65 @@ bool MPU9250::begin() {
     log("Unknown WHO_AM_I: 0x%02X", who_am_i_);
     return false;
   }
-  /* Set AK8963 to power down */
-  WriteAk8963Register(AK8963_CNTL1_, AK8963_PWR_DOWN_);
-  /* Reset the AK8963 */
-  WriteAk8963Register(AK8963_CNTL2_, AK8963_RESET_);
-  /* Select clock source to gyro */
-  if (!WriteRegister(PWR_MGMNT_1_, CLKSEL_PLL_)) {
-    log(errorFmt, status_ = 6);
-    return false;
+  // MPU6500 has no internal AK8963. Requiring its unused I2C-master block to
+  // accept USER_CTRL made the otherwise healthy gyro/accelerometer fail closed
+  // on some hard resets. Only MPU9250/9255 need the bridge and magnetometer
+  // calibration sequence below.
+  if (!is_mpu6500_) {
+    /* Enable I2C master mode */
+    if (!WriteRegister(USER_CTRL_, I2C_MST_EN_)) {
+      log(errorFmt, status_ = 7);
+      return false;
+    }
+    /* Set the I2C bus speed to 400 kHz */
+    if (!WriteRegister(I2C_MST_CTRL_, I2C_MST_CLK_)) {
+      log(errorFmt, status_ = 8);
+      return false;
+    }
+    /* Set AK8963 to power down, then reset it. */
+    WriteAk8963Register(AK8963_CNTL1_, AK8963_PWR_DOWN_);
+    WriteAk8963Register(AK8963_CNTL2_, AK8963_RESET_);
+    /* Check the AK8963 WHOAMI */
+    if (!ReadAk8963Registers(AK8963_WHOAMI_, sizeof(who_am_i_ak8963_), &who_am_i_ak8963_)) {
+      log(errorFmt, status_ = 9);
+      return false;
+    }
+    if (who_am_i_ak8963_ != WHOAMI_AK8963) {
+      status_ = 10;
+      log("Wrong AK8963 WHO_AM_I: 0x%02X", who_am_i_ak8963_);
+      return false;
+    }
+    /* Get the magnetometer calibration */
+    if (!WriteAk8963Register(AK8963_CNTL1_, AK8963_PWR_DOWN_)) {
+      log(errorFmt, status_ = 11);
+      return false;
+    }
+    delay(100);  // long wait between AK8963 mode changes
+    if (!WriteAk8963Register(AK8963_CNTL1_, AK8963_FUSE_ROM_)) {
+      log(errorFmt, status_ = 12);
+      return false;
+    }
+    delay(100);  // long wait between AK8963 mode changes
+    if (!ReadAk8963Registers(AK8963_ASA_, sizeof(asa_buff_), asa_buff_)) {
+      log(errorFmt, status_ = 13);
+      return false;
+    }
+    mag_scale_[0] = ((static_cast<float>(asa_buff_[0]) - 128.0f)
+      / 256.0f + 1.0f) * 4912.0f / 32760.0f;
+    mag_scale_[1] = ((static_cast<float>(asa_buff_[1]) - 128.0f)
+      / 256.0f + 1.0f) * 4912.0f / 32760.0f;
+    mag_scale_[2] = ((static_cast<float>(asa_buff_[2]) - 128.0f)
+      / 256.0f + 1.0f) * 4912.0f / 32760.0f;
+    if (!WriteAk8963Register(AK8963_CNTL1_, AK8963_PWR_DOWN_)) {
+      log(errorFmt, status_ = 14);
+      return false;
+    }
+    if (!WriteAk8963Register(AK8963_CNTL1_, AK8963_CNT_MEAS2_)) {
+      log(errorFmt, status_ = 15);
+      return false;
+    }
+    delay(100);  // long wait between AK8963 mode changes
   }
-  /* Enable I2C master mode */
-  if (!WriteRegister(USER_CTRL_, I2C_MST_EN_)) {
-    log(errorFmt, status_ = 7);
-    return false;
-  }
-  /* Set the I2C bus speed to 400 kHz */
-  if (!WriteRegister(I2C_MST_CTRL_, I2C_MST_CLK_)) {
-    log(errorFmt, status_ = 8);
-    return false;
-  }
-  /* Check the AK8963 WHOAMI */
-  if (!ReadAk8963Registers(AK8963_WHOAMI_, sizeof(who_am_i_ak8963_), &who_am_i_ak8963_)) {
-    log(errorFmt, status_ = 9);
-    return false;
-  }
-  if (!is_mpu6500_ && who_am_i_ak8963_ != WHOAMI_AK8963) {
-    status_ = 10;
-    log("Wrong AK8963 WHO_AM_I: 0x%02X", who_am_i_ak8963_);
-    return false;
-  }
-  /* Get the magnetometer calibration */
-  /* Set AK8963 to power down */
-  if (!WriteAk8963Register(AK8963_CNTL1_, AK8963_PWR_DOWN_)) {
-    log(errorFmt, status_ = 11);
-    return false;
-  }
-  delay(100);  // long wait between AK8963 mode changes
-  /* Set AK8963 to FUSE ROM access */
-  if (!WriteAk8963Register(AK8963_CNTL1_, AK8963_FUSE_ROM_)) {
-    log(errorFmt, status_ = 12);
-    return false;
-  }
-  delay(100);  // long wait between AK8963 mode changes
-  /* Read the AK8963 ASA registers and compute magnetometer scale factors */
-  if (!ReadAk8963Registers(AK8963_ASA_, sizeof(asa_buff_), asa_buff_)) {
-    log(errorFmt, status_ = 13);
-    return false;
-  }
-  mag_scale_[0] = ((static_cast<float>(asa_buff_[0]) - 128.0f)
-    / 256.0f + 1.0f) * 4912.0f / 32760.0f;
-  mag_scale_[1] = ((static_cast<float>(asa_buff_[1]) - 128.0f)
-    / 256.0f + 1.0f) * 4912.0f / 32760.0f;
-  mag_scale_[2] = ((static_cast<float>(asa_buff_[2]) - 128.0f)
-    / 256.0f + 1.0f) * 4912.0f / 32760.0f;
-  /* Set AK8963 to power down */
-  if (!WriteAk8963Register(AK8963_CNTL1_, AK8963_PWR_DOWN_)) {
-    log(errorFmt, status_ = 14);
-    return false;
-  }
-  /* Set AK8963 to 16 bit resolution, 100 Hz update rate */
-  if (!WriteAk8963Register(AK8963_CNTL1_, AK8963_CNT_MEAS2_)) {
-    log(errorFmt, status_ = 15);
-    return false;
-  }
-  delay(100);  // long wait between AK8963 mode changes
   /* Select clock source to gyro */
   if (!WriteRegister(PWR_MGMNT_1_, CLKSEL_PLL_)) {
     log(errorFmt, status_ = 16);

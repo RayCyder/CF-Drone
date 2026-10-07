@@ -4,6 +4,12 @@
 // Board-level hardware configuration
 // 通过条件编译自动区分 ESP32、ESP32-C3 与 ESP32-S3，无需手动修改
 
+// ESP32-D optional-sensor build profiles. The build script sets exactly one
+// profile; direct Arduino IDE/CLI builds default to the full expansion board.
+#define CF_DRONE_ESP32D_PROFILE_IMU_ONLY      1
+#define CF_DRONE_ESP32D_PROFILE_BARO_MAG      2
+#define CF_DRONE_ESP32D_PROFILE_FULL_SENSORS  3
+
 #ifdef CONFIG_IDF_TARGET_ESP32C3
 // ---------------------- ESP32C3 ------------------------- 
 
@@ -56,6 +62,7 @@
 #define BOARD_PMW_CS_PIN       (-1)        // PMW3901 CS，C3 暂未分配，设为 -1 禁用
 #define BOARD_OPTICAL_FLOW_ENABLED 0
 #define BOARD_DOWNWARD_RANGE_ENABLED 0
+#define BOARD_SENSOR_PROFILE_NAME "c3-imu-only"
 
 #elif defined(CONFIG_IDF_TARGET_ESP32S3)
 // ---------------------- ESP32S3 -------------------------
@@ -110,6 +117,7 @@
 #define BOARD_PMW_CS_PIN       38      // PMW3901 CS，暂定 GPIO38
 #define BOARD_OPTICAL_FLOW_ENABLED 0 // 当前 S3 设备未安装 PMW3901
 #define BOARD_DOWNWARD_RANGE_ENABLED 0 // 当前 S3 设备未安装 VL53L1X
+#define BOARD_SENSOR_PROFILE_NAME "s3-board-config"
 
 #else  // ---- ESP32 默认配置 ----
 // ---------------------- 默认ESP32 -------------------------
@@ -145,12 +153,48 @@
 #define BOARD_WIFI_ENABLED           1  // WIFI开关
 #define BOARD_WEB_RC_ENABLED         1  // Web遥控器开关
 
-// ---- 扩展板传感器----
-#define EXPANSION_BOARD_ENABLED      1 // 1 = 启用扩展板传感器探测（BMP388/VL53L1X/QMC5883L/PMW3901）;0 = 跳过探测，所有能力标志保持 false，不影响基础飞行功能
-#define BOARD_VL53_XSHUT_PIN   32          // VL53L1X XSHUT（GPIO32）
-#define BOARD_PMW_CS_PIN       33          // PMW3901 SPI CS（GPIO33）
-#define BOARD_OPTICAL_FLOW_ENABLED EXPANSION_BOARD_ENABLED
-#define BOARD_DOWNWARD_RANGE_ENABLED EXPANSION_BOARD_ENABLED
+// ---- ESP32-D 可选传感器编译模式 ----
+// 1: 仅 IMU
+// 2: IMU + BMP388 + QMC5883P
+// 3: IMU + BMP388 + QMC5883P + PMW3901 + VL53L1X
+#ifndef CF_DRONE_ESP32D_SENSOR_PROFILE
+#define CF_DRONE_ESP32D_SENSOR_PROFILE CF_DRONE_ESP32D_PROFILE_FULL_SENSORS
+#endif
+#if CF_DRONE_ESP32D_SENSOR_PROFILE < CF_DRONE_ESP32D_PROFILE_IMU_ONLY || \
+    CF_DRONE_ESP32D_SENSOR_PROFILE > CF_DRONE_ESP32D_PROFILE_FULL_SENSORS
+#error "CF_DRONE_ESP32D_SENSOR_PROFILE must be 1 (imu), 2 (baro_mag), or 3 (full)"
+#endif
+
+// GPIO33 is always reserved as the optional PMW3901 chip select. Holding it
+// high before IMU initialization is harmless when H5 is empty and prevents an
+// attached, disabled optical-flow device from driving the shared SPI MISO line.
+#define BOARD_PMW_CS_PIN 33
+
+#if CF_DRONE_ESP32D_SENSOR_PROFILE == CF_DRONE_ESP32D_PROFILE_IMU_ONLY
+#define BOARD_SENSOR_PROFILE_NAME       "esp32d-imu"
+#define EXPANSION_BOARD_ENABLED         0
+#define BOARD_BAROMETER_ENABLED         0
+#define BOARD_COMPASS_ENABLED           0
+#define BOARD_VL53_XSHUT_PIN            (-1)
+#define BOARD_OPTICAL_FLOW_ENABLED      0
+#define BOARD_DOWNWARD_RANGE_ENABLED    0
+#elif CF_DRONE_ESP32D_SENSOR_PROFILE == CF_DRONE_ESP32D_PROFILE_BARO_MAG
+#define BOARD_SENSOR_PROFILE_NAME       "esp32d-baro-mag"
+#define EXPANSION_BOARD_ENABLED         1
+#define BOARD_BAROMETER_ENABLED         1
+#define BOARD_COMPASS_ENABLED           1
+#define BOARD_VL53_XSHUT_PIN            (-1)
+#define BOARD_OPTICAL_FLOW_ENABLED      0
+#define BOARD_DOWNWARD_RANGE_ENABLED    0
+#else
+#define BOARD_SENSOR_PROFILE_NAME       "esp32d-full"
+#define EXPANSION_BOARD_ENABLED         1
+#define BOARD_BAROMETER_ENABLED         1
+#define BOARD_COMPASS_ENABLED           1
+#define BOARD_VL53_XSHUT_PIN            32
+#define BOARD_OPTICAL_FLOW_ENABLED      1
+#define BOARD_DOWNWARD_RANGE_ENABLED    1
+#endif
 
 #endif
 

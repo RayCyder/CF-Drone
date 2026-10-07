@@ -202,6 +202,21 @@ mot
 
 `GET /route/status` 返回执行状态、段数、当前段、总时长、计划修订号、原因、解锁状态、模式、`schema`、`source`、`policy` 和 `vertical_ready`。`schema=2` 表示计划带 V2 导航目标。飞行 CSV 还记录 `route_revision/schema/step/state`、目标与实际 `z/yaw`、XY 影子位置、质量和终止原因码，便于把回放误差关联到确定计划和动作段。
 
+### V2 到达后计时模式（ARR-1～ARR-6）
+
+手写 V2 可使用 `# CF_ROUTE_META schema=2 source=authored policy=slew advance=arrival heading=relative` 显式开启到达后计时，并使用以起飞时陀螺航向为零点的短时相对航向。旧 V1、浏览器录制 V2 和不带 `advance=arrival` 的手写 V2 保持原有固定时间语义及磁航向要求。
+
+- ARR-1：首段仍用于建立相对高度和航向零点，按固定时间执行。
+- ARR-2：后续高度目标相对上一段发生变化时，该段为到达段，持续时间表示最大等待时间；高度目标不变的段为定时段，完整执行声明时长。
+- ARR-3：实际高度误差不超过 0.10 m、垂直速度绝对值不超过 0.15 m/s，并连续稳定 500 ms 后，到达段才结束。任一条件越界会清零稳定计时。
+- ARR-4：到达段超时或垂直估计失效时进入受控迫降，不得继续进入保持段。
+- ARR-5：`/route/status` 发布 `advance`、`phase`、`step_elapsed_ms`、`stable_ms`、`remaining_ms`、目标/实际高度和垂直速度，供页面和实验脚本观察。
+- ARR-6：上传、原文读回、AUTO + 解锁自动执行和人工接管流程保持不变；航线仍只保存在 RAM，设备重启后需要重新上传。
+
+首个带桨实验计划使用 0.00 m 基线、最多 8 秒到达 0.30 m、到达后保持 2 秒、最多 8 秒下降至 0.05 m，然后进入现有受控迫降。该实验只验收垂直闭环，不代表水平定点悬停或可靠触地确认。
+
+2026-10-07 验证记录：解析/稳定判定主机测试、V2 页面契约和 Web HTTP 响应契约通过；ESP32-D full + 循环阶段监控构建通过并刷入 `20:50:0d:33:b4:dc`。`esp32d_altitude_0p3m_arrival_hold2_land_v2.route` 已在上锁状态上传，`/route/plan` 逐字读回一致，`/route/status` 返回 `ready`、`advance=arrival`、`heading=relative`。未在无桨状态启动该计划，也尚未完成带桨高度响应验收。
+
 ## 7. 当前验证状态
 
 - V2 解析、录制页面契约、垂直估计和控制器已有主机回归覆盖。

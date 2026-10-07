@@ -8,6 +8,25 @@ typedef void *SemaphoreHandle_t;
 #endif
 #include "flight_sensor_interfaces.h"
 
+struct MagnetometerCalibrationStatus {
+	bool available = false;
+	bool collecting = false;
+	bool saved = false;
+	bool attemptStarted = false;
+	bool candidateReady = false;
+	uint32_t samples = 0;
+	uint32_t elapsedMs = 0;
+	uint32_t lastSampleAgeMs = UINT32_MAX;
+	int32_t minimum[3] = {};
+	int32_t maximum[3] = {};
+	uint16_t span[3] = {};
+	uint8_t sampleProgressPct = 0;
+	uint8_t axisProgressPct[3] = {};
+	uint8_t overallProgressPct = 0;
+	float fieldNorm = 0.0f;
+	float quality = 0.0f;
+};
+
 void setupExternalSensors();
 void setupSupplementarySensors(bool i2cReady, SemaphoreHandle_t i2cMutex);
 void updateSupplementarySensors();
@@ -30,6 +49,7 @@ float navigationHeadingRadians(float fallbackYawRadians);
 bool barometerAvailable();
 bool getBarometerEstimate(BarometerEstimate &estimate);
 void printMagCalibrationStatus();
+bool getMagCalibrationStatus(MagnetometerCalibrationStatus &status);
 bool startMagCalibration();
 void stopMagCalibration();
 bool saveMagCalibration();

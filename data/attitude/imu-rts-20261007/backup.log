@@ -1,0 +1,5 @@
+esptool v5.2.0
+Serial port /dev/cu.usbserial-10:
+
+A fatal error occurred: Could not open /dev/cu.usbserial-10, the port is busy or doesn't exist.
+([Errno 35] Could not exclusively lock port /dev/cu.usbserial-10: [Errno 35] Resource temporarily unavailable)
