@@ -1,0 +1,40 @@
+{
+  "state": "aborted",
+  "step": 0,
+  "reason": "boot_preflight_failed",
+  "baseline": {
+    "gyro_rms": 0.0,
+    "accel_rms": 0.0,
+    "samples": 0
+  },
+  "motors": [
+    {
+      "name": "FR",
+      "gyro_rms": 0.0,
+      "accel_rms": 0.0,
+      "samples": 0,
+      "response": "inconclusive"
+    },
+    {
+      "name": "FL",
+      "gyro_rms": 0.0,
+      "accel_rms": 0.0,
+      "samples": 0,
+      "response": "inconclusive"
+    },
+    {
+      "name": "RR",
+      "gyro_rms": 0.0,
+      "accel_rms": 0.0,
+      "samples": 0,
+      "response": "inconclusive"
+    },
+    {
+      "name": "RL",
+      "gyro_rms": 0.0,
+      "accel_rms": 0.0,
+      "samples": 0,
+      "response": "inconclusive"
+    }
+  ]
+}

@@ -15,10 +15,14 @@ const stateEl=document.getElementById('state'),valuesEl=document.getElementById(
 const receivedEl=document.getElementById('received'),capturedEl=document.getElementById('captured');
 const selectedMetrics=['attitude.x','attitude.y','attitude.z','rates.x','rates.y','rates.z','gyro_x','gyro_y','gyro_z','acc_x','acc_y','acc_z','battery_v','motor_rl','motor_rr','motor_fr','motor_fl'];
 let headers=[],metricValues=[],rows=[],capturing=false,received=0;
-const source=new EventSource(location.protocol+'//'+location.hostname+':81/stream');
-source.onopen=()=>stateEl.textContent='已连接 · 实时接收中';source.onerror=()=>stateEl.textContent='连接中断，浏览器正在自动重连…';
+let source=null;
+function connectTelemetryStream(){
+if(source)return;
+const stream=source=new EventSource(location.protocol+'//'+location.hostname+':81/stream');
+stream.onopen=()=>{if(source===stream)stateEl.textContent='已连接 · 实时接收中';};stream.onerror=()=>{if(source===stream)stateEl.textContent='连接中断，浏览器正在自动重连…';};
 // Telemetry arrives at 2 Hz: build cards on schema changes, then update cached value nodes.
-source.addEventListener('schema',e=>{
+stream.addEventListener('schema',e=>{
+  if(source!==stream)return;
   headers=e.data.split(',');
   const headerIndices=new Map(headers.map((name,index)=>[name,index]));
   const fragment=document.createDocumentFragment();
@@ -33,13 +37,19 @@ source.addEventListener('schema',e=>{
   }
   valuesEl.replaceChildren(fragment);
 });
-source.addEventListener('sample',e=>{
+stream.addEventListener('sample',e=>{
+  if(source!==stream)return;
   const values=e.data.split(',');
   received++;receivedEl.textContent=received;
   if(capturing&&rows.length<10000)rows.push(e.lastEventId+','+e.data);
   capturedEl.textContent=rows.length;
   for(const metric of metricValues)metric.value.textContent=values[metric.index]??'—';
 });
+}
+function closeTelemetryStream(){if(!source)return;const stream=source;source=null;stream.close();}
+window.addEventListener('pagehide',closeTelemetryStream);
+window.addEventListener('pageshow',connectTelemetryStream);
+connectTelemetryStream();
 document.getElementById('capture').onclick=()=>{capturing=!capturing;document.getElementById('capture').textContent=capturing?'停止捕获':'继续捕获';document.getElementById('download').disabled=rows.length===0;};
 document.getElementById('download').onclick=()=>{if(!headers.length||!rows.length)return;const csv='sequence,'+headers.join(',')+'\n'+rows.join('\n')+'\n';const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));link.download='flight-telemetry.csv';link.click();URL.revokeObjectURL(link.href);};
 const logStateName=s=>({ROLLING:'滚动记录',POST_TRIGGER:'采集故障后数据',FROZEN:'快照已保留'}[s]||s||'未知');

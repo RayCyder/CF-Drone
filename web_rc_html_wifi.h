@@ -41,9 +41,17 @@ async function refreshMotorCheck(){const button=document.getElementById('refresh
 document.getElementById('refresh-motor-check').onclick=refreshMotorCheck;
 document.getElementById('wifi-form').addEventListener('submit',async e=>{e.preventDefault();statusEl.textContent='正在安全保存网络…';try{const r=await fetch('/wifi/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(new FormData(e.target))});const d=await r.json();statusEl.textContent=d.message||'保存失败';statusEl.style.color=r.ok?'#8fe3a0':'#ff8b8b';if(r.ok){document.getElementById('password').value='';await refreshSavedProfiles();}}catch(_){statusEl.textContent='连接中断；请查看下方事件日志，确认飞控是否正在重启。';statusEl.style.color='#ffd27a';}});
 const eventState=document.getElementById('event-state'),eventList=document.getElementById('event-list'),downloadEvents=document.getElementById('download-events');let events=[],seenEvents=new Set();
-const eventSource=new EventSource(location.protocol+'//'+location.hostname+':81/stream');
-eventSource.onopen=()=>eventState.textContent='事件流已连接；启动和 Wi-Fi 状态会实时显示';eventSource.onerror=()=>eventState.textContent='事件流断开，浏览器正在自动重连；已收到的日志仍保留在此页面';
-eventSource.addEventListener('system-log',e=>{if(e.lastEventId&&seenEvents.has(e.lastEventId))return;if(e.lastEventId)seenEvents.add(e.lastEventId);const parts=e.data.split('|');const line=(parts[0]||'?')+' ms  ['+(parts[1]||'SYSTEM')+'] '+parts.slice(2).join('|');events.push(line);if(events.length>500)events.shift();eventList.textContent=events.join('\n');eventList.scrollTop=eventList.scrollHeight;downloadEvents.disabled=events.length===0;});
+let eventSource=null;
+function connectEventStream(){
+if(eventSource)return;
+const stream=eventSource=new EventSource(location.protocol+'//'+location.hostname+':81/stream');
+stream.onopen=()=>{if(eventSource===stream)eventState.textContent='事件流已连接；启动和 Wi-Fi 状态会实时显示';};stream.onerror=()=>{if(eventSource===stream)eventState.textContent='事件流断开，浏览器正在自动重连；已收到的日志仍保留在此页面';};
+stream.addEventListener('system-log',e=>{if(eventSource!==stream)return;if(e.lastEventId&&seenEvents.has(e.lastEventId))return;if(e.lastEventId)seenEvents.add(e.lastEventId);const parts=e.data.split('|');const line=(parts[0]||'?')+' ms  ['+(parts[1]||'SYSTEM')+'] '+parts.slice(2).join('|');events.push(line);if(events.length>500)events.shift();eventList.textContent=events.join('\n');eventList.scrollTop=eventList.scrollHeight;downloadEvents.disabled=events.length===0;});
+}
+function closeEventStream(){if(!eventSource)return;const stream=eventSource;eventSource=null;stream.close();}
+window.addEventListener('pagehide',closeEventStream);
+window.addEventListener('pageshow',connectEventStream);
+connectEventStream();
 downloadEvents.onclick=()=>{if(!events.length)return;const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([events.join('\n')+'\n'],{type:'text/plain;charset=utf-8'}));link.download='cf-drone-system-log.txt';link.click();URL.revokeObjectURL(link.href);};
 document.getElementById('clear-events').onclick=()=>{events=[];seenEvents.clear();eventList.textContent='';downloadEvents.disabled=true;};
 refreshSavedProfiles();

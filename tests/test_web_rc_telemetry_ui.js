@@ -54,6 +54,7 @@ const context = {
     createElement: tag => new Element(tag),
     createDocumentFragment: () => Object.assign(new Element('#fragment'), {isFragment: true}),
   },
+  window: {addEventListener() {}},
   EventSource,
   Blob: TestBlob,
   URL: {createObjectURL: blob => { objectUrls.push(blob); return 'blob:test'; }, revokeObjectURL() {}},

@@ -1,0 +1,32 @@
+{
+  "at": "2026-10-07T21:54:44.483025+08:00",
+  "chip": "ESP32-D0WD-V3",
+  "mac": "20:50:0d:33:b4:dc",
+  "port": "/dev/cu.usbserial-10",
+  "address": "0x10000",
+  "image": "deliverables/cf-drone-esp32d-sse-refresh-fix-20261007.bin",
+  "sha256": "bd23bd3e3b7c5b80f47f8f23d49a1ee167707321b4119f7775500bf497603fd2",
+  "image_bytes": 1482640,
+  "flash_verified": true,
+  "boot_motor_self_check_enabled": true,
+  "nvs_and_partition_table_preserved": true,
+  "firmware_build": "Oct  7 2026 21:44:34",
+  "armed": false,
+  "faults": 5,
+  "selfcheck_state": "aborted",
+  "selfcheck_reason": "boot_preflight_failed",
+  "imu_software_reboot_recovery": false,
+  "sse_acceptance_before_software_reboot": {
+    "cycles": 30,
+    "passed": true,
+    "worst_schema_ms": 106.3
+  },
+  "sse_acceptance_after_software_reboot": {
+    "cycles": 30,
+    "passed": true,
+    "worst_schema_ms": 191.9
+  },
+  "source_base_commit": "1dc6690",
+  "build_existing_http_patch_sha256": "17044f5d62059b3fdd3030cf176de9a92ea349cb741efffdce4b7c5eff13efb1",
+  "build_source_note": "Deployed image includes the pre-existing uncommitted HTTP request-read patch in web_rc.ino; that patch is outside this SSE change."
+}

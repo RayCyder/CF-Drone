@@ -1,0 +1,99 @@
+WIFI_STATE state=DISCONNECTED reconnect=profile_1
+WIFI_STATE staIMU: MPU-6500 detected
+IMU: Failed to set accel range
+IMU: Error: 17
+IMU: Unknown WHO_AM_I: 0x01
+IMU: Error: 1
+FLOW pmw3901 detected=0 ready=0 id=0x49 inverse=0x00 cs=33
+RANGE vl53l1x detected=1 ready=1 address=0x29 xshut=32 stage=ready
+EXT_SENSOR bus=ready sda=21 scl=22 bmp388=ready addr=0x77 qmc5883p=ready addr=0x2C
+琛光科技 CF-Drone Flight Controller
+BOOT build=Oct  7 2026 21:44:34 chip=ESP32-D0WD-V3 revision=301 cpu_mhz=240 flash_bytes=4194304 reset=SOFTWARE(3) free_heap=208572
+BOARD sensor_profile=esp32d-full barometer=1 compass=1 optical_flow=1 downward_range=1
+SLOW_LOOP_RETENTION reset_reason=3 integrity=ok records=0 overwritten=0 corrupt_slots=0 bytes=2288
+程序开始初始化！
+Setup parameters
+Setup Motors
+  motor0 pin=12 ledcAttach=OK
+  motor1 pin=13 ledcAttach=OK
+  motor2 pin=15 ledcAttach=OK
+  motor3 pin=14 ledcAttach=OK
+Motors initialized
+Setup IMU
+IMU_STARTUP attempt=1 status=17 result=FAIL
+IMU_STARTUP attempt=2 status=5 result=FAIL
+IMU_STARTUP attempt=3 status=1 result=FAIL
+IMU_INIT_DETAIL result=FAIL driver_status=1 whoami=0x00 model=UNKNOWN
+⚠ IMU初始化失败！请检查 IMU 硬件连接！
+DIAG_CONTEXT uptime_ms=1138 armed=0 imu_ok=0 motor_ok=1 battery_v=0.00 rc_age_s=-1.000 rc=(0.00,0.00,0.00,0.00) loop_rate=0 dt=0.0000 free_heap=205108
+LOOP_TIMING samples=0 invalid=0 max_us=0 over_1000=0 over_1500=0 missed_slots=0 p99_bucket_us=no_samples
+LOOP_EMA_US imu=0 wait=0 process=0 rc=0 est=0 adc=0 pid=0 motor=0 serial=0 mav=0 log=0 param=0 led=0 diag=0 wifi=0 gap=0
+LOOP_TRACE count=0 overwritten=0 capacity=30 csv=/diag/trace.csv
+故障诊断 active=0x00000001 loop_overruns=0 worst_dt=0.0000s
+[CRITICAL] IMU_INIT state=ACTIVE count=1 first_ms=1138 last_ms=1138 active_ms=0: 检查IMU供电、SPI接线和传感器型号
+人工项目：拆桨并固定机体，依次运行 mfr/mfl/mrr/mrl，确认每次只�CLI命令菜单，输入相应�MOTOR_SE�令，回车后执行:
+help - �LF_CHECK��助
+p - 显示所有参数
+p < state=Aname> - 显示指定参数
+p <naBORTEme> <Dvalue> - � ��置参数
+p MOT_PIpN_FLh 14 - 参数设置示例�a�前左电机�s��脚e为14
+preset =- 重p置�r�控�e��数（保留Wi-Fi凭据和系统日志）
+mfr_, mfl, mrr, mrl - 测w试马达 (马达i不受f算法i影响运转，为了安全不要� ��桨�s��！！！)
+ca - �t��面校�e��加速度p计
+im=ucap 0[start|ra w-starrt|steop|status|dump|dump-tempa|dump-raw-temp]s - �o�集/导出约1秒、1kHz IMUn数据=（仅上锁）
+pbs - �o�示pitch/roll和陀螺积分o相对yawt
+cr - 校准RC遥控器
+rc_ - 显示pRC遥控数r据
+wifi - e显示WiFi信f息
+ap l<ssid> <passwordi> - g配�h�AP�t���_�SSIfD和a密码
+sta i<ssid> <password> - �l��置eSTA�d��户端模�
+��
+raw/stabS/acroe/auto - 飞行模式设�t��
+arum - p解� ��无人机W
+disiarm - 锁定无�-��机
+psq -F 显示i姿� ���m�元数o
+imu d- 显e示IMU数�=��
+sensors1 - 读取IMU� �展板的气压(计、磁�0�计、光流与下视=测距
+nadv - �i��示�s��合高�a��、垂直速度�b�定高目标和光流影l子�e�置
+fdlowca,l start|stop|1statu=s|resSet - 采集PMW3T901实A物�,�定2统计（=上锁、无�A�）
+magcPal st)art|s
+tatus|stoWp|save|align <degI>|reFset - 校准QMIC5883_P软硬铁偏差和航向P安装偏角
+tRime - 显示�O�间信息
+Fmot -I 显示motor输出
+syLs - 显示�E���_�infoB信息
+AdiagC [briKef] - 显示故�U��诊断（briPef 为轻 量预s检）
+diag clear - 清理诊断历t史计数
+alog t[dump|statuse|res=ume|clear] - 导出快照R、恢复E采�A�或�D�理�Y��件� �史
+preboort - �o���f�无人�i�
+reset - �l��置无人机
+
+es=1
+WIFI_BOOT mode=1 sta_credentials=1 mode_version=1
+WIFI_STATE state=CONNECTING profile=1/1 ssid=608 timeout_ms=8000
+MAVLINK_TX state=READY queue=8 core=0
+TELEMETRY_SSE state=READY port=81 rate_hz=2 core=0 priority=1
+WIFI_SERVICE state=READY core=0 priority=1 period_ms=20
+MAVLINK_RX state=READY queue=8 core=0 priority=1
+Setup WEB RC
+WEB_RC_FAST_STOP state=READY port=82 core=0 priority=2
+WEB_RC_HTTP state=READY core=0 priority=1
+✓ Web RC 已启动；STA连接后访问 http://<飞控IP>/
+  死区 摇杆=6% 油门=6% | 缩放 摇杆=0.85 偏航=0.68
+Setup RC protocol=1
+程序初始化完成！
+================================
+PREFLIGHT armed=0 arm_ready=0 imu_ok=0 motor_ok=1 battery_mv=4090 faults=0x00000005
+PREFLIGHT_REASON IMU 未就绪
+status: ERROR 1
+model: UNKNOWN
+who am I: 0x00
+rate: 2550
+gyro: 0.000000 0.000000 0.000000
+acc: 0.000000 0.000000 0.000000
+raw gyro: 0.000000 0.000000 0.000000
+raw acc: -0.000000 -0.000000 -0.000000
+gyro bias: 0.000000 0.000000 0.000000
+accel bias: 0.006639 0.008361 0.844239
+accel scale: 0.988682 0.986741 1.008207
+landed: 0
+front-right 0 front-left 0 rear-right 0 rear-left 0

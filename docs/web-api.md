@@ -440,6 +440,14 @@ GET /telemetry
 
 返回内嵌实时遥测页面。页面通过 `http://<host>:81/stream` 订阅 Server-Sent Events，接收 `schema`、`sample` 和 `system-log` 事件。实时 `sample` 事件以 2 Hz 推送，用于观察当前状态；网页端“下载当前页面 CSV”只导出浏览器已捕获的低频样本。
 
+部署约定：Web 修复刷写保持开机四电机自检开启；未经用户明确要求，不为排障或验证自行关闭该功能。
+
+连续刷新连接约定（SSE-R1～R4）：服务端在 SSE 任务启动时一次性分配固定 4 个连接槽（避免静态 DRAM 超限，也不放入任务栈），运行期间无逐帧分配；分配失败会记录系统事件并退出 SSE 任务。服务端轮流推进各槽，每轮先接纳新连接；旧连接仍存活或不能及时读取时，新连接也能获得响应头与 `schema`。槽位满时回收最早连接；每条待发送帧独立保存偏移并设置 1.5 秒总截止，短写继续发送剩余部分，超时关闭该连接。发送使用非阻塞 socket，不在 SSE 任务中等待慢客户端。
+
+遥测页和 Wi-Fi 事件页在 `pagehide` 时主动关闭 EventSource，在 `pageshow`（包括浏览器后退缓存恢复）时仅创建一个新连接；关闭连接的迟到回调不再更新页面。事件格式和 2 Hz 样本频率保持不变。超过 4 个长期活跃页面不属于并发容量保证，最早连接被回收后浏览器可能自动重连。
+
+验证：`tests/test_telemetry_sse_slots.cpp` 检查旧连接存活/不读时新连接、容量回收、短写完整性；`tests/test_sse_page_lifecycle.js` 检查两个页面各 30 轮离开/恢复和迟到回调。修复前设备双连接已复现第二连接超过 1 秒无数据；2026-10-07 修复后目标 C++ 测试（含 ASan/UBSan）、前端生命周期/遥测/控制响应超时/恢复行为及 HTTP 契约测试通过，独立源码复核通过。ESP32-D `full` / `min_spiffs` 编译链接通过：程序 1,482,455 字节，静态 RAM 122,652 字节。镜像 `deliverables/cf-drone-esp32d-sse-refresh-fix-20261007.bin`，SHA-256 `bd23bd3e3b7c5b80f47f8f23d49a1ee167707321b4119f7775500bf497603fd2`。该镜像构建时包含工作区已有的 HTTP 请求读取补丁（`web_rc.ino`），该独立补丁不纳入本次 SSE 提交；对应源码摘要记录在刷写 JSON 中。完整宿主回归仍被既有 `test_control_state.cpp` 缺少 `localRouteRequiresTrustedHeading` 声明阻断；既有 `test_web_debug_console_ui.js:119` 标定字段断言失败，与本次 SSE 改动无关。2026-10-07 已将自检开启的原镜像仅写入 ESP32-D app0（0x10000），写入数据校验通过；NVS 与分区表保持不变。刷写后保留旧连接并连续建立 30 个新 SSE 连接，全部收到 schema/sample，首轮最慢 schema 响应 106.3 ms，软件重启后再测 30 轮全部通过，最慢 191.9 ms。硬复位后的 IMU 初始化异常在一次软件重启后仍存在，当前保持上锁、四路输出为零；开机自检已开启但因 `boot_preflight_failed` 在预检阶段退出。该 IMU 状态不代表飞行放行。刷写记录与启动诊断位于 `data/attitude/sse-refresh-flash-20261007.json` 和 `sse-refresh-soft-reboot-20261007-serial.log`。真实浏览器手动刷新、缓慢客户端耗尽发送缓冲及多轮冷热启动仍未做完整硬件验收。刷写后可用 `python3 tests/test_sse_refresh_device.py --host <飞控IP>` 进行只读验收：默认 30 轮保留旧连接，同时检查新连接的 schema 和 sample；脚本不会发送飞控控制命令。
+
 需要定位故障时，应使用同一页面上的“下载故障快照”按钮。该按钮请求 `/logs.csv`，下载飞控内存中的冻结 100 Hz 日志快照，而不是 2 Hz 页面样本。
 
 ### 6.2 查询机载日志状态

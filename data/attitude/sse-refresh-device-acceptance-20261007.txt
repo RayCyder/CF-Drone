@@ -1,0 +1,1 @@
+SSE refresh device acceptance: PASS; 30 overlapping connections, worst schema latency 191.9ms

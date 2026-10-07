@@ -1,0 +1,26 @@
+IMU: MPU-6500 detected
+IMU: Failed to set accel range
+PREFLIGHT armed=0 arm_ready=0 imu_ok=0 motor_ok=1 battery_mv=4090 faults=0x00000005
+PREFLIGHT_REASON IMU 未就绪
+status: ERROR 5
+model: UNKNOWN
+who am I: 0x01
+rate: 2475
+gyro: 0.000000 0.000000 0.000000
+acc: 0.000000 0.000000 0.000000
+raw gyro: 0.000000 0.000000 0.000000
+raw acc: -0.000000 -0.000000 -0.000000
+gyro bias: 0.000000 0.000000 0.000000
+accel bias: 0.006639 0.008361 0.844239
+accel scale: 0.988682 0.986741 1.008207
+landed: 0
+front-right 0 front-left 0 rear-right 0 rear-left 0
+Mode: Client (STA)
+Connected: 1
+MAC: 20:50:0D:33:B4:DC
+SSID: 608
+IP: 192.168.31.203
+RSSI: -23 dBm
+Remote IP: 255.255.255.255
+MAVLink connected: 0
+MAVLink RX queue=0/8 dropped=0 UDP TX dropped=0

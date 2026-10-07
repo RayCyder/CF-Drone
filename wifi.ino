@@ -7,17 +7,27 @@
 #include <WiFiUdp.h>
 #include <NetworkEvents.h>
 #include <DNSServer.h>
+#include <errno.h>
+#include <lwip/sockets.h>
+#include <new>
 #include <stddef.h>
 #include <string.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#include <freertos/task.h>
 #include <esp_partition.h>
 #include "Preferences.h"
 #include "persistent_write_policy.h"
 #include "system_log.h"
+#include "telemetry_sse_slots.h"
 #include "flight_log.h"
 #include "wifi_profiles.h"
 #include "wifi_recovery_policy.h"
+
+// Keep Arduino's sketch preprocessor from synthesizing these WiFiClient
+// prototypes before the includes that define WiFiClient.
+static int telemetrySseSendNonBlocking(WiFiClient &client, const uint8_t *data, size_t length);
+static int telemetrySseReceiveNonBlocking(WiFiClient &client, uint8_t *data, size_t length);
 
 extern Preferences storage;
 extern bool armed;
@@ -278,11 +288,9 @@ static uint32_t wifiAPRetryAtMs = 0;
 static uint32_t wifiSTAReconnectAtMs = 0;
 static bool wifiSTARetryResetPending = false;
 static bool wifiAPEventStarted = false;
-static const uint32_t TELEMETRY_SAMPLE_INTERVAL_MS = 500; // 遥测样本 2Hz，降低网络任务占用
 static const int TELEMETRY_LOG_COLUMNS_CAPACITY = FLIGHT_LOG_COLUMNS;
-static const int TELEMETRY_FRAME_CAPACITY = 1024;
 static_assert(TELEMETRY_LOG_COLUMNS_CAPACITY >= FLIGHT_LOG_COLUMNS, "SSE telemetry capacity must cover all flight log columns");
-static_assert(TELEMETRY_FRAME_CAPACITY >= 1024, "SSE telemetry frame buffer must fit the flight-log CSV row");
+static_assert(TELEMETRY_SSE_FRAME_CAPACITY >= 1024, "SSE telemetry frame buffer must fit the flight-log CSV row");
 
 static void wifiTransmitTask(void *argument) {
 	(void)argument;
@@ -308,70 +316,62 @@ extern int getLogColumnCount();
 extern const char* getLogColumnName(int column);
 extern bool copyLatestLogRow(float *destination, int capacity, uint32_t *sequence);
 
+static int telemetrySseSendNonBlocking(WiFiClient &client, const uint8_t *data, size_t length) {
+	const int socketFd = client.fd();
+	if (socketFd < 0) return TELEMETRY_SSE_SEND_FAILED;
+	const int sent = ::send(socketFd, data, length, MSG_DONTWAIT);
+	if (sent >= 0) return sent;
+	if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+		return TELEMETRY_SSE_SEND_WOULD_BLOCK;
+	return TELEMETRY_SSE_SEND_FAILED;
+}
+
+static int telemetrySseReceiveNonBlocking(WiFiClient &client, uint8_t *data, size_t length) {
+	const int socketFd = client.fd();
+	if (socketFd < 0) return TELEMETRY_SSE_SEND_FAILED;
+	const int received = ::recv(socketFd, data, length, MSG_DONTWAIT);
+	if (received >= 0) return received;
+	if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+		return TELEMETRY_SSE_SEND_WOULD_BLOCK;
+	return TELEMETRY_SSE_SEND_FAILED;
+}
+
 static void telemetryStreamTask(void *argument) {
 	(void)argument;
 	const int columns = getLogColumnCount();
+	auto *clients = new (std::nothrow) TelemetrySseClientSlot<WiFiClient>[TELEMETRY_SSE_CLIENT_CAPACITY];
+	if (!clients) {
+		print("TELEMETRY_SSE state=DISABLED reason=allocation_failed\n");
+		recordSystemLogEvent("SSE", "state=DISABLED reason=alloc_failed");
+		vTaskDelete(nullptr);
+		return;
+	}
 	float row[TELEMETRY_LOG_COLUMNS_CAPACITY];
-	char frame[TELEMETRY_FRAME_CAPACITY];
+	uint32_t connectionOrder = 0;
 	for (;;) {
-		WiFiClient client = telemetryServer.accept();
-		if (!client) {
-			vTaskDelay(pdMS_TO_TICKS(25));
-			continue;
-		}
-		client.setNoDelay(true);
-		client.setTimeout(100);
-		client.print("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n");
-
-		int used = snprintf(frame, sizeof(frame), "event: schema\ndata: ");
-		for (int i = 0; i < columns && used > 0 && used < (int)sizeof(frame); ++i) {
-			used += snprintf(frame + used, sizeof(frame) - used, "%s%s", i ? "," : "", getLogColumnName(i));
-		}
-		if (used > 0 && used + 2 < (int)sizeof(frame)) {
-			frame[used++] = '\n';
-			frame[used++] = '\n';
-			if (client.write((const uint8_t *)frame, used) != (size_t)used) {
-				client.stop();
-				continue;
-			}
+		// Accept first on every pass. Existing clients never own this task, so a
+		// browser refresh can connect while its previous EventSource is still alive.
+		WiFiClient incoming = telemetryServer.accept();
+		if (incoming) {
+			incoming.setNoDelay(true);
+			const uint32_t acceptedAtMs = millis();
+			telemetrySseActivate(clients, TELEMETRY_SSE_CLIENT_CAPACITY,
+				incoming, acceptedAtMs, ++connectionOrder);
 		}
 
-		uint32_t lastSequence = UINT32_MAX;
-		uint32_t lastSystemSequence = 0;
-		uint32_t lastSampleMs = millis();
-		while (client.connected()) {
-			vTaskDelay(pdMS_TO_TICKS(100)); // 每100ms检查事件，样本单独限频
-			SystemLogEvent events[4];
-			const int eventCount = copySystemLogEventsAfter(lastSystemSequence, events, 4);
-			for (int i = 0; i < eventCount; ++i) {
-				const SystemLogEvent &event = events[i];
-				used = snprintf(frame, sizeof(frame), "id: %08lx-%lu\nevent: system-log\ndata: %lu|%s|%s\n\n",
-					(unsigned long)event.bootId, (unsigned long)event.sequence,
-					(unsigned long)event.uptimeMs, event.tag, event.message);
-				if (used <= 0 || used >= (int)sizeof(frame) ||
-					client.write((const uint8_t *)frame, used) != (size_t)used) {
-					client.stop();
-					break;
-				}
-				lastSystemSequence = event.sequence;
-			}
-			if (!client.connected()) break;
-			const uint32_t now = millis();
-			if ((uint32_t)(now - lastSampleMs) < TELEMETRY_SAMPLE_INTERVAL_MS) continue;
-			lastSampleMs = now;
-			uint32_t sequence;
-			if (!copyLatestLogRow(row, columns, &sequence) || sequence == lastSequence) continue;
-			used = snprintf(frame, sizeof(frame), "id: %lu\nevent: sample\ndata: ", (unsigned long)sequence);
-			for (int i = 0; i < columns && used > 0 && used < (int)sizeof(frame) - 16; ++i) {
-				used += snprintf(frame + used, sizeof(frame) - used, "%s%.7g", i ? "," : "", row[i]);
-			}
-			if (used <= 0 || used + 2 >= (int)sizeof(frame)) break;
-			frame[used++] = '\n';
-			frame[used++] = '\n';
-			if (client.write((const uint8_t *)frame, used) != (size_t)used) break;
-			lastSequence = sequence;
-		}
-		client.stop();
+		const uint32_t now = millis();
+		telemetrySseServicePass<WiFiClient, decltype(&getLogColumnName), SystemLogEvent>(
+			clients, TELEMETRY_SSE_CLIENT_CAPACITY, now, columns, row,
+			getLogColumnName,
+			[](uint32_t cursor, SystemLogEvent &event) {
+				return copySystemLogEventsAfter(cursor, &event, 1) == 1;
+			},
+			[](float *row, int count, uint32_t &sequence) {
+				return copyLatestLogRow(row, count, &sequence);
+			},
+			telemetrySseReceiveNonBlocking,
+			telemetrySseSendNonBlocking);
+		vTaskDelay(pdMS_TO_TICKS(10));
 	}
 }
 
