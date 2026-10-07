@@ -344,8 +344,11 @@ static inline OpenLoopParseResult parseOpenLoopSequenceText(const char *text,
                 const bool legacyV2 = strcmp(trim, "# WEB_RC_RECORDED_V2") == 0;
                 const bool authoredV2 = strcmp(trim,
                     "# CF_ROUTE_META schema=2 source=authored policy=slew") == 0;
-                const bool arrivalV2 = strcmp(trim,
+                const bool arrivalRelativeV2 = strcmp(trim,
                     "# CF_ROUTE_META schema=2 source=authored policy=slew advance=arrival heading=relative") == 0;
+                const bool arrivalMagneticV2 = strcmp(trim,
+                    "# CF_ROUTE_META schema=2 source=authored policy=slew advance=arrival heading=magnetic") == 0;
+                const bool arrivalV2 = arrivalRelativeV2 || arrivalMagneticV2;
                 const bool routeMetadata = strncmp(trim, "# CF_ROUTE_META", 15) == 0 ||
                     strncmp(trim, "# WEB_RC_RECORDED_", 18) == 0;
                 if (legacyV1 || legacyV2 || authoredV2 || arrivalV2) {
@@ -374,7 +377,7 @@ static inline OpenLoopParseResult parseOpenLoopSequenceText(const char *text,
                         result.controlPolicy = OPEN_LOOP_POLICY_SLEW;
                         expectedColumns = 7;
                         result.advancePolicy = arrivalV2 ? OPEN_LOOP_ADVANCE_ARRIVAL : OPEN_LOOP_ADVANCE_TIMED;
-                        result.headingPolicy = arrivalV2 ? OPEN_LOOP_HEADING_RELATIVE : OPEN_LOOP_HEADING_MAGNETIC;
+                        result.headingPolicy = arrivalRelativeV2 ? OPEN_LOOP_HEADING_RELATIVE : OPEN_LOOP_HEADING_MAGNETIC;
                     }
                 } else if (routeMetadata) {
                     result.reason = "schema_mismatch";

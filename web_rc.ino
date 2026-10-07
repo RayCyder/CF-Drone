@@ -617,9 +617,12 @@ bool isLocalSequenceReadyForAuto() {
     portENTER_CRITICAL(&openLoopMux);
     const bool ready = openLoopState == OPEN_LOOP_STATE_READY && openLoopCount > 0 &&
         !openLoopUploadInProgress;
+    const bool needsTrustedHeading = openLoopNavigationInput &&
+        openLoopHeadingPolicy == OPEN_LOOP_HEADING_MAGNETIC;
     portEXIT_CRITICAL(&openLoopMux);
     return ready && !isControlledLandingActive() && isWebRCEnabled() &&
-		(!openLoopNavigationInput || verticalFlightHealthy());
+		(!openLoopNavigationInput || verticalFlightHealthy()) &&
+        (!needsTrustedHeading || magHeadingTrusted());
 }
 
 static void setOpenLoopReason(const char *reason) {
@@ -2375,7 +2378,7 @@ void setupWebRC() {
         }
 		char response[768];
 		snprintf(response, sizeof(response),
-			"{\"state\":\"%s\",\"count\":%u,\"step\":%u,\"duration_s\":%.1f,\"plan_revision\":%lu,\"pending\":%s,\"reason\":\"%s\",\"arm\":%d,\"mode\":%d,\"recorded\":%s,\"schema\":%u,\"source\":%u,\"policy\":%u,\"advance\":\"%s\",\"heading\":\"%s\",\"phase\":\"%s\",\"step_elapsed_ms\":%lu,\"stable_ms\":%lu,\"remaining_ms\":%lu,\"target_altitude_m\":%s,\"actual_altitude_m\":%s,\"vertical_speed_mps\":%s,\"vertical_ready\":%s}",
+			"{\"state\":\"%s\",\"count\":%u,\"step\":%u,\"duration_s\":%.1f,\"plan_revision\":%lu,\"pending\":%s,\"reason\":\"%s\",\"arm\":%d,\"mode\":%d,\"recorded\":%s,\"schema\":%u,\"source\":%u,\"policy\":%u,\"advance\":\"%s\",\"heading\":\"%s\",\"heading_ready\":%s,\"phase\":\"%s\",\"step_elapsed_ms\":%lu,\"stable_ms\":%lu,\"remaining_ms\":%lu,\"target_altitude_m\":%s,\"actual_altitude_m\":%s,\"vertical_speed_mps\":%s,\"vertical_ready\":%s}",
             openLoopStateName(state), (unsigned)count,
             (unsigned)(index < count ? index + 1 : count), totalMs / 1000.0,
             (unsigned long)revision, pending ? "true" : "false", reason, (int)armed, mode,
@@ -2383,6 +2386,7 @@ void setupWebRC() {
 			(unsigned)sourceKind, (unsigned)controlPolicy,
 			advancePolicy == OPEN_LOOP_ADVANCE_ARRIVAL ? "arrival" : "timed",
             headingPolicy == OPEN_LOOP_HEADING_RELATIVE ? "relative" : "magnetic",
+            (headingPolicy != OPEN_LOOP_HEADING_MAGNETIC || magHeadingTrusted()) ? "true" : "false",
             arrivalGateActive ? (arrivalStableStarted ? "stabilizing" : "waiting_arrival") : "timed",
             (unsigned long)elapsedMs, (unsigned long)stableMs, (unsigned long)remainingMs,
             targetAltitude, actualAltitude, verticalSpeed,

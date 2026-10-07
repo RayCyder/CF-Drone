@@ -60,6 +60,12 @@ static void parser_tests() {
     assert(openLoopStepUsesArrivalGate(result.advancePolicy, steps[0], steps[1]));
     assert(!openLoopStepUsesArrivalGate(result.advancePolicy, steps[1], steps[2]));
 
+    const char *magneticArrivalV2 = "# CF_ROUTE_META schema=2 source=authored policy=slew advance=arrival heading=magnetic\n"
+        "0.5 48 0 0 0 0.0 0\n8.0 48 0 0 0 0.3 0\n";
+    result = parseOpenLoopSequenceText(magneticArrivalV2, strlen(magneticArrivalV2), steps, OPEN_LOOP_MAX_STEPS);
+    assert(result.ok && result.advancePolicy == OPEN_LOOP_ADVANCE_ARRIVAL);
+    assert(result.headingPolicy == OPEN_LOOP_HEADING_MAGNETIC);
+
     const char *recordedV1 = "# WEB_RC_RECORDED_V1\n0.5 48 0 0 0\n";
     result = parseOpenLoopSequenceText(recordedV1, strlen(recordedV1), steps, OPEN_LOOP_MAX_STEPS);
     assert(result.ok && result.schemaVersion == 1);

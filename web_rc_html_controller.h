@@ -709,7 +709,7 @@ function parseRouteText(){
   for(let i=0;i<lines.length;i++){
     const line=lines[i].trim();if(!line)continue;
     if(line.startsWith('#')){
-      const known=line==='# WEB_RC_RECORDED_V1'||line==='# WEB_RC_RECORDED_V2'||line==='# CF_ROUTE_META schema=2 source=authored policy=slew'||line==='# CF_ROUTE_META schema=2 source=authored policy=slew advance=arrival heading=relative';
+      const known=line==='# WEB_RC_RECORDED_V1'||line==='# WEB_RC_RECORDED_V2'||line==='# CF_ROUTE_META schema=2 source=authored policy=slew'||line==='# CF_ROUTE_META schema=2 source=authored policy=slew advance=arrival heading=relative'||line==='# CF_ROUTE_META schema=2 source=authored policy=slew advance=arrival heading=magnetic';
       const metadata=line.startsWith('# WEB_RC_RECORDED_')||line.startsWith('# CF_ROUTE_META');
       if(known){
         if(i!==0||metadataSeen||contentSeen)throw new Error(`第 ${i+1} 行元数据必须唯一且位于正文第一行`);
@@ -1272,7 +1272,7 @@ async function refreshRouteStatus(){
     flightRouteRunning=data.state==='running'||data.state==='start_pending';routeHold=flightRouteRunning||data.state==='landing';
     if(routeUploadedRevision&&data.plan_revision!==routeUploadedRevision){routeUploadedRevision=0;routeUploadedText=null;routeMessage('飞控中的序列已改变，请上锁后重新上传当前内容。');}
     const planKind=data.recorded?'录制输入':'手写输入';
-    const messages={empty:'尚无已上传的动作序列。',ready:`已校验${planKind} ${data.count} 段，共 ${Number(data.duration_s).toFixed(1)} 秒；等待操作者启动。`,start_pending:'正在确认启动条件…',running:`飞控本机回放${planKind}：第 ${data.step}/${data.count} 段，共 ${Number(data.duration_s).toFixed(1)} 秒。`,landing:'已停止动作序列，正在保持定推力下降；无法检测触地，需操作者上锁。',complete:'序列已停止，飞控已上锁；这不代表传感器确认着陆。',aborted:'序列已退出，控制已交还当前手动模式。'};
+    const messages={empty:'尚无已上传的动作序列。',ready:`已校验${planKind} ${data.count} 段，共 ${Number(data.duration_s).toFixed(1)} 秒；${data.heading==='magnetic'&&data.heading_ready!==true?'磁航向尚不可信，暂不能进入 AUTO。':'等待操作者启动。'}`,start_pending:'正在确认启动条件…',running:`飞控本机回放${planKind}：第 ${data.step}/${data.count} 段，共 ${Number(data.duration_s).toFixed(1)} 秒。`,landing:'已停止动作序列，正在保持定推力下降；无法检测触地，需操作者上锁。',complete:'序列已停止，飞控已上锁；这不代表传感器确认着陆。',aborted:'序列已退出，控制已交还当前手动模式。'};
     let progress='';
     if(data.state==='running'&&data.advance==='arrival'){
       if(data.phase==='waiting_arrival'||data.phase==='stabilizing'){

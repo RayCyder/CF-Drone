@@ -31,6 +31,10 @@ assert.match(source,
   'the recorder consumes fused height and attitude heading returned by the flight controller');
 assert.match(source, /schema=2 source=authored policy=slew advance=arrival heading=relative/,
   'the editor accepts arrival-gated authored V2 routes');
+assert.match(source, /schema=2 source=authored policy=slew advance=arrival heading=magnetic/,
+  'the editor accepts magnetic arrival-gated V2 routes');
+assert.match(source, /data\.heading==='magnetic'&&data\.heading_ready!==true/,
+  'the route page blocks magnetic replay messaging until heading is trusted');
 assert.match(source, /data\.phase==='waiting_arrival'\|\|data\.phase==='stabilizing'/,
   'the route page reports arrival and stabilization progress');
 assert.match(source, /arrival_timeout:'未在限定时间到达目标高度，已转下降'/,
