@@ -21,6 +21,9 @@ with tempfile.TemporaryDirectory(prefix='cf-drone-tests-') as tmp:
             ]))
         if test.name == 'test_flight_log.cpp':
             variants.append(('_armed_loop_trace', ['-DCF_DRONE_CAPTURE_ARMED_LOOP_TRACE']))
+        if test.name == 'test_spi_bus_startup.cpp':
+            variants.append(('_c3', ['-DCONFIG_IDF_TARGET_ESP32C3']))
+            variants.append(('_s3', ['-DCONFIG_IDF_TARGET_ESP32S3']))
         if test.name == 'test_control_state.cpp':
             variants.append(('_loop_stage_monitor', ['-DCF_DRONE_ENABLE_LOOP_STAGE_MONITOR=1']))
             variants.append(('_wifi_enabled', ['-DWIFI_ENABLED=1']))

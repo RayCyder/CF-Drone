@@ -110,3 +110,15 @@ H5 的 MOSI/MISO/SCK 与板载 MPU6500 IMU 共用 SPI 总线。IMU 的 NCS 为 G
 - 已知未解决：写入后的 RTS 硬复位仍复现 IMU `ERROR 2`，软件重启后恢复。该问题早于本轮实际测量驱动，不能将本轮光流/测距成功视为硬复位 IMU 问题已经修复。
 
 实现依据：[ST VL53L1X ULD](https://www.st.com/en/embedded-software/stsw-img009.html)、[Linux VL53L1X 驱动中的 ST 默认配置与初始化流程](https://kernel.googlesource.com/pub/scm/linux/kernel/git/stable/linux-stable.git/+/4437ad129cf5b37c00a5bc9fa5989d1da4d64d07/drivers/iio/proximity/vl53l1x-i2c.c)、[Bitcraze PMW3901 驱动](https://github.com/bitcraze/Bitcraze_PMW3901/blob/master/src/Bitcraze_PMW3901.cpp)。
+
+### RTS 硬复位片选时序排查（2026-10-07）
+
+- RTS-CS-1：在 GPIO 输出接管前预置真实输出锁存器，接管后确认 HIGH；ESP32-D 的 IMU/PMW 两个片选在首次 SPI 传输前均不被选中，C3/S3 保持原片选范围。实现边界为 `spi_bus_startup.h`；回归模拟 Arduino-ESP32 3.x 对未注册 GPIO 的 digitalWrite 无效行为，检查低电平瞬态、重复调用及其他引脚不受影响。
+- 单阶段补丁：仅改变片选预置 API，保持现有 setup 顺序、SPI 配置、三次重试和安全门槛；先验证回归红/绿及 ESP32-D 构建，再进行同板硬复位验收。板端诊断镜像关闭开机电机自检，避免复位循环驱动电机。
+- ERROR 2 的直接含义是 USER_CTRL(0x6A)=0x20 写后回读失败；WHO_AM_I 尚未读取，日志中的 0x00 是缓存初值，不能据此断言芯片身份寄存器读到了零。
+- 本机核心 `esp32/3.3.8-cn/cores/esp32/esp32-hal-gpio.c` 与 [Espressif 3.3.8 源码](https://github.com/espressif/arduino-esp32/blob/3.3.8/cores/esp32/esp32-hal-gpio.c) 均表明 digitalWrite 仅对已注册 GPIO 写 gpio_set_level。原先 digitalWrite(HIGH)→pinMode(OUTPUT) 无法可靠预置片选，PMW 在随后初始化之前可能保持被选中。这是代码缺陷的证据；它是否足以解释全部硬复位失败，仍需板端验证。
+- [TDK MPU-6500 产品说明 §6.1](https://invensense.tdk.com/wp-content/uploads/2020/06/PS-MPU-6500A-01-v1.3.pdf) 另要求在可访问寄存器后尽早设置 I2C_IF_DIS；[寄存器说明 §4.33](https://invensense.tdk.com/wp-content/uploads/2015/02/MPU-6500-Register-Map2.pdf) 指出该位自清除。现有驱动未显式设置该位；若片选修复后仍失败，再单独验证接口切换，不能使用当前逐字节相等回读直接验证自清除位。
+- RTS-CS-1 主机验证：旧实现触发 `drivenLow.empty()` 断言失败；修复后三板型通过，IMU 无效样本恢复回归通过，`git diff --check` 通过。ESP32-D full、关闭开机自检构建通过（程序 1,467,167 B，静态 RAM 122,620 B）；[诊断镜像记录](../../data/attitude/imu-rts-20261007/firmware.json) 包含应用 SHA-256 和完整构建身份。
+- 板端验收待完成：本轮读 MAC 确认为 `20:50:0d:33:b4:dc`，之后备份应用时遇到独占锁；查得另一个 `esptool` 正向同一串口写入 `/private/tmp/cf-drone-range-flow-calibration-build/CF-Drone.ino.bin`。本轮没有刷写片选修复镜像，也未完成修复后复位统计；原始串口输出有损坏，不能作为独立对照。待串口归属明确后，再只写 app0 并验证至少十次 RTS 复位、软件重启与断电冷启动，记录每次 IMU/PMW 身份、采样频率、故障和电机零输出。
+- 全量主机测试停在既有 `test_descent_calibration.cpp` 与 `descent_calibration.h` 接口不匹配（旧 thrustCenti/start/stop/usable 字段或方法）；本补丁不修改下降校准。该失败不能报告为全量回归通过。
+- 用户已确认优先光流/测距板端任务，本轮仅交付 IMU 补丁与资料；RTS-CS-1 状态为主机验证通过、板端验证明确延期，不能宣称 ERROR 2 已根除。

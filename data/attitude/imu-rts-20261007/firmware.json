@@ -1,0 +1,22 @@
+{
+  "board": "ESP32-D",
+  "expected_mac": "20:50:0d:33:b4:dc",
+  "profile": "full",
+  "boot_motor_self_check": false,
+  "image": "deliverables/cf-drone-esp32d-imu-cs-fix-no-boot-motor-check-20261007.bin",
+  "bytes": 1467360,
+  "sha256": "0c9d9f740fa89515dcf9c646afa929b74e01bff910d0c0be400fb14e2660a205",
+  "fqbn": "esp32:esp32:esp32:PartitionScheme=min_spiffs",
+  "core": "3.3.8-cn",
+  "source": "working tree including pre-existing changes; uncommitted",
+  "flashed_by_this_task": false,
+  "hardware_verification": "explicitly deferred by user: prioritize optical-flow/range task; deliver IMU patch and evidence only",
+  "baseline_status_log": "unusable binary/corrupted stream; not acceptance evidence",
+  "tests": {
+    "spi_cs_esp32d_c3_s3": "pass, original implementation fails transient-low assertion",
+    "imu_invalid_recovery": "pass",
+    "host_suite": "blocked by existing test_descent_calibration.cpp interface mismatch",
+    "esp32d_build": "pass",
+    "diff_check": "pass"
+  }
+}
