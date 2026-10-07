@@ -20,6 +20,9 @@ int main() {
 	// A unit powered at 10 cm must not mistake that fixture height for ground.
 	RangeReferenceTracker flightAttach;
 	for (int i = 0; i < 10; ++i) flightAttach.update(0.007f, true, false, 0.0f, true);
+	for (int i = 0; i < 30; ++i) flightAttach.update(0.017f, true, false, 0.0f, true);
+	assert(flightAttach.state().source == RangeReferenceSource::None);
+	assert(flightAttach.state().groundSampleCount == 0);
 	for (int i = 0; i < 30; ++i) flightAttach.update(0.030f, true, false, 0.0f, true);
 	assert(flightAttach.state().source == RangeReferenceSource::None);
 	assert(flightAttach.state().groundSampleCount == 0);

@@ -32,8 +32,8 @@ public:
 	// The installed VL53L1X reports roughly 6-9 mm when the airframe is resting.
 	// Keep the automatic ground window narrow so a short false return while the
 	// aircraft is visibly elevated cannot be stored as the ground plane.
-	static constexpr float GROUND_CAPTURE_MAX_METERS = 0.020f;
-	static constexpr float GROUND_CAPTURE_MAX_SPREAD_METERS = 0.010f;
+	static constexpr float GROUND_CAPTURE_MAX_METERS = 0.012f;
+	static constexpr float GROUND_CAPTURE_MAX_SPREAD_METERS = 0.004f;
 	static constexpr uint16_t GROUND_CAPTURE_SAMPLES = 20;
 
 	const RangeReferenceState &update(float rawAglMeters, bool rawValid, bool armed,
