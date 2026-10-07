@@ -204,7 +204,7 @@ mot
 
 ### V2 到达后计时模式（ARR-1～ARR-6）
 
-手写 V2 可使用 `# CF_ROUTE_META schema=2 source=authored policy=slew advance=arrival heading=relative` 显式开启到达后计时，并使用以起飞时陀螺航向为零点的短时相对航向。旧 V1、浏览器录制 V2 和不带 `advance=arrival` 的手写 V2 保持原有固定时间语义及磁航向要求。
+手写 V2 可使用 `advance=arrival heading=relative` 显式开启到达后计时和短时相对航向，也可使用 `advance=arrival heading=magnetic` 要求经过校准且实时可信的磁航向。磁航向模式在 `heading_ready=false` 时拒绝进入 AUTO。旧 V1、浏览器录制 V2 和不带 `advance=arrival` 的手写 V2 保持原有固定时间语义。
 
 - ARR-1：首段仍用于建立相对高度和航向零点，按固定时间执行。
 - ARR-2：后续高度目标相对上一段发生变化时，该段为到达段，持续时间表示最大等待时间；高度目标不变的段为定时段，完整执行声明时长。
@@ -215,7 +215,7 @@ mot
 
 首个带桨实验计划使用 0.00 m 基线、最多 8 秒到达 0.30 m、到达后保持 2 秒、最多 8 秒下降至 0.05 m，然后进入现有受控迫降。该实验只验收垂直闭环，不代表水平定点悬停或可靠触地确认。
 
-2026-10-07 验证记录：解析/稳定判定主机测试、V2 页面契约和 Web HTTP 响应契约通过；ESP32-D full + 循环阶段监控构建通过并刷入 `20:50:0d:33:b4:dc`。`esp32d_altitude_0p3m_arrival_hold2_land_v2.route` 已在上锁状态上传，`/route/plan` 逐字读回一致，`/route/status` 返回 `ready`、`advance=arrival`、`heading=relative`。未在无桨状态启动该计划，也尚未完成带桨高度响应验收。
+2026-10-07 验证记录：解析/稳定判定主机测试、V2 页面契约和 Web HTTP 响应契约通过；ESP32-D full + 循环阶段监控构建通过并刷入 `20:50:0d:33:b4:dc`。`esp32d_altitude_0p3m_arrival_hold2_land_v2.route` 使用 `advance=arrival heading=magnetic`；上传后须以 `/route/status` 的 `heading_ready=true` 作为进入 AUTO 的前置条件。未在无桨状态启动该计划，也尚未完成带桨高度响应验收。
 
 ## 7. 当前验证状态
 

@@ -40,7 +40,8 @@ def summarize_plan(plan):
             continue
         if line.startswith('#'):
             if line in ('# CF_ROUTE_META schema=2 source=authored policy=slew',
-                        '# CF_ROUTE_META schema=2 source=authored policy=slew advance=arrival heading=relative'):
+                        '# CF_ROUTE_META schema=2 source=authored policy=slew advance=arrival heading=relative',
+                        '# CF_ROUTE_META schema=2 source=authored policy=slew advance=arrival heading=magnetic'):
                 schema = 2
                 advance = 'arrival' if ' advance=arrival' in line else 'timed'
             continue

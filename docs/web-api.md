@@ -163,7 +163,7 @@ Content-Type: text/html
 
 ### 5.1 本地航线接口
 
-`POST /route/upload` 接收原始文本正文。兼容规则固定为：无头且全五列是 V1 authored/slew；`# WEB_RC_RECORDED_V1` 是 V1 recorded/direct；`# WEB_RC_RECORDED_V2` 是 V2 recorded/direct；`# CF_ROUTE_META schema=2 source=authored policy=slew` 是按时间推进的 V2 authored/slew；追加 `advance=arrival heading=relative` 的精确元数据开启到达后计时和短时相对陀螺航向。到达模式中，高度目标变化段的持续时间是最大等待时间，误差不超过 0.10 m且垂速绝对值不超过 0.15 m/s连续 500 ms 后才进入下一段；高度目标不变段仍完整定时执行。超时或垂直估计失效会进入受控迫降。元数据必须唯一且精确位于正文第一行。V2 必须全部为七列；缺 schema 的七列、混合列数、未知 schema/source/policy/advance/heading 均返回 `schema_mismatch`。字段范围、段数、时长和正文容量限制保持不变。只有上锁且电机停止才接受；上传成功返回 `plan_revision`，不会解锁或启动。失败的解析不会替换当前有效序列。
+`POST /route/upload` 接收原始文本正文。兼容规则固定为：无头且全五列是 V1 authored/slew；`# WEB_RC_RECORDED_V1` 是 V1 recorded/direct；`# WEB_RC_RECORDED_V2` 是 V2 recorded/direct；`# CF_ROUTE_META schema=2 source=authored policy=slew` 是按时间推进的 V2 authored/slew；追加 `advance=arrival heading=relative` 开启到达后计时和短时相对航向，或追加 `advance=arrival heading=magnetic` 要求可信磁航向。磁航向模式在 `/route/status.heading_ready=false` 时拒绝进入 AUTO。到达模式中，高度目标变化段的持续时间是最大等待时间，误差不超过 0.10 m且垂速绝对值不超过 0.15 m/s连续 500 ms 后才进入下一段；高度目标不变段仍完整定时执行。超时或垂直估计失效会进入受控迫降。元数据必须唯一且精确位于正文第一行。V2 必须全部为七列；缺 schema 的七列、混合列数、未知 schema/source/policy/advance/heading 均返回 `schema_mismatch`。字段范围、段数、时长和正文容量限制保持不变。只有上锁且电机停止才接受；上传成功返回 `plan_revision`，不会解锁或启动。失败的解析不会替换当前有效序列。
 
 `GET /route/plan` 仅在上锁时读回当前文本，并通过 `X-Plan-Revision` 返回批次号。页面确认读回内容和批次后请求 AUTO 模式；操作者随后解锁，主循环在当前批次有效、Web RC 在线且模式仍为 AUTO 时自动启动。固件没有 `/route/start` 或 `/route/stop`。`GET /route/status` 返回 `state`、段数、当前段、总时长、`plan_revision`、`pending`、原因、解锁状态、模式以及结构化 `schema/source/policy`。`POST /route/takeover` 明确切回 STAB 手动控制；页面迫降按钮使用 Web RC 按钮消息。切换到 STAB/ACRO 也会取消序列。
 

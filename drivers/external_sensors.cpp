@@ -685,6 +685,10 @@ bool saveMagCalibration() {
 	magEstimate.calibrated = true;
 	magEstimate.fieldNormReference = published.fieldNorm;
 	portEXIT_CRITICAL(&magSampleMux);
+	// A newly saved hard/soft-iron solution changes the magnetic reference.
+	// Re-acquire the gyro-to-magnetic offset while disarmed instead of comparing
+	// the new heading against a stale pre-calibration offset.
+	headingEstimator.reset();
 	return true;
 }
 
