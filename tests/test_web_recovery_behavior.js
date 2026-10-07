@@ -30,15 +30,17 @@ const intervals = [];
 const requests = [];
 let conflict = false;
 let hangBody = false;
+let hangStatus = false;
+let invalidStatus = false;
 let leaseRequests = 0;
 let releaseInitialLease = null;
 
-function response(status, data, signal) {
+function response(status, data, signal, bodyHangs = false) {
   return {
     status,
     ok: status >= 200 && status < 300,
     clone: () => ({
-      arrayBuffer: () => hangBody
+      arrayBuffer: () => hangBody || bodyHangs
         ? new Promise((_resolve, reject) => signal.addEventListener('abort',
           () => reject(new Error('body aborted')), {once: true}))
         : Promise.resolve(new ArrayBuffer(0)),
@@ -62,7 +64,7 @@ const context = {
   sessionStorage: {getItem: () => '', setItem() {}},
   location: {protocol: 'http:', hostname: 'drone', reload() {}},
   performance: {now: () => 123},
-  setTimeout,
+  setTimeout: (callback, ms) => setTimeout(callback, ms === 3000 ? 25 : ms),
   clearTimeout,
   setInterval: callback => { intervals.push(callback); return intervals.length; },
   fetch: async (url, options = {}) => {
@@ -79,7 +81,7 @@ const context = {
       return response(200, {lease: 'lease-a', stop: 'continuity-token'}, options.signal);
     }
     if (url === '/web_rc/status')
-      return response(200, {armed: true, hover_throttle_pct: 48}, options.signal);
+      return response(200, invalidStatus ? {} : {armed: true, hover_throttle_pct: 48}, options.signal, hangStatus);
     if (url === '/web_rc' && conflict)
       return response(409, {error: 'web_rc_lease_in_use'}, options.signal);
     return response(200, {ok: true}, options.signal);
@@ -112,6 +114,32 @@ async function run() {
   const renewedStickCount = requests.filter(item => item.url === '/web_rc' &&
     JSON.parse(item.options.body).t === 1).length;
   assert.equal(renewedStickCount, 2, 'control timer renews an unchanged active stick packet');
+
+  // WEB-RECOVER-3: slow status reads do not overlap, and timeout unlocks retry.
+  hangStatus = true;
+  elements.full.disabled = false;
+  const beforeStatus = requests.filter(item => item.url === '/web_rc/status').length;
+  const statusRead = context.refresh();
+  context.refresh();
+  intervals[1]();
+  assert.equal(requests.filter(item => item.url === '/web_rc/status').length - beforeStatus, 1,
+    'manual refresh and status ticks share one in-flight status request');
+  await statusRead;
+  assert.equal(elements.full.disabled, true, 'unknown status cannot offer a full-page reload');
+  assert.match(elements.state.textContent, /连接中断/);
+  hangStatus = false;
+  await context.refresh();
+  assert.match(elements.state.textContent, /轻量控制可用/, 'polling recovers after a timed-out body');
+  invalidStatus = true;
+  await context.refresh();
+  assert.equal(elements.full.disabled, true, 'malformed status cannot imply disarmed');
+  assert.match(elements.state.textContent, /连接中断/);
+  invalidStatus = false;
+  context.document.hidden = true;
+  const beforeHidden = requests.length;
+  await context.refresh();
+  assert.equal(requests.length, beforeHidden, 'hidden recovery page pauses status polling');
+  context.document.hidden = false;
 
   conflict = true;
   intervals[0]();

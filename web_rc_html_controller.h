@@ -946,7 +946,7 @@ function closeDescentCalibrationPage(){
   const page=document.getElementById('descent-calibration-page');page.style.display='none';page.setAttribute('aria-hidden','true');
 }
 function setDescentCalibrationActive(active){
-  if(active&&!descentCalibrationTimer)descentCalibrationTimer=setInterval(refreshDescentCalibrationStatus,1000);
+  if(active&&!descentCalibrationTimer)descentCalibrationTimer=setInterval(()=>{if(!document.hidden)refreshDescentCalibrationStatus();},1000);
   if(!active&&descentCalibrationTimer){clearInterval(descentCalibrationTimer);descentCalibrationTimer=null;}
   const button=document.getElementById('descent-calibration-button');
   button.textContent=active?'标定状态':'迫降标定';button.classList.toggle('has-fault',active);
@@ -965,10 +965,20 @@ function updateDescentCalibrationControls(){
   document.getElementById('descent-calibration-clear').disabled=currentArmed||active;
   document.getElementById('descent-calibration-apply').disabled=!connectionOk||currentArmed||!status||status.state!=='complete'||status.candidate_ready!==true||status.save_pending===true||status.binding_saved===true;
 }
+// Auxiliary polls share only the current request, never cached or queued data.
+const auxiliaryStatusRequests = new Map();
+function fetchAuxiliaryStatus(path){
+  if(auxiliaryStatusRequests.has(path))return auxiliaryStatusRequests.get(path);
+  const request=fetchWithTimeout(path,{cache:'no-store'},STATUS_REQUEST_TIMEOUT_MS)
+    .then(response=>{if(!response.ok)throw new Error('状态读取失败');return response.json();})
+    .catch(error=>{if(error.name==='AbortError')throw new Error('状态读取超时，连接恢复后会重试');throw error;})
+    .finally(()=>auxiliaryStatusRequests.delete(path));
+  auxiliaryStatusRequests.set(path,request);
+  return request;
+}
 async function refreshDescentCalibrationStatus(){
   try{
-    const response=await fetch('/descent-calibration/status',{cache:'no-store'});if(!response.ok)throw new Error('状态读取失败');
-    const data=await response.json();descentCalibrationLatestStatus=data;
+    const data=await fetchAuxiliaryStatus('/descent-calibration/status');descentCalibrationLatestStatus=data;
     if(typeof data.armed==='boolean')setArmedState(data.armed);
     if(Number.isInteger(data.mode)){currentFlightMode=data.mode;document.getElementById('flight-mode').textContent=['直控','特技','自稳','定高','自动'][data.mode]||'未知';}
     const active=['waiting_takeoff','takeoff_delay','hover_candidate','hover_ready','descent_tracking'].includes(data.state);
@@ -1054,7 +1064,7 @@ let levelCalibrationTimer=null;
 function openLevelCalibrationPage(){
   const page=document.getElementById('level-calibration-page');page.style.display='block';page.setAttribute('aria-hidden','false');
   refreshLevelCalibrationStatus();
-  if(!levelCalibrationTimer)levelCalibrationTimer=setInterval(refreshLevelCalibrationStatus,1000);
+  if(!levelCalibrationTimer)levelCalibrationTimer=setInterval(()=>{if(!document.hidden)refreshLevelCalibrationStatus();},1000);
 }
 function closeLevelCalibrationPage(){
   const page=document.getElementById('level-calibration-page');page.style.display='none';page.setAttribute('aria-hidden','true');
@@ -1063,9 +1073,7 @@ function closeLevelCalibrationPage(){
 async function refreshLevelCalibrationStatus(){
   const status=document.getElementById('level-calibration-status');
   try{
-    const response=await fetch('/level-calibration/status',{cache:'no-store'});
-    if(!response.ok)throw new Error('飞控未返回水平校准状态');
-    const data=await response.json();
+    const data=await fetchAuxiliaryStatus('/level-calibration/status');
     document.getElementById('level-calibration-live').textContent=`当前估计姿态：Roll ${Number(data.roll_deg).toFixed(2)}° · Pitch ${Number(data.pitch_deg).toFixed(2)}°（机身水平时应接近 0°）`;
     const names={empty:'尚未采集',queued:'已排队，等待飞控主循环开始采集',collecting:'正在采集静止 IMU',processing:'正在分块处理 IMU 数据',ready:'数据合格，等待确认',applying:'正在保存',applied:'安装角已应用',rejected:'本次采集未通过',cancelling:'正在取消采集'};
     let detail=names[data.state]||'状态未知';
@@ -1123,7 +1131,7 @@ function closeVibrationCalibrationPage(){
   const page=document.getElementById('vibration-calibration-page');page.style.display='none';page.setAttribute('aria-hidden','true');
 }
 function setVibrationCalibrationPolling(active){
-  if(active&&!vibrationCalibrationTimer)vibrationCalibrationTimer=setInterval(refreshVibrationCalibrationStatus,1000);
+  if(active&&!vibrationCalibrationTimer)vibrationCalibrationTimer=setInterval(()=>{if(!document.hidden)refreshVibrationCalibrationStatus();},1000);
   if(!active&&vibrationCalibrationTimer){clearInterval(vibrationCalibrationTimer);vibrationCalibrationTimer=null;}
 }
 function renderVibrationCalibrationResults(motors){
@@ -1166,8 +1174,7 @@ function renderMotorSelfCheck(data){
 }
 async function refreshVibrationCalibrationStatus(){
   try{
-    const response=await fetch('/vibration-calibration/status',{cache:'no-store'});if(!response.ok)throw new Error('状态读取失败');
-    const data=await response.json();
+    const data=await fetchAuxiliaryStatus('/vibration-calibration/status');
     const names=['FR','FL','RR','RL'];
     const stateText=({empty:'尚无记录',boot_wait:'上电自动检测等待中',queued:'已排队，准备启动',baseline:'正在采集静止基线',running:'正在采集',settling:'全部输出已归零，等待电机停转',complete:'四路采集完成',aborted:'采集已中止'})[data.state]||'状态未知';
     const step=Math.min(Number(data.step)||0,4);
@@ -1260,13 +1267,12 @@ async function requestRouteAction(action){
   }catch(error){routeMessage('请求未确认：'+error.message+'；请以飞控状态为准。');}
   finally{routePending='';updateRouteControls();}
 }
-function startRouteMonitor(){if(!routeTimer)routeTimer=setInterval(refreshRouteStatus,500);}
+function startRouteMonitor(){if(!routeTimer)routeTimer=setInterval(()=>{if(!document.hidden)refreshRouteStatus();},500);}
 async function refreshRouteStatus(){
   if(routeStatusBusy)return null;
   routeStatusBusy=true;
   try{
-    const response=await fetch('/route/status',{cache:'no-store'});if(!response.ok)throw new Error('状态不可用');
-    const data=await response.json();routeServerState=data.state;
+    const data=await fetchAuxiliaryStatus('/route/status');routeServerState=data.state;
     if(data.arm!==undefined)setArmedState(data.arm);
     if(data.mode!==undefined){if(routeRecording&&routeRecordStartedArmed&&data.mode!==2)stopRouteRecording('飞行模式已切换，录制已安全停止。',true);currentFlightMode=data.mode;document.getElementById('flight-mode').textContent=['直控','特技','自稳','定高','自动'][data.mode]||'未知';}
     flightRouteRunning=data.state==='running'||data.state==='start_pending';routeHold=flightRouteRunning||data.state==='landing';

@@ -5,6 +5,8 @@
 #include <WebServer.h>
 #include <WiFi.h>
 #include <esp_system.h>
+#include <freertos/queue.h>
+#include "web_bulk_work.h"
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1141,29 +1143,109 @@ class ResponsiveWebServer : public WebServer {
 public:
     explicit ResponsiveWebServer(int port) : WebServer(port) {}
 
+    // The queued job owns a client copy; the request task must stop touching
+    // this socket, including WebServer's automatic chunked-response finalizer.
+    void releaseClientForBulkResponse() {
+        _chunked = false;
+        _currentClient = NetworkClient();
+    }
+
+
     uint32_t idleDropCount() const { return idleDrops; }
     uint32_t maxHandleTimeUs() const { return maxHandleUs; }
     uint32_t slowHandleCount() const { return slowHandles; }
 
     void handleClient() override {
-        // WebServer serves one client at a time and otherwise waits 5 s for an
-        // accepted socket to send its first byte. Browser preconnects can hold
-        // up every stick packet even though the control loop remains healthy.
-        if (_currentStatus == HC_WAIT_READ && !_currentClient.available() &&
-            (uint32_t)(millis() - _statusChange) > 150) {
-            _currentClient.stop();
-            _currentClient = NetworkClient();
-            _currentStatus = HC_NONE;
-            if (idleDrops < UINT32_MAX) ++idleDrops;
-        }
         const uint32_t startedUs = micros();
-        WebServer::handleClient();
+        handleClientWithBoundedRead();
         const uint32_t elapsedUs = (uint32_t)(micros() - startedUs);
         if (elapsedUs > maxHandleUs) maxHandleUs = elapsedUs;
         if (elapsedUs >= 100000UL && slowHandles < UINT32_MAX) ++slowHandles;
     }
 
 private:
+    static constexpr uint32_t REQUEST_READ_TIMEOUT_MS = 150;
+
+    void handleClientWithBoundedRead() {
+        // Arduino-ESP32 WebServer sets a five-second Stream timeout immediately
+        // before parsing the request. Dropping an empty socket before calling
+        // the base implementation does not cover a client that sends one byte
+        // and then stalls: _parseRequest() still blocks the only HTTP task for
+        // the full five seconds. Keep the upstream state machine, but apply the
+        // bounded timeout to the complete request line/header parse as well.
+        if (_currentStatus == HC_NONE) {
+            _currentClient = _server.accept();
+            if (!_currentClient) {
+                if (_nullDelay) delay(1);
+                return;
+            }
+            _currentStatus = HC_WAIT_READ;
+            _statusChange = millis();
+        }
+
+        bool keepCurrentClient = false;
+        bool callYield = false;
+        if (_currentClient.connected()) {
+            switch (_currentStatus) {
+                case HC_NONE:
+                    break;
+                case HC_WAIT_READ:
+                    if (_currentClient.available()) {
+                        // The project exposes small text/form POST bodies and no
+                        // multipart upload route. Keep request-line/header reads
+                        // short so a partial browser request cannot monopolize
+                        // port 80, then restore the upstream timeout before the
+                        // selected handler runs.
+                        _currentClient.setTimeout(REQUEST_READ_TIMEOUT_MS);
+                        const uint32_t parseStartedMs = millis();
+                        const bool parsed = _parseRequest(_currentClient);
+                        _currentClient.setTimeout(HTTP_MAX_SEND_WAIT);
+                        if (parsed) {
+                            _contentLength = CONTENT_LENGTH_NOT_SET;
+                            _responseCode = 0;
+                            _clearResponseHeaders();
+                            if (_chain) {
+                                _chain->runChain(*this, [this]() { return _handleRequest(); });
+                            } else {
+                                _handleRequest();
+                            }
+                            if (_currentClient.isSSE()) {
+                                _currentStatus = HC_WAIT_CLOSE;
+                                _statusChange = millis();
+                                keepCurrentClient = true;
+                            }
+                        } else if ((uint32_t)(millis() - parseStartedMs) >= REQUEST_READ_TIMEOUT_MS &&
+                                   idleDrops < UINT32_MAX) {
+                            ++idleDrops;
+                        }
+                    } else {
+                        if ((uint32_t)(millis() - _statusChange) <= REQUEST_READ_TIMEOUT_MS) {
+                            keepCurrentClient = true;
+                        } else if (idleDrops < UINT32_MAX) {
+                            ++idleDrops;
+                        }
+                        callYield = true;
+                    }
+                    break;
+                case HC_WAIT_CLOSE:
+                    if (_currentClient.isSSE()) _statusChange = millis();
+                    if ((uint32_t)(millis() - _statusChange) <= HTTP_MAX_CLOSE_WAIT) {
+                        keepCurrentClient = true;
+                        callYield = true;
+                    }
+                    break;
+            }
+        }
+
+        if (!keepCurrentClient) {
+            _currentClient = NetworkClient();
+            _currentStatus = HC_NONE;
+            _currentUpload.reset();
+            _currentRaw.reset();
+        }
+        if (callYield) yield();
+    }
+
     uint32_t idleDrops = 0;
     uint32_t maxHandleUs = 0;
     uint32_t slowHandles = 0;
@@ -1173,6 +1255,74 @@ static ResponsiveWebServer responsiveWebRCServer(80);
 WebServer &webRCServer = responsiveWebRCServer; // 主服务器：80端口
 static uint32_t webRCMaxRequestUs = 0;
 static uint32_t webRCSlowRequests = 0;
+
+// Long responses have one owner outside the short-request HTTP task.
+// Two pending jobs plus one running job bound socket and heap retention.
+static QueueHandle_t webBulkQueue = nullptr;
+static bool submitWebBulk(WebBulkWork *job);
+
+static bool submitWebBulk(WebBulkWork *job) {
+    if (!webBulkQueue || xQueueSend(webBulkQueue, &job, 0) != pdTRUE) return false;
+    responsiveWebRCServer.releaseClientForBulkResponse();
+    return true;
+}
+
+static void sendWebBulkBusy() {
+    webRCServer.send(503, "text/plain", "page/download service busy; retry\n");
+}
+
+static void setupWebBulkTransfers() {
+    webBulkQueue = xQueueCreate(2, sizeof(WebBulkWork *));
+    if (!webBulkQueue) {
+        print("WEB_BULK state=DISABLED reason=queue_create_failed\n");
+        return;
+    }
+    if (xTaskCreatePinnedToCore([](void *) {
+            for (;;) {
+                WebBulkWork *job = nullptr;
+                if (xQueueReceive(webBulkQueue, &job, portMAX_DELAY) != pdTRUE) continue;
+                job->run();
+                delete job;
+            }
+        }, "web_bulk", 8192, nullptr, 1, nullptr, 0) != pdPASS) {
+        vQueueDelete(webBulkQueue);
+        webBulkQueue = nullptr;
+        print("WEB_BULK state=DISABLED reason=task_create_failed\n");
+        return;
+    }
+    print("WEB_BULK state=READY pending=2 core=0 priority=1\n");
+}
+
+static void enqueueWebPage(const char *html, size_t length) {
+    if (!enqueueWebBulkWork([client = webRCServer.client(), html, length]() mutable {
+        // A queued full-page request must still respect a later arm transition.
+        if (html == webRCIndexHtml && (armed || motorsActive())) {
+            html = webRCRecoveryHtml;
+            length = sizeof(webRCRecoveryHtml) - 1;
+        }
+        client.setNoDelay(true);
+        char header[160];
+        const int headerLength = snprintf(header, sizeof(header),
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+            "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: %u\r\n\r\n",
+            (unsigned)length);
+        if (headerLength <= 0 || headerLength >= (int)sizeof(header) ||
+            client.write((const uint8_t *)header, (size_t)headerLength) != (size_t)headerLength) {
+            client.stop();
+            return;
+        }
+        size_t sent = 0;
+        while (sent < length && client.connected()) {
+            const size_t remaining = length - sent;
+            const size_t chunk = remaining < 1024 ? remaining : 1024;
+            const size_t written = client.write((const uint8_t *)html + sent, chunk);
+            if (!written) break;
+            sent += written;
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
+        client.stop();
+    }, submitWebBulk)) sendWebBulkBusy();
+}
 
 #if CF_DRONE_ENABLE_FAST_STOP_SERVER
 // A separate tiny listener prevents a slow page/download request on port 80
@@ -1922,46 +2072,14 @@ void setupWebRC() {
 
     webRCServer.on("/", HTTP_GET, []() {
         if (armed || motorsActive()) {
-            webRCServer.sendHeader("Cache-Control", "no-store");
-            webRCServer.send_P(200, "text/html; charset=utf-8", webRCRecoveryHtml);
+            enqueueWebPage(webRCRecoveryHtml, sizeof(webRCRecoveryHtml) - 1);
             return;
         }
-        // send_P performs one large write for this 100+ KiB page and ignores
-        // a short write. A truncated response leaves later JS functions
-        // undefined in the browser. Send bounded pieces and account for every
-        // byte before closing the connection.
-        WiFiClient client = webRCServer.client();
-        client.setNoDelay(true);
-        const size_t length = sizeof(webRCIndexHtml) - 1;
-        char header[160];
-        const int headerLength = snprintf(header, sizeof(header),
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
-            "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: %u\r\n\r\n",
-            (unsigned)length);
-        if (headerLength <= 0 || headerLength >= (int)sizeof(header) ||
-            client.write((const uint8_t *)header, (size_t)headerLength) != (size_t)headerLength) {
-            client.stop();
-            return;
-        }
-        size_t sent = 0;
-        uint32_t lastProgressMs = millis();
-        while (sent < length && client.connected()) {
-            const size_t remaining = length - sent;
-            const size_t chunk = remaining < 1024 ? remaining : 1024;
-            const size_t written = client.write((const uint8_t *)webRCIndexHtml + sent, chunk);
-            if (written > 0) {
-                sent += written;
-                lastProgressMs = millis();
-            } else if ((uint32_t)(millis() - lastProgressMs) > 5000) {
-                break;
-            }
-            vTaskDelay(pdMS_TO_TICKS(1));
-        }
-        client.stop();
+        enqueueWebPage(webRCIndexHtml, sizeof(webRCIndexHtml) - 1);
     });
 #if WIFI_ENABLED
     webRCServer.on("/wifi", HTTP_GET, []() {
-        webRCServer.send_P(200, "text/html; charset=utf-8", wifiConfigHtml);
+        enqueueWebPage(wifiConfigHtml, sizeof(wifiConfigHtml) - 1);
     });
     webRCServer.on("/wifi/profiles", HTTP_GET, []() {
         String json = "{\"profiles\":[";
@@ -1977,7 +2095,7 @@ void setupWebRC() {
         webRCServer.send(200, "application/json", json);
     });
     webRCServer.on("/telemetry", HTTP_GET, []() {
-        webRCServer.send_P(200, "text/html; charset=utf-8", telemetryHtml);
+        enqueueWebPage(telemetryHtml, sizeof(telemetryHtml) - 1);
     });
     webRCServer.on("/wifi/scan", HTTP_GET, []() {
         if (rejectWiFiMaintenanceWhileActive()) return;
@@ -3089,7 +3207,8 @@ void setupWebRC() {
         }
         uint32_t sequence, endSequence, overwritten;
         getLoopTraceRange(sequence, endSequence, overwritten);
-        WiFiClient client = webRCServer.client();
+        if (!enqueueWebBulkWork([client = webRCServer.client(), sequence, endSequence, overwritten]() mutable {
+            if (armed || motorsActive()) { client.stop(); return; }
         client.setNoDelay(true);
         client.setTimeout(100);
         client.print("HTTP/1.1 200 OK\r\nContent-Type: text/csv; charset=utf-8\r\n");
@@ -3156,6 +3275,7 @@ void setupWebRC() {
             if ((seq & 0x03) == 0x03) vTaskDelay(pdMS_TO_TICKS(1));
         }
         client.stop();
+        }, submitWebBulk)) sendWebBulkBusy();
     });
 
     webRCServer.on("/diag/trace/worst", HTTP_GET, []() {
@@ -3219,7 +3339,8 @@ void setupWebRC() {
             webRCServer.send(409, "text/plain", "motors active; disarm before downloading retained traces\n");
             return;
         }
-        WiFiClient client = webRCServer.client();
+        if (!enqueueWebBulkWork([client = webRCServer.client()]() mutable {
+            if (armed || motorsActive()) { client.stop(); return; }
         client.setNoDelay(true);
         client.setTimeout(100);
         client.print("HTTP/1.1 200 OK\r\nContent-Type: text/csv; charset=utf-8\r\n");
@@ -3232,6 +3353,7 @@ void setupWebRC() {
             client.printf(",stage%u_us", (unsigned)stage);
         client.print(",detail\n");
         for (uint8_t index = 0; index < retainedSlowLoopCount() && client.connected(); ++index) {
+            if (armed || motorsActive()) break;
             SlowLoopCapture capture{};
             if (!copyRetainedSlowLoop(index, capture)) continue;
             const LoopOverrunTrace &trace = capture.trace;
@@ -3283,6 +3405,7 @@ void setupWebRC() {
             }
         }
         client.stop();
+        }, submitWebBulk)) sendWebBulkBusy();
     });
 
     webRCServer.on("/diag/scheduler.csv", HTTP_GET, []() {
@@ -3417,7 +3540,8 @@ void setupWebRC() {
         }
         const uint32_t generation = status.generation;
         const uint32_t rowCount = status.rowCount;
-        WiFiClient client = webRCServer.client();
+        if (!enqueueWebBulkWork([client = webRCServer.client(), generation, rowCount, columns]() mutable {
+            if (armed || motorsActive()) { client.stop(); return; }
         client.setNoDelay(true);
         client.setTimeout(100);
         client.print("HTTP/1.1 200 OK\r\nContent-Type: text/csv; charset=utf-8\r\n");
@@ -3449,12 +3573,14 @@ void setupWebRC() {
             if ((i & 0x03) == 0x03) vTaskDelay(pdMS_TO_TICKS(1));
         }
         client.stop();
+        }, submitWebBulk)) sendWebBulkBusy();
     });
 
     webRCServer.onNotFound([]() {
         webRCServer.send(404, "text/plain", "Not found");
     });
 
+    setupWebBulkTransfers();
     webRCServer.begin();
 
 #if CF_DRONE_ENABLE_FAST_STOP_SERVER

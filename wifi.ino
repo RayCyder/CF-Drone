@@ -47,7 +47,8 @@ struct __attribute__((packed)) LegacyWifiProfileStore {
 
 static WifiProfileRecord activeWifiProfiles[WIFI_PROFILE_LIMIT] = {};
 static uint8_t activeWifiProfileCount = 0;
-static uint8_t wifiProfileAttempt = 0;
+static WifiRecoveryPolicy::StaRetryState wifiStaRetry;
+static bool wifiStaRetryResetRequested = false;
 static char wifiSaveError[48] = "none";
 static const esp_partition_t *wifiProfilePartition = nullptr;
 static bool wifiProfileStorageReady = false;
@@ -184,7 +185,9 @@ static bool mirrorWifiProfilesToNvs(const WifiProfileRecord *profiles, uint8_t c
 static void loadActiveWifiProfiles() {
 	memset(activeWifiProfiles, 0, sizeof(activeWifiProfiles));
 	activeWifiProfileCount = loadWifiProfiles(activeWifiProfiles);
-	wifiProfileAttempt = 0;
+	// HTTP save/delete paths publish a reset request; only wifiServiceTask owns
+	// the mutable retry phase/deadline after setup completes.
+	__atomic_store_n(&wifiStaRetryResetRequested, true, __ATOMIC_RELEASE);
 	if (wifiProfilePartition && wifiProfilePartition->address == 0x3D0000) {
 		if (!storage.isKey("WIFI_NETS")) {
 			wifiProfileBackupReady = true;
@@ -281,12 +284,15 @@ static uint32_t wifiAPActiveSinceMs = 0;
 static bool wifiWasConnected = false;
 static uint32_t wifiDisconnectCount = 0;
 static uint32_t wifiLastDisconnectMs = 0;
+static uint32_t wifiStaEventFlags = 0;
+static uint32_t wifiStaDisconnectReason = 0;
+static uint32_t wifiStaDisconnectEventMs = 0;
+static uint32_t wifiStaConnectedEventMs = 0;
+static uint32_t wifiStaGotIpEventMs = 0;
+static uint32_t wifiStaLostIpEventMs = 0;
 static bool wifiRestartScheduled = false;
-static uint32_t wifiConnectStartedMs = 0;
 static uint32_t wifiRestartAtMs = 0;
 static uint32_t wifiAPRetryAtMs = 0;
-static uint32_t wifiSTAReconnectAtMs = 0;
-static bool wifiSTARetryResetPending = false;
 static bool wifiAPEventStarted = false;
 static const int TELEMETRY_LOG_COLUMNS_CAPACITY = FLIGHT_LOG_COLUMNS;
 static_assert(TELEMETRY_LOG_COLUMNS_CAPACITY >= FLIGHT_LOG_COLUMNS, "SSE telemetry capacity must cover all flight log columns");
@@ -391,7 +397,6 @@ static void wifiServiceTask(void *argument) {
 	}
 }
 
-static const uint32_t WIFI_CONNECT_TIMEOUT_MS = 8000;
 static const uint32_t WIFI_RESTART_DELAY_MS = 1500;
 static const uint32_t WIFI_AP_RETRY_DELAY_MS = 5000;
 
@@ -405,8 +410,7 @@ static void stopWiFiConfigPortalForRetry(const char *reason) {
 	wifiAPRetryAtMs = millis() + WIFI_AP_RETRY_DELAY_MS;
 	if (wifiMode == W_STA) {
 		WiFi.mode(activeWifiProfileCount ? WIFI_STA : WIFI_AP);
-		wifiSTAReconnectAtMs = millis();
-		wifiSTARetryResetPending = false;
+		WifiRecoveryPolicy::staRetryConnected(wifiStaRetry);
 	} else {
 		WiFi.mode(WIFI_OFF);
 	}
@@ -472,13 +476,30 @@ void setupWiFi() {
 	// esp_wifi_set_config() or consume more NVS entries.
 	WiFi.persistent(false);
 	WiFi.setSleep(false);
-	WiFi.onEvent([](WiFiEvent_t event) {
+	WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
 		if (event == ARDUINO_EVENT_WIFI_AP_START)
 			__atomic_store_n(&wifiAPEventStarted, true, __ATOMIC_RELEASE);
 		else if (event == ARDUINO_EVENT_WIFI_AP_STOP)
 			__atomic_store_n(&wifiAPEventStarted, false, __ATOMIC_RELEASE);
+		else if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+			__atomic_store_n(&wifiStaDisconnectReason,
+				(uint32_t)info.wifi_sta_disconnected.reason, __ATOMIC_RELAXED);
+			__atomic_store_n(&wifiStaDisconnectEventMs, millis(), __ATOMIC_RELAXED);
+			__atomic_fetch_or(&wifiStaEventFlags, 1U, __ATOMIC_RELEASE);
+		} else if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
+			__atomic_store_n(&wifiStaConnectedEventMs, millis(), __ATOMIC_RELAXED);
+			__atomic_fetch_or(&wifiStaEventFlags, 2U, __ATOMIC_RELEASE);
+		} else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+			__atomic_store_n(&wifiStaGotIpEventMs, millis(), __ATOMIC_RELAXED);
+			__atomic_fetch_or(&wifiStaEventFlags, 4U, __ATOMIC_RELEASE);
+		} else if (event == ARDUINO_EVENT_WIFI_STA_LOST_IP) {
+			__atomic_store_n(&wifiStaLostIpEventMs, millis(), __ATOMIC_RELAXED);
+			__atomic_fetch_or(&wifiStaEventFlags, 8U, __ATOMIC_RELEASE);
+		}
 	});
 	loadActiveWifiProfiles();
+	__atomic_store_n(&wifiStaRetryResetRequested, false, __ATOMIC_RELEASE);
+	WifiRecoveryPolicy::staRetryConnected(wifiStaRetry);
 	wifiProfileBackupReady = mirrorWifiProfilesToNvs(activeWifiProfiles, activeWifiProfileCount);
 	print("WIFI_PROFILE_BACKUP state=%s profiles=%u\n", wifiProfileBackupReady ? "READY" : "PENDING",
 		(unsigned)activeWifiProfileCount);
@@ -511,12 +532,14 @@ void setupWiFi() {
 			WiFi.mode(WIFI_STA);
 			WiFi.setHostname("CF-Drone");
 			WiFi.setAutoReconnect(true);
-			WiFi.begin(ssid, password);
-			wifiConnectStartedMs = millis();
-			wifiSTAReconnectAtMs = wifiConnectStartedMs + WifiRecoveryPolicy::STA_RETRY_INTERVAL_MS;
-			print("WIFI_STATE state=CONNECTING profile=1/%u ssid=%s timeout_ms=%lu\n",
-				(unsigned)activeWifiProfileCount, ssid, (unsigned long)WIFI_CONNECT_TIMEOUT_MS);
-			String eventMessage = "state=CONNECTING profile=1/" + String(activeWifiProfileCount) + " ssid=" + ssid;
+			const wl_status_t beginStatus = WiFi.begin(ssid, password);
+			const uint32_t beginAtMs = millis();
+			WifiRecoveryPolicy::staRetryBeginAttempt(wifiStaRetry, 0, beginAtMs);
+			print("WIFI_STATE state=CONNECTING profile=1/%u ssid=%s timeout_ms=%lu begin_status=%d\n",
+				(unsigned)activeWifiProfileCount, ssid,
+				(unsigned long)WifiRecoveryPolicy::STA_CONNECT_TIMEOUT_MS, (int)beginStatus);
+			String eventMessage = "state=CONNECTING profile=1/" + String(activeWifiProfileCount) +
+				" begin=" + String((int)beginStatus);
 			recordSystemLogEvent("WIFI", eventMessage.c_str());
 		}
 	}
@@ -551,6 +574,41 @@ void setupWiFi() {
 
 void serviceWiFi() {
 	const uint32_t now = millis();
+	const uint32_t staEvents = __atomic_exchange_n(&wifiStaEventFlags, 0U, __ATOMIC_ACQ_REL);
+	if (staEvents & 1U) {
+		const uint32_t reason = __atomic_load_n(&wifiStaDisconnectReason, __ATOMIC_RELAXED);
+		const uint32_t eventAt = __atomic_load_n(&wifiStaDisconnectEventMs, __ATOMIC_RELAXED);
+		print("WIFI_EVENT event=STA_DISCONNECTED reason=%lu at_ms=%lu\n",
+			(unsigned long)reason, (unsigned long)eventAt);
+		char eventMessage[48];
+		snprintf(eventMessage, sizeof(eventMessage), "event=DISCONNECTED reason=%lu at=%lu",
+			(unsigned long)reason, (unsigned long)eventAt);
+		recordSystemLogEvent("WIFI_EVT", eventMessage);
+	}
+	if (staEvents & 2U) {
+		const uint32_t eventAt = __atomic_load_n(&wifiStaConnectedEventMs, __ATOMIC_RELAXED);
+		print("WIFI_EVENT event=STA_CONNECTED at_ms=%lu\n", (unsigned long)eventAt);
+		char eventMessage[44];
+		snprintf(eventMessage, sizeof(eventMessage), "event=CONNECTED at=%lu", (unsigned long)eventAt);
+		recordSystemLogEvent("WIFI_EVT", eventMessage);
+	}
+	if (staEvents & 4U) {
+		const uint32_t eventAt = __atomic_load_n(&wifiStaGotIpEventMs, __ATOMIC_RELAXED);
+		print("WIFI_EVENT event=STA_GOT_IP at_ms=%lu ip=%s\n",
+			(unsigned long)eventAt, WiFi.localIP().toString().c_str());
+		char eventMessage[44];
+		snprintf(eventMessage, sizeof(eventMessage), "event=GOT_IP at=%lu", (unsigned long)eventAt);
+		recordSystemLogEvent("WIFI_EVT", eventMessage);
+	}
+	if (staEvents & 8U) {
+		const uint32_t eventAt = __atomic_load_n(&wifiStaLostIpEventMs, __ATOMIC_RELAXED);
+		print("WIFI_EVENT event=STA_LOST_IP at_ms=%lu\n", (unsigned long)eventAt);
+		char eventMessage[44];
+		snprintf(eventMessage, sizeof(eventMessage), "event=LOST_IP at=%lu", (unsigned long)eventAt);
+		recordSystemLogEvent("WIFI_EVT", eventMessage);
+	}
+	if (__atomic_exchange_n(&wifiStaRetryResetRequested, false, __ATOMIC_ACQ_REL))
+		WifiRecoveryPolicy::staRetryConnected(wifiStaRetry);
 	// Captive-DNS servicing can block for tens of milliseconds on a slow UDP
 	// request. The AP and HTTP/Web RC remain available while armed; DNS portal
 	// work can safely wait until disarm instead of stalling the control loop.
@@ -605,8 +663,10 @@ void serviceWiFi() {
 	}
 	if (wifiMode != W_STA) return;
 
-	if (WiFi.isConnected()) {
-		wifiSTARetryResetPending = false;
+	const bool staConnected = WiFi.isConnected();
+	if (staConnected) {
+		WifiRecoveryPolicy::staRetryStep(wifiStaRetry, activeWifiProfileCount > 0,
+			true, activeWifiProfileCount, now);
 		if (!wifiWasConnected) {
 			wifiWasConnected = true;
 			// Avoid String allocation and network-stack queries in the 1 kHz
@@ -622,69 +682,39 @@ void serviceWiFi() {
 		if (disconnectCount < UINT32_MAX)
 			__atomic_store_n(&wifiDisconnectCount, disconnectCount + 1, __ATOMIC_RELAXED);
 		__atomic_store_n(&wifiLastDisconnectMs, now, __ATOMIC_RELAXED);
-		wifiConnectStartedMs = millis();
-		wifiProfileAttempt = 0;
-		wifiSTARetryResetPending = false;
-		wifiSTAReconnectAtMs = now + WifiRecoveryPolicy::STA_RETRY_INTERVAL_MS;
-		if (activeWifiProfileCount) {
-			char ssid[33], password[64];
-			wifiProfileStrings(activeWifiProfiles[0], ssid, sizeof(ssid), password, sizeof(password));
-			WiFi.setAutoReconnect(true);
-			WiFi.disconnect(false, false);
-			WiFi.begin(ssid, password);
-		}
-		print("WIFI_STATE state=DISCONNECTED reconnect=profile_1\n");
-		recordSystemLogEvent("WIFI", "state=DISCONNECTED reconnect=profile_1");
+		print("WIFI_STATE state=DISCONNECTED action=RETRY_STATE_MACHINE\n");
+		recordSystemLogEvent("WIFI", "state=DISCONNECTED action=RETRY");
 	}
-	const bool portalOpen = configPortalActive || configPortalStarting;
-	const WifiRecoveryPolicy::StaRetryAction retryAction = WifiRecoveryPolicy::staRetryAction(
-		activeWifiProfileCount > 0, false, portalOpen, wifiSTARetryResetPending,
-		now, wifiSTAReconnectAtMs);
+	const WifiRecoveryPolicy::StaRetryAction retryAction = WifiRecoveryPolicy::staRetryStep(
+		wifiStaRetry, activeWifiProfileCount > 0, false, activeWifiProfileCount, now);
 	if (retryAction == WifiRecoveryPolicy::STA_RETRY_RESET) {
 		// ESP-IDF rejects a new station configuration while an earlier connection
 		// attempt is still active. Stop that attempt first and let the Wi-Fi task
 		// observe the disconnect before applying the next saved profile.
 		WiFi.setAutoReconnect(false);
-		WiFi.disconnect(false, false);
-		wifiSTARetryResetPending = true;
-		wifiSTAReconnectAtMs = now + WifiRecoveryPolicy::STA_RETRY_RESET_DELAY_MS;
-		print("WIFI_STATE state=STA_RETRY_RESET\n");
-		recordSystemLogEvent("WIFI", "state=STA_RETRY_RESET");
+		const bool disconnectOK = WiFi.disconnect(false, false);
+		WifiRecoveryPolicy::staRetryResetComplete(wifiStaRetry, millis());
+		print("WIFI_STATE state=STA_RETRY_RESET profile=%u/%u disconnect_ok=%d wait_ms=%lu\n",
+			(unsigned)(wifiStaRetry.profile + 1), (unsigned)activeWifiProfileCount,
+			disconnectOK ? 1 : 0, (unsigned long)WifiRecoveryPolicy::STA_RETRY_RESET_DELAY_MS);
+		char eventMessage[48];
+		snprintf(eventMessage, sizeof(eventMessage), "state=RESET profile=%u/%u disconnect=%d",
+			(unsigned)(wifiStaRetry.profile + 1), (unsigned)activeWifiProfileCount, disconnectOK ? 1 : 0);
+		recordSystemLogEvent("WIFI", eventMessage);
 	} else if (retryAction == WifiRecoveryPolicy::STA_RETRY_BEGIN) {
-		wifiProfileAttempt = (uint8_t)((wifiProfileAttempt + 1) % activeWifiProfileCount);
 		char ssid[33], password[64];
-		wifiProfileStrings(activeWifiProfiles[wifiProfileAttempt], ssid, sizeof(ssid), password, sizeof(password));
+		wifiProfileStrings(activeWifiProfiles[wifiStaRetry.profile], ssid, sizeof(ssid), password, sizeof(password));
 		WiFi.mode(WIFI_STA);
 		WiFi.setAutoReconnect(true);
-		WiFi.begin(ssid, password);
-		wifiSTARetryResetPending = false;
-		wifiSTAReconnectAtMs = now + WifiRecoveryPolicy::STA_RETRY_INTERVAL_MS;
-		print("WIFI_STATE state=STA_RETRY_BEGIN profile=%u/%u ssid=%s\n",
-			(unsigned)(wifiProfileAttempt + 1), (unsigned)activeWifiProfileCount, ssid);
-		recordSystemLogEvent("WIFI", "state=STA_RETRY_BEGIN");
-	}
-	if (!configPortalActive && (uint32_t)(millis() - wifiConnectStartedMs) >= WIFI_CONNECT_TIMEOUT_MS &&
-		!configPortalStarting && WifiRecoveryPolicy::portalStartAllowed(armed, motorsActive()) &&
-		(!wifiAPRetryAtMs || (int32_t)(millis() - wifiAPRetryAtMs) >= 0)) {
-		if ((uint8_t)(wifiProfileAttempt + 1) < activeWifiProfileCount) {
-			++wifiProfileAttempt;
-			char ssid[33], password[64];
-			wifiProfileStrings(activeWifiProfiles[wifiProfileAttempt], ssid, sizeof(ssid), password, sizeof(password));
-			WiFi.setAutoReconnect(false);
-			WiFi.disconnect(false, false);
-			WiFi.begin(ssid, password);
-			wifiConnectStartedMs = millis();
-			print("WIFI_STATE state=TRY_NEXT_PROFILE profile=%u/%u ssid=%s\n",
-				(unsigned)(wifiProfileAttempt + 1), (unsigned)activeWifiProfileCount, ssid);
-			String eventMessage = "state=TRY_NEXT_PROFILE profile=" + String(wifiProfileAttempt + 1) + "/" + String(activeWifiProfileCount);
-			recordSystemLogEvent("WIFI", eventMessage.c_str());
-			return;
-		}
-		print("WIFI_STATE state=CONNECT_TIMEOUT action=KEEP_STA_RETRY\n");
-		recordSystemLogEvent("WIFI", "state=CONNECT_TIMEOUT action=KEEP_STA_RETRY");
-		wifiConnectStartedMs = millis();
-		wifiSTAReconnectAtMs = millis();
-		wifiSTARetryResetPending = false;
+		const wl_status_t beginStatus = WiFi.begin(ssid, password);
+		WifiRecoveryPolicy::staRetryBeginAttempt(wifiStaRetry, wifiStaRetry.profile, millis());
+		print("WIFI_STATE state=STA_RETRY_BEGIN profile=%u/%u ssid=%s timeout_ms=%lu begin_status=%d\n",
+			(unsigned)(wifiStaRetry.profile + 1), (unsigned)activeWifiProfileCount, ssid,
+			(unsigned long)WifiRecoveryPolicy::STA_CONNECT_TIMEOUT_MS, (int)beginStatus);
+		char eventMessage[48];
+		snprintf(eventMessage, sizeof(eventMessage), "state=BEGIN profile=%u/%u status=%d",
+			(unsigned)(wifiStaRetry.profile + 1), (unsigned)activeWifiProfileCount, (int)beginStatus);
+		recordSystemLogEvent("WIFI", eventMessage);
 	}
 }
 

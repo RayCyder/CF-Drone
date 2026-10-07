@@ -24,7 +24,7 @@ assert.match(source, /if\(active\)\{sendLatest\(\);return\}/,
 assert.match(source, /location\.reload\(\)/,
   'the full controller can be restored after the aircraft is locked');
 assert.match(firmware,
-  /webRCServer\.on\("\/", HTTP_GET[\s\S]*if \(armed \|\| motorsActive\(\)\)[\s\S]*Cache-Control[\s\S]*webRCRecoveryHtml/,
+  /webRCServer\.on\("\/", HTTP_GET[\s\S]*if \(armed \|\| motorsActive\(\)\)[\s\S]*enqueueWebPage\(webRCRecoveryHtml/,
   'armed root requests receive the bounded recovery page instead of the full controller');
 assert.ok(Buffer.byteLength(source, 'utf8') <= 16 * 1024,
   'the recovery page remains within its small response budget');

@@ -11,6 +11,7 @@ const char webRCRecoveryHtml[] PROGMEM = R"rawliteral(
 let lease='',stop='',active=false,inFlight=null,pending=false,heartbeat=null,leaseBlocked=false,leasePromise=null;
 let hoverRaw=0,left={x:0,y:0},right={x:0,y:0},values={th:0,r:0,p:0,y:0};
 const state=document.getElementById('state');
+let statusRequestInFlight=false;
 try{stop=localStorage.getItem('cfDroneStopToken')||''}catch(_){}
 if(!stop){try{stop=sessionStorage.getItem('cfDroneStopToken')||''}catch(_){}}
 async function timeoutFetch(url,options={},ms=3000){const c=new AbortController(),t=setTimeout(()=>c.abort(),ms);try{const r=await fetch(url,{...options,signal:c.signal});await r.clone().arrayBuffer();return r}finally{clearTimeout(t)}}
@@ -60,7 +61,22 @@ async function emergency(button){
   fetch(`${location.protocol}//${location.hostname}:82/${action}?s=${encodeURIComponent(stop)}`,{method:'POST',mode:'no-cors',keepalive:true}).catch(()=>{});
   await timeoutFetch('/web_rc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({t:2,b:button,s:1,stop,ts:performance.now()})}).catch(()=>{});
 }
-async function refresh(){try{const r=await timeoutFetch('/web_rc/status',{cache:'no-store'}),d=await r.json();if(Number.isFinite(Number(d.hover_throttle_pct)))hoverRaw=Math.max(-100,Math.min(100,Number(d.hover_throttle_pct)*2-100));document.getElementById('full').disabled=d.armed===true;if(!leaseBlocked)state.textContent=d.armed?'飞行中，轻量控制可用':'飞控已上锁，可返回完整页面'}catch(_){}}
+async function refresh(){
+  if(statusRequestInFlight||document.hidden)return;
+  statusRequestInFlight=true;
+  try{
+    const r=await timeoutFetch('/web_rc/status',{cache:'no-store'});
+    if(!r.ok)throw new Error('status unavailable');
+    const d=await r.json();
+    if(typeof d.armed!=='boolean')throw new Error('invalid status');
+    if(Number.isFinite(Number(d.hover_throttle_pct)))hoverRaw=Math.max(-100,Math.min(100,Number(d.hover_throttle_pct)*2-100));
+    document.getElementById('full').disabled=d.armed!==false;
+    if(!leaseBlocked)state.textContent=d.armed?'飞行中，轻量控制可用':'飞控已上锁，可返回完整页面';
+  }catch(_){
+    document.getElementById('full').disabled=true;
+    if(!leaseBlocked)state.textContent='连接中断，正在重新读取状态…';
+  }finally{statusRequestInFlight=false;}
+}
 document.addEventListener('visibilitychange',()=>{if(document.hidden)release()});window.addEventListener('pagehide',release);window.addEventListener('blur',release);
 acquire();refresh();setInterval(()=>{if(leaseBlocked)return;if(active){sendLatest();return}if(!heartbeat)heartbeat=post({t:4,ts:performance.now()}).finally(()=>heartbeat=null)},2000);setInterval(refresh,2000);
 </script></body></html>

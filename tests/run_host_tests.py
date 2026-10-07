@@ -11,6 +11,7 @@ if not compiler:
     raise SystemExit('A C++17 compiler is required')
 with tempfile.TemporaryDirectory(prefix='cf-drone-tests-') as tmp:
     for test in sorted(root.glob('test_*.cpp')):
+        test_flags = ['-pthread'] if test.name == 'test_web_bulk_work.cpp' else []
         variants = [('', [])]
         if test.name == 'test_estimator_resources.cpp':
             variants.append(('_innovation_max_25', ['-DESTIMATE_ACCEL_INNOVATION_MAX_DEG=25.0f']))
@@ -30,5 +31,5 @@ with tempfile.TemporaryDirectory(prefix='cf-drone-tests-') as tmp:
         for suffix, defines in variants:
             binary = str(Path(tmp) / f'{test.stem}{suffix}')
             subprocess.run([compiler, '-std=c++17', '-Wall', '-Wextra', '-Werror', '-Wno-vla',
-                            '-I', str(root / 'stubs'), *defines, str(test), '-o', binary], check=True)
+                            '-I', str(root / 'stubs'), *defines, *test_flags, str(test), '-o', binary], check=True)
             subprocess.run([binary], check=True)
