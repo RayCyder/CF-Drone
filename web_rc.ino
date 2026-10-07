@@ -25,6 +25,7 @@
 #include "quaternion.h"
 #include "control.h"
 #include "flight_log.h"
+#include "route_log.h"
 #include "wifi_recovery_policy.h"
 #include "web_rc_lease_policy.h"
 #include "web_rc_fast_stop_policy.h"
@@ -83,6 +84,9 @@ static uint16_t openLoopCount = 0;
 static char *openLoopUploadedText = nullptr;
 static bool openLoopRecordedInput = false;
 static bool openLoopNavigationInput = false;
+static uint8_t openLoopSchemaVersion = 0;
+static uint8_t openLoopSourceKind = 0;
+static uint8_t openLoopControlPolicy = 0;
 static float openLoopAltitudeOffsetMeters = 0.0f;
 static float openLoopHeadingOffsetRadians = 0.0f;
 static uint16_t openLoopIndex = 0;
@@ -97,6 +101,46 @@ static bool openLoopTakeoverRequested = false;
 static bool openLoopUploadInProgress = false;
 static uint8_t openLoopState = OPEN_LOOP_STATE_EMPTY;
 static const char *openLoopReason = "empty";
+
+static uint8_t openLoopReasonCode(const char *reason) {
+	if (!reason || strcmp(reason, "running") == 0 || strcmp(reason, "uploaded") == 0) return 0;
+	if (strcmp(reason, "sequence_complete") == 0) return 1;
+	if (strcmp(reason, "operator_landing") == 0) return 2;
+	if (strcmp(reason, "takeover_requested") == 0 || strcmp(reason, "manual_takeover") == 0) return 3;
+	if (strcmp(reason, "disarmed") == 0) return 4;
+	if (strcmp(reason, "mode_changed") == 0) return 5;
+	if (strcmp(reason, "scheduler_gap") == 0 || strcmp(reason, "multiple_expired_segments") == 0) return 6;
+	if (strcmp(reason, "landing_interrupted") == 0) return 7;
+	return 255;
+}
+
+bool getRouteLogSnapshot(RouteLogSnapshot &snapshot) {
+	portENTER_CRITICAL(&openLoopMux);
+	snapshot.revision = openLoopRevision;
+	snapshot.schema = openLoopSchemaVersion;
+	snapshot.step = openLoopCount ?
+		(uint16_t)(openLoopIndex < openLoopCount ? openLoopIndex + 1 : openLoopCount) : 0;
+	snapshot.state = openLoopState;
+	snapshot.terminationReason = openLoopReasonCode(openLoopReason);
+	portEXIT_CRITICAL(&openLoopMux);
+	VerticalFlightState navigation;
+	if (getVerticalFlightState(navigation)) {
+		snapshot.actualAltitudeMeters = navigation.altitudeMeters;
+		snapshot.flowXMeters = navigation.flowPositionXMeters;
+		snapshot.flowYMeters = navigation.flowPositionYMeters;
+		snapshot.quality = navigation.flowQuality;
+	} else {
+		snapshot.actualAltitudeMeters = NAN;
+		snapshot.flowXMeters = NAN;
+		snapshot.flowYMeters = NAN;
+	}
+	snapshot.actualYawRadians = attitude.getYaw();
+	if (!routeNavigationTarget(snapshot.targetAltitudeMeters, snapshot.targetYawRadians)) {
+		snapshot.targetAltitudeMeters = NAN;
+		snapshot.targetYawRadians = NAN;
+	}
+	return snapshot.revision != 0;
+}
 
 enum VibrationCalibrationState : uint8_t {
     VIBRATION_EMPTY, VIBRATION_BOOT_WAIT, VIBRATION_QUEUED, VIBRATION_BASELINE,
@@ -173,7 +217,7 @@ extern uint32_t getWiFiDisconnectCount();
 extern uint32_t getWiFiLastDisconnectMs();
 #endif
 
-#define WEB_LOG_CSV_COLUMNS_CAPACITY 41
+#define WEB_LOG_CSV_COLUMNS_CAPACITY FLIGHT_LOG_COLUMNS
 #define WEB_LOG_CSV_ROW_CAPACITY 1024
 static_assert(WEB_LOG_CSV_COLUMNS_CAPACITY >= FLIGHT_LOG_COLUMNS, "HTTP CSV export capacity must cover all flight log columns");
 static_assert(WEB_LOG_CSV_ROW_CAPACITY >= 1024, "HTTP CSV rows require at least 1024 bytes");
@@ -597,6 +641,8 @@ static void startOpenLoopNow(uint32_t now) {
     openLoopLandingStarted = false;
     openLoopAppliedControls = {controlRoll, controlPitch, controlYaw, controlThrottle,
 		false, NAN, false, NAN};
+	openLoopResetStartOffsets(openLoopAltitudeOffsetMeters, openLoopHeadingOffsetRadians);
+	resetNavigationOrigin(false);
     openLoopCurrentDeadlineMs = now + openLoopBuffers[openLoopActiveBuffer][0].durationMs;
 	if (openLoopNavigationInput && openLoopStepHasAltitude(openLoopBuffers[openLoopActiveBuffer][0]) &&
 		openLoopStepHasHeading(openLoopBuffers[openLoopActiveBuffer][0])) {
@@ -604,7 +650,7 @@ static void startOpenLoopNow(uint32_t now) {
 		if (getVerticalFlightState(navigation)) {
 			openLoopAltitudeOffsetMeters = navigation.altitudeMeters -
 				openLoopStepAltitudeMeters(openLoopBuffers[openLoopActiveBuffer][0]);
-			openLoopHeadingOffsetRadians = attitude.getYaw() -
+			openLoopHeadingOffsetRadians = navigationHeadingRadians(attitude.getYaw()) -
 				radians(openLoopStepHeadingDegrees(openLoopBuffers[openLoopActiveBuffer][0]));
 		}
 	}
@@ -878,7 +924,7 @@ static void stepOpenLoopSequence() {
     bool beginLanding = false;
     bool requestManualStab = false;
     bool applyStep = false;
-    bool recordedInput = false;
+    bool directInput = false;
     OpenLoopPackedStep step;
     uint32_t elapsedForSlew = 0;
     const uint32_t now = millis();
@@ -944,7 +990,7 @@ static void stepOpenLoopSequence() {
             if (openLoopState == OPEN_LOOP_STATE_RUNNING) {
                 copyOpenLoopStep(openLoopActiveBuffer, openLoopIndex, step);
                 elapsedForSlew = dtMs;
-                recordedInput = openLoopRecordedInput;
+				directInput = openLoopControlPolicy == OPEN_LOOP_POLICY_DIRECT;
                 openLoopLastSchedulerMs = now;
                 applyStep = true;
             }
@@ -965,7 +1011,7 @@ static void stepOpenLoopSequence() {
         // Browser recordings already contain the pilot's time-varying stick
         // values. A second slew changes their amplitude and timing. Keep the
         // existing slew for authored plans that lack the recording marker.
-		if (recordedInput) openLoopAppliedControls = target;
+		if (directInput) openLoopAppliedControls = target;
         else openLoopSlewControls(openLoopAppliedControls, target, elapsedForSlew);
         OpenLoopControls controls = openLoopAppliedControls;
         portEXIT_CRITICAL(&openLoopMux);
@@ -2115,8 +2161,6 @@ void setupWebRC() {
             return;
         }
         const String body = webRCServer.arg("plain");
-		const bool navigationInput = body.startsWith("# WEB_RC_RECORDED_V2\n");
-		const bool recordedInput = navigationInput || body.startsWith("# WEB_RC_RECORDED_V1\n");
         const OpenLoopParseResult parsed = parseOpenLoopSequenceText(
             body.c_str(), body.length(), openLoopBuffers[stagingIndex], OPEN_LOOP_MAX_STEPS);
         if (!parsed.ok || armed || motorsActive()) {
@@ -2146,8 +2190,11 @@ void setupWebRC() {
         openLoopCount = parsed.count;
         previousText = openLoopUploadedText;
         openLoopUploadedText = uploadedText;
-		openLoopRecordedInput = recordedInput;
-		openLoopNavigationInput = navigationInput;
+		openLoopSchemaVersion = parsed.schemaVersion;
+		openLoopSourceKind = parsed.sourceKind;
+		openLoopControlPolicy = parsed.controlPolicy;
+		openLoopRecordedInput = parsed.sourceKind == OPEN_LOOP_SOURCE_RECORDED;
+		openLoopNavigationInput = parsed.schemaVersion == 2;
         openLoopTotalMs = parsed.totalMs;
         openLoopIndex = 0;
         openLoopRevision++;
@@ -2205,7 +2252,8 @@ void setupWebRC() {
         uint16_t count, index;
         uint32_t totalMs, revision;
         const char *reason;
-		bool pending, recordedInput, navigationInput;
+		bool pending, recordedInput;
+		uint8_t schemaVersion, sourceKind, controlPolicy;
         portENTER_CRITICAL(&openLoopMux);
         state = openLoopState;
         count = openLoopCount;
@@ -2215,15 +2263,18 @@ void setupWebRC() {
         reason = openLoopReason;
         pending = openLoopTakeoverRequested;
 		recordedInput = openLoopRecordedInput;
-		navigationInput = openLoopNavigationInput;
+		schemaVersion = openLoopSchemaVersion;
+		sourceKind = openLoopSourceKind;
+		controlPolicy = openLoopControlPolicy;
         portEXIT_CRITICAL(&openLoopMux);
 		char response[448];
 		snprintf(response, sizeof(response),
-			"{\"state\":\"%s\",\"count\":%u,\"step\":%u,\"duration_s\":%.1f,\"plan_revision\":%lu,\"pending\":%s,\"reason\":\"%s\",\"arm\":%d,\"mode\":%d,\"recorded\":%s,\"schema\":%u,\"vertical_ready\":%s}",
+			"{\"state\":\"%s\",\"count\":%u,\"step\":%u,\"duration_s\":%.1f,\"plan_revision\":%lu,\"pending\":%s,\"reason\":\"%s\",\"arm\":%d,\"mode\":%d,\"recorded\":%s,\"schema\":%u,\"source\":%u,\"policy\":%u,\"vertical_ready\":%s}",
             openLoopStateName(state), (unsigned)count,
             (unsigned)(index < count ? index + 1 : count), totalMs / 1000.0,
             (unsigned long)revision, pending ? "true" : "false", reason, (int)armed, mode,
-			recordedInput ? "true" : "false", navigationInput ? 2U : 1U,
+			recordedInput ? "true" : "false", (unsigned)schemaVersion,
+			(unsigned)sourceKind, (unsigned)controlPolicy,
 			verticalFlightHealthy() ? "true" : "false");
         webRCServer.send(200, "application/json", response);
     });
@@ -2721,10 +2772,17 @@ void setupWebRC() {
             opticalFlowSamples, opticalFlowFailures);
         const bool haveDownwardRangeSample = getDownwardRangeSample(downwardRangeSample,
             downwardRangeSamples, downwardRangeFailures);
-        const bool opticalFlowUsable = haveOpticalFlowSample &&
-            opticalFlowSampleUsable(opticalFlowSample, sensorNowUs, 250000U, 1);
+        const OpticalFlowSampleState opticalFlowState = haveOpticalFlowSample ?
+            classifyOpticalFlowSample(opticalFlowSample, sensorNowUs, 100000U, 20) :
+            OpticalFlowSampleState::Invalid;
+        const bool opticalFlowUsable = opticalFlowState == OpticalFlowSampleState::FreshZero ||
+            opticalFlowState == OpticalFlowSampleState::FreshMotion;
         const bool downwardRangeUsable = haveDownwardRangeSample &&
             downwardRangeSampleUsable(downwardRangeSample, sensorNowUs, 250000U, 1);
+		MagnetometerEstimate magnetometerEstimate;
+		const bool haveMagnetometer = getMagnetometerEstimate(magnetometerEstimate);
+		const long magnetometerAgeMs = haveMagnetometer && magnetometerEstimate.timestampUs ?
+			(long)((uint32_t)(sensorNowUs - magnetometerEstimate.timestampUs) / 1000U) : -1L;
         const long opticalFlowAgeMs = haveOpticalFlowSample ?
             (long)((uint32_t)(sensorNowUs - opticalFlowSample.timestampUs) / 1000U) : -1L;
 		const long downwardRangeAgeMs = haveDownwardRangeSample ?
@@ -2735,7 +2793,7 @@ void setupWebRC() {
         char deviceId[13];
         snprintf(deviceId, sizeof(deviceId), "%04X%08X",
             (unsigned)((deviceMac >> 32) & 0xFFFFU), (unsigned)(deviceMac & 0xFFFFFFFFU));
-		char json[2944];
+		char json[3456];
         const char *armReason = armBlockReason();
         const bool armReady = armed || !armReason;
         snprintf(json, sizeof(json),
@@ -2749,10 +2807,15 @@ void setupWebRC() {
             "\"http_rc_max_request_us\":%lu,\"http_rc_slow_requests\":%lu,"
             "\"control_source\":%u,\"thrust_target\":%.3f,\"hover_throttle_pct\":%.1f,"
             "\"hover_throttle_reachable\":%s,"
-            "\"compass_available\":%s,"
+            "\"compass_available\":%s,\"compass_detected\":%s,\"compass_ready\":%s,"
+			"\"compass_calibrated\":%s,\"compass_fresh\":%s,\"compass_trusted\":%s,"
+			"\"compass_age_ms\":%ld,\"compass_reject_reasons\":%u,"
+			"\"magnetic_heading_deg\":%.2f,\"navigation_heading_deg\":%.2f,"
+			"\"magnetic_innovation_deg\":%.2f,\"magnetic_field_norm\":%.1f,"
             "\"optical_flow_detected\":%s,\"optical_flow_ready\":%s,"
             "\"optical_flow_usable\":%s,\"optical_flow_dx\":%d,\"optical_flow_dy\":%d,"
             "\"optical_flow_quality\":%u,\"optical_flow_motion\":%s,"
+            "\"optical_flow_state\":\"%s\","
             "\"optical_flow_age_ms\":%ld,\"optical_flow_failures\":%lu,"
             "\"downward_range_detected\":%s,\"downward_range_ready\":%s,"
             "\"downward_range_usable\":%s,\"downward_range_m\":%.3f,"
@@ -2793,11 +2856,21 @@ void setupWebRC() {
             (unsigned)getCurrentControlSource(), thrustTarget, hoverReturn.percent,
             hoverReturn.reachable ? "true" : "false",
             compassAvailable() ? "true" : "false",
+			haveMagnetometer && magnetometerEstimate.detected ? "true" : "false",
+			haveMagnetometer && magnetometerEstimate.ready ? "true" : "false",
+			haveMagnetometer && magnetometerEstimate.calibrated ? "true" : "false",
+			haveMagnetometer && magnetometerEstimate.fresh ? "true" : "false",
+			haveMagnetometer && magnetometerEstimate.trusted ? "true" : "false",
+			magnetometerAgeMs, (unsigned)magnetometerEstimate.rejectReasons,
+			degrees(magnetometerEstimate.magneticHeadingRadians),
+			degrees(magnetometerEstimate.navigationHeadingRadians),
+			degrees(magnetometerEstimate.innovationRadians), magnetometerEstimate.fieldNorm,
             opticalFlowDetected() ? "true" : "false",
             opticalFlowAvailable() ? "true" : "false",
             opticalFlowUsable ? "true" : "false", opticalFlowSample.deltaX,
             opticalFlowSample.deltaY, opticalFlowSample.quality,
-            opticalFlowSample.motionDetected ? "true" : "false", opticalFlowAgeMs,
+            opticalFlowSample.motionDetected ? "true" : "false",
+            opticalFlowSampleStateName(opticalFlowState), opticalFlowAgeMs,
             (unsigned long)opticalFlowFailures,
             downwardRangeDetected() ? "true" : "false",
             downwardRangeAvailable() ? "true" : "false",

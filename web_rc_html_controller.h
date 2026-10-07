@@ -348,6 +348,7 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
     <div class="console-tools">
       <div class="console-tools-row"><strong>调试工具</strong><button class="primary" onclick="openVibrationCalibrationFromConsole()">电机扰动检测</button><button class="primary" onclick="startAccelCalibrationFromConsole()">六面加速度计校准</button><button class="primary" onclick="openLevelCalibrationFromConsole()">机身水平校准</button></div>
       <div class="console-tools-row"><strong>常用命令</strong><button onclick="runConsoleCommand('diag brief')">快速预检</button><button onclick="runConsoleCommand('diag')">完整诊断</button><button onclick="runConsoleCommand('imu')">IMU</button><button onclick="runConsoleCommand('sensors')">扩展传感器</button><button onclick="runConsoleCommand('nav')">融合导航</button><button onclick="runConsoleCommand('ps')">姿态</button><button onclick="runConsoleCommand('p CTL_TRIM_ROLL')">横滚配平值</button><button onclick="runConsoleCommand('p CTL_TRIM_PITCH')">俯仰配平值</button><button onclick="runConsoleCommand('rc')">遥控输入</button><button onclick="runConsoleCommand('mot')">电机输出</button><button onclick="runConsoleCommand('wifi')">Wi-Fi</button><button onclick="runConsoleCommand('time')">循环时间</button><button onclick="runConsoleCommand('sys')">系统任务</button><button onclick="runConsoleCommand('log status')">日志状态</button><button onclick="runConsoleCommand('p')">参数列表</button><button onclick="runConsoleCommand('help')">命令帮助</button><button onclick="restartFromConsole()">重启</button></div>
+	  <div class="console-tools-row"><strong>磁力计</strong><button onclick="runConsoleCommand('magcal status')">状态</button><button onclick="runConsoleCommand('magcal start')">开始采集</button><button onclick="runConsoleCommand('magcal stop')">停止采集</button><button onclick="runConsoleCommand('magcal save')">保存校准</button><button onclick="runConsoleCommand('magcal reset')">清除校准</button></div>
       <div class="console-tools-note">磁力计为可选传感器；未安装磁力计仍可进行六面加速度计校准和机身水平校准，仅磁航向与 magcal 不可用。机身静置水平但姿态不为 0°：使用“机身水平校准”修正 IMU 安装角。只有实际飞行松杆后持续漂移时，才调整 CTL_TRIM_ROLL / CTL_TRIM_PITCH。</div>
       <div class="console-tools-note"><strong>PID 调整：</strong>使用顶部“PID”按钮集中修改 Roll、Pitch、Yaw 的内环 P/I/D；控制台“参数列表”仍可用于核对全部参数。</div>
       <div id="console-status" class="console-status" role="status">打开后将主动确认飞控处于上锁状态。</div>
@@ -413,6 +414,10 @@ body{font-family:'Roboto Mono',Arial,"Microsoft YaHei",sans-serif;background:#3c
         <strong>正在检查起飞前标定…</strong>
         <small>检查陀螺静止校准、六面加速度计校准和机身水平校准。</small>
       </div>
+	  <div id="compass-status" class="diagnostic-summary offline">
+		<strong>正在读取磁航向状态…</strong>
+		<small>芯片已检测不等于航向可信。</small>
+	  </div>
       <div id="expansion-probe-status" class="diagnostic-summary offline">等待光流与测距探测状态。</div>
       <div id="barometer-status" class="diagnostic-summary offline">
         <strong>正在读取气压高度保护…</strong>
@@ -652,7 +657,8 @@ let routeRecordTrimmedMs=0;
 let routeNavigationSample={valid:false,altitude:0,heading:0,flowX:0,flowY:0,receivedAt:0};
 const ROUTE_RECORD_SAMPLE_MS=100;
 const ROUTE_RECORD_IDLE_THROTTLE_PCT=6; // 与飞控 throttleDeadzone 保持一致
-const ROUTE_RECORD_HEADER='# WEB_RC_RECORDED_V2';
+const ROUTE_RECORD_HEADER_V1='# WEB_RC_RECORDED_V1';
+const ROUTE_RECORD_HEADER_V2='# WEB_RC_RECORDED_V2';
 const ROUTE_RECORD_MAX_SEGMENTS=128;
 const ROUTE_RECORD_MAX_BYTES=4096;
 const ROUTE_RECORD_MAX_DURATION_MS=1800000;
@@ -694,11 +700,23 @@ function routeMessage(message){document.getElementById('route-message').textCont
 function parseRouteText(){
   const text=document.getElementById('route-editor').value;
   if(new TextEncoder().encode(text).length>4096)throw new Error('序列正文不能超过 4096 字节');
-  const points=[];const lines=text.split(/\r?\n/);
+  const points=[];const lines=text.split(/\r?\n/);let schema=0,expectedColumns=0,metadataSeen=false,contentSeen=false;
   for(let i=0;i<lines.length;i++){
-    const line=lines[i].trim();if(!line||line.startsWith('#'))continue;
+    const line=lines[i].trim();if(!line)continue;
+    if(line.startsWith('#')){
+      const known=line==='# WEB_RC_RECORDED_V1'||line==='# WEB_RC_RECORDED_V2'||line==='# CF_ROUTE_META schema=2 source=authored policy=slew';
+      const metadata=line.startsWith('# WEB_RC_RECORDED_')||line.startsWith('# CF_ROUTE_META');
+      if(known){
+        if(i!==0||metadataSeen||contentSeen)throw new Error(`第 ${i+1} 行元数据必须唯一且位于正文第一行`);
+        metadataSeen=true;schema=line==='# WEB_RC_RECORDED_V1'?1:2;expectedColumns=schema===1?5:7;
+      }else if(metadata)throw new Error(`第 ${i+1} 行包含不支持的航线元数据`);
+      continue;
+    }
+    contentSeen=true;
     const fields=line.split(/[\s,]+/);
     if(![5,7].includes(fields.length)||fields.some(v=>v===''||!Number.isFinite(Number(v))))throw new Error(`第 ${i+1} 行需包含 5 个或 7 个有限数字`);
+    if(!metadataSeen){schema=1;expectedColumns=5;}
+    if(fields.length!==expectedColumns)throw new Error(`第 ${i+1} 行与航线 schema 不匹配`);
     const [duration,throttle,roll,pitch,yaw,altitude,heading]=fields.map(Number);
     if(duration<0.1||duration>600||throttle<0||throttle>100||Math.abs(roll)>100||Math.abs(pitch)>100||Math.abs(yaw)>100)throw new Error(`第 ${i+1} 行参数超出范围`);
 	if(fields.length===7&&(altitude<-20||altitude>20||heading<-360||heading>360))throw new Error(`第 ${i+1} 行高度或航向超出范围`);
@@ -798,7 +816,11 @@ function formatRouteRecordLine(segment){
 	const base=(segment.durationMs/1000).toFixed(1)+' '+segment.throttle+' '+segment.roll+' '+segment.pitch+' '+segment.yaw;
 	return segment.altitude===null||segment.heading===null?base:base+' '+segment.altitude.toFixed(3)+' '+segment.heading.toFixed(2);
 }
-function routeRecordText(segments){return segments.length?ROUTE_RECORD_HEADER+'\n'+segments.map(formatRouteRecordLine).join('\n'):'';}
+function routeRecordText(segments){
+  if(!segments.length)return '';
+  const navigation=segments.every(segment=>segment.altitude!==null&&segment.heading!==null);
+  return (navigation?ROUTE_RECORD_HEADER_V2:ROUTE_RECORD_HEADER_V1)+'\n'+segments.map(formatRouteRecordLine).join('\n');
+}
 function appendRouteRecordSegment(durationMs,value){
   const roundedMs=Math.max(ROUTE_RECORD_SAMPLE_MS,Math.round(durationMs/ROUTE_RECORD_SAMPLE_MS)*ROUTE_RECORD_SAMPLE_MS);
   if(!routeRecordSegments.length&&value.throttle<ROUTE_RECORD_IDLE_THROTTLE_PCT){
@@ -833,11 +855,15 @@ function startRouteRecording(){
   }
   processJoystickInput();
   routeRecordStartedArmed=currentArmed;
+  const initial=routeRecordSnapshot();
+  if(routeRecordStartedArmed&&(initial.altitude===null||initial.heading===null)){
+    routeRecordStatus('板端高度或航向样本尚未就绪，不能开始 V2 录制。');return;
+  }
   routeRecording=true;
   if(routeTimer){clearInterval(routeTimer);routeTimer=null;}
   routeRecordSegments=[];
   routeRecordTrimmedMs=0;
-  routeRecordLast=routeRecordSnapshot();
+  routeRecordLast=initial;
   routeRecordStartMs=performance.now();
   routeRecordSegmentStartMs=routeRecordStartMs;
   routeRecordTimer=setInterval(sampleRouteRecording,ROUTE_RECORD_SAMPLE_MS);
@@ -862,6 +888,9 @@ function sampleRouteRecording(){
     return;
   }
   const value=routeRecordSnapshot();
+  if(routeRecordStartedArmed&&(value.altitude===null||value.heading===null)){
+    stopRouteRecording('板端高度或航向样本过期，录制已停止并保留完整 V2 片段。',true,true);return;
+  }
   const segmentMs=now-routeRecordSegmentStartMs;
   if(sameRouteRecordValue(value,routeRecordLast)&&segmentMs<600000){
     routeRecordStatus('正在录制：'+routeRecordElapsedText()+'。');
@@ -1805,20 +1834,30 @@ function renderSelfCheckStatus(data) {
   calibrationReadiness.innerHTML=calibrationPending.length
     ? `<strong>起飞前标定未完成（${calibrationPending.length} 项）</strong><small>${calibrationChecks.map(item=>`${item.ok?'✓':'✗'} ${item.name}${item.ok?'':'：'+item.action}`).join('<br>')}</small>`
     : `<strong>起飞前标定已完成</strong><small>${calibrationChecks.map(item=>`✓ ${item.name}`).join('<br>')}</small>`;
+	const compassStatus=document.getElementById('compass-status');
+	const compassAge=Number(data.compass_age_ms), magneticHeading=Number(data.magnetic_heading_deg);
+	const navigationHeading=Number(data.navigation_heading_deg), magneticInnovation=Number(data.magnetic_innovation_deg);
+	const compassReasons=Number(data.compass_reject_reasons)||0;
+	compassStatus.className='diagnostic-summary '+(data.compass_trusted===true?'ok':data.compass_detected===true?'offline':'fault');
+	compassStatus.innerHTML=data.compass_trusted===true
+	  ? `<strong>磁航向可信</strong><small>磁航向 ${magneticHeading.toFixed(1)}°，融合航向 ${navigationHeading.toFixed(1)}°，创新 ${magneticInnovation.toFixed(1)}°，样本年龄 ${compassAge} ms。</small>`
+	  : data.compass_detected===true
+	  ? `<strong>磁力计已检测但尚不可信</strong><small>ready=${data.compass_ready===true?'是':'否'}，calibrated=${data.compass_calibrated===true?'是':'否'}，fresh=${data.compass_fresh===true?'是':'否'}，拒绝位 0x${compassReasons.toString(16).toUpperCase().padStart(4,'0')}。在控制台运行 magcal status 查看校准覆盖。</small>`
+	  : '<strong>未检测到磁力计</strong><small>基础 STAB/ALTHOLD 仍可工作；要求 REQ_MAG_TRUSTED 的航线不能启动。</small>';
   const barometerStatus = document.getElementById('barometer-status');
   const detectedText = value => value===true?'已检测':value===false?'未检测':'未知';
   const expansionStatus = document.getElementById('expansion-probe-status');
   const flowAge = Number(data.optical_flow_age_ms), rangeAge = Number(data.downward_range_age_ms);
   const flowQuality = Number(data.optical_flow_quality), rangeMeters = Number(data.downward_range_m);
   const flowDetail = data.optical_flow_ready===true
-    ? `初始化成功；${data.optical_flow_usable===true?`有效 dx ${Number(data.optical_flow_dx)} / dy ${Number(data.optical_flow_dy)}，质量 ${flowQuality}，${flowAge} ms 前`:`当前样本无效或过期（质量 ${flowQuality}，年龄 ${flowAge} ms）`}`
+    ? `初始化成功；${data.optical_flow_state==='fresh_zero'?`新鲜零位移，质量 ${flowQuality}，${flowAge} ms 前`:data.optical_flow_state==='fresh_motion'?`有效 dx ${Number(data.optical_flow_dx)} / dy ${Number(data.optical_flow_dy)}，质量 ${flowQuality}，${flowAge} ms 前`:data.optical_flow_state==='low_quality'?`新鲜但质量不足（${flowQuality}）`:data.optical_flow_state==='stale'?`样本已过期（${flowAge} ms）`:`当前样本无效（质量 ${flowQuality}，年龄 ${flowAge} ms）`}`
     : `${detectedText(data.optical_flow_detected)}，未就绪`;
   const rangeDetail = data.downward_range_ready===true
     ? `初始化成功；${data.downward_range_usable===true?`有效距离 ${rangeMeters.toFixed(3)} m，${rangeAge} ms 前`:`当前样本无效或过期（状态 ${Number(data.downward_range_status)} / 原始 ${Number(data.downward_range_raw_status)}，年龄 ${rangeAge} ms）`}`
     : `${detectedText(data.downward_range_detected)}，未就绪`;
   expansionStatus.className='diagnostic-summary '+
     ((data.optical_flow_usable===true||data.downward_range_usable===true)?'ok':'offline');
-  expansionStatus.innerHTML=`<strong>扩展运动传感器</strong><small>PMW3901：${flowDetail}<br>VL53L1X：${rangeDetail}<br>读数仅用于诊断，尚未接入悬停或迫降控制。</small>`;
+  expansionStatus.innerHTML=`<strong>扩展运动传感器</strong><small>PMW3901：${flowDetail}<br>VL53L1X：${rangeDetail}<br>测距参与高度融合，光流提供局部位移影子状态；位置悬停仍未启用。</small>`;
   const barometerReasons = {
     barometer_unavailable:'未检测到气压计',
     waiting_for_sample:'气压计已检测，正在等待首个样本',
@@ -1903,6 +1942,9 @@ function showSelfCheckUnavailable() {
   const barometerStatus = document.getElementById('barometer-status');
   barometerStatus.className = 'diagnostic-summary offline';
   barometerStatus.innerHTML = '<strong>无法读取气压高度保护状态</strong><small>连接恢复后刷新；气压计为可选传感器，不影响基础手动解锁。</small>';
+	const compassStatus=document.getElementById('compass-status');
+	compassStatus.className='diagnostic-summary offline';
+	compassStatus.innerHTML='<strong>无法读取磁航向状态</strong><small>连接恢复后刷新。</small>';
   document.getElementById('expansion-probe-status').textContent='光流与测距状态读取失败；连接恢复后刷新。';
   const activePanel = document.getElementById('diagnostic-active');
   activePanel.style.display = 'none';

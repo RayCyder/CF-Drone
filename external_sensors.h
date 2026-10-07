@@ -24,6 +24,9 @@ bool getDownwardRangeSample(DownwardRangeSample &sample, uint32_t &sampleCount,
 void updateExternalSensors();
 void printExternalSensorReadings(float rollRadians, float pitchRadians);
 bool compassAvailable();
+bool getMagnetometerEstimate(MagnetometerEstimate &estimate);
+bool magHeadingTrusted();
+float navigationHeadingRadians(float fallbackYawRadians);
 bool barometerAvailable();
 bool getBarometerEstimate(BarometerEstimate &estimate);
 void printMagCalibrationStatus();

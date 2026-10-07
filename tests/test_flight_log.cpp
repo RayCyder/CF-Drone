@@ -6,6 +6,8 @@
 #include "../quaternion.h"
 #include "../control.h"
 #include "../flight_log.h"
+#include "../route_log.h"
+#include "../flight_sensor_interfaces.h"
 float dt=.001f; double t=0, controlTime=0;
 bool armed=false, activeMotors=false;
 float batteryVoltage=4.1f, controlRoll=0, controlPitch=0, controlYaw=0, controlThrottle=0, controlMode=0;
@@ -19,6 +21,17 @@ uint64_t testUs=0;
 int64_t esp_timer_get_time(){return testUs;}
 bool motorsActive(){return activeMotors;}
 void recordDescentCalibrationSample(){}
+bool getRouteLogSnapshot(RouteLogSnapshot &snapshot){
+    snapshot.revision=7;snapshot.schema=2;snapshot.step=3;snapshot.state=3;
+    snapshot.targetAltitudeMeters=1.25f;snapshot.actualAltitudeMeters=1.20f;
+    snapshot.targetYawRadians=.5f;snapshot.actualYawRadians=.45f;
+    snapshot.flowXMeters=.2f;snapshot.flowYMeters=-.1f;snapshot.quality=88;
+    return true;
+}
+bool getMagnetometerEstimate(MagnetometerEstimate &estimate){
+	estimate.detected=true;estimate.trusted=true;estimate.magneticHeadingRadians=.4f;
+	estimate.navigationHeadingRadians=.42f;estimate.innovationRadians=.02f;return true;
+}
 uint32_t getActiveDiagnosticFaults(){return 0;}
 #if defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
 int throttleReleaseFreezeCount=0;
@@ -33,22 +46,29 @@ typedef int portMUX_TYPE;
 #include "../log.ino"
 
 static void codecTests(){
-    float values[41]={}; values[1]=.001234f; values[21]=4.123f; values[28]=-1;
+    float values[FLIGHT_LOG_COLUMNS]={}; values[1]=.001234f; values[21]=4.123f; values[28]=-1;
     for(int i=2;i<20;++i)values[i]=.123456f;
     values[20]=.6f; values[22]=-.7f; values[27]=4; values[29]=1; values[30]=1023;
     for(int i=31;i<35;++i)values[i]=.6f;
     values[35]=-20; values[36]=20; values[37]=.1234f;values[38]=.25f;values[39]=3;
     values[40]=.75f;
+    values[41]=7;values[42]=2;values[43]=3;values[44]=3;values[45]=1.25f;values[46]=1.2f;
+    values[47]=.5f;values[48]=.45f;values[49]=.2f;values[50]=-.1f;values[51]=88;values[52]=6;
+	values[53]=.4f;values[54]=.42f;values[55]=.02f;values[56]=0x8000;
     const uint64_t now=(UINT64_C(1)<<32)*1000+123456;
-    auto r=FlightLogCodec::encode(values,now); float decoded[41];
-    FlightLogCodec::decode(r,now/1000,decoded,41);
-    assert(sizeof(r)==80 && sizeof(FlightLogStore)<33000);
+    auto r=FlightLogCodec::encode(values,now); float decoded[FLIGHT_LOG_COLUMNS];
+    FlightLogCodec::decode(r,now/1000,decoded,FLIGHT_LOG_COLUMNS);
+    assert(sizeof(r)==112 && sizeof(FlightLogStore)<39000);
     assert(decoded[0]==(float)((double)(now/1000)/1000));
     for(int i=2;i<20;++i)assert(fabsf(decoded[i]-values[i])<=.5001f/FlightLogCodec::vectorScale(i-2));
     assert(decoded[28]==-1 && decoded[30]==1023 && decoded[35]==-20 && decoded[36]==20);
     assert(fabsf(decoded[1]-values[1])<=.00000051f);
     assert(fabsf(decoded[21]-values[21])<=.000501f);
     assert(fabsf(decoded[40]-values[40])<=.5f/63);
+    assert(decoded[41]==7 && decoded[42]==2 && decoded[43]==3 && decoded[44]==3);
+    assert(fabsf(decoded[45]-1.25f)<=.0051f && decoded[51]==88 && decoded[52]==6);
+	assert(fabsf(decoded[53]-.4f)<=.00051f && fabsf(decoded[54]-.42f)<=.00051f);
+	assert(decoded[56]==0x8000);
     decoded[40]=-1.0f;
     FlightLogCodec::decode(r,now/1000,decoded,40);
     assert(fabsf(decoded[35]-values[35])<=.5f/1024 && decoded[39]==values[39] && decoded[40]==-1.0f);
@@ -64,7 +84,7 @@ static void codecTests(){
     assert(FlightLogCodec::unsignedValue(65532.5f,1,q)==65534);
 }
 static void storeTests(){
-    FlightLogStore store; float row[41]={}; FlightLogRecord r;uint64_t anchor;uint32_t seq;
+    FlightLogStore store; float row[FLIGHT_LOG_COLUMNS]={}; FlightLogRecord r;uint64_t anchor;uint32_t seq;
     assert(!store.copyLatest(r,anchor,seq));
     assert(store.freeze() && store.freeze() && store.status().rowCount==0);
     assert(!store.copy(store.status().generation,0,r,anchor));store.resume();
@@ -74,13 +94,14 @@ static void storeTests(){
     store.trigger(2,4990000);store.trigger(4,5000000);
     assert(!store.freeze() && store.status().triggerUs==4990000);
     for(uint64_t i=500;i<600;++i)store.push(FlightLogCodec::encode(row,i*10000),i*10000);
-    auto status=store.status();assert(status.state==FROZEN && status.reasonMask==6 && status.rowCount==400);
-    assert(store.copy(status.generation,0,r,anchor) && r.timeMs==2000);
-    assert(store.copy(status.generation,399,r,anchor) && r.timeMs==5990);
-    assert(!store.copy(status.generation,400,r,anchor));
+    auto status=store.status();assert(status.state==FROZEN && status.reasonMask==6 && status.rowCount==FlightLogStore::CAPACITY);
+	const uint32_t oldestMs = (600 - FlightLogStore::CAPACITY) * 10;
+    assert(store.copy(status.generation,0,r,anchor) && r.timeMs==oldestMs);
+    assert(store.copy(status.generation,FlightLogStore::CAPACITY-1,r,anchor) && r.timeMs==5990);
+    assert(!store.copy(status.generation,FlightLogStore::CAPACITY,r,anchor));
     store.push(FlightLogCodec::encode(row,7000000),7000000);
     assert(store.copyLatest(r,anchor,seq) && r.timeMs==7000);
-    assert(store.copy(status.generation,399,r,anchor) && r.timeMs==5990);
+    assert(store.copy(status.generation,FlightLogStore::CAPACITY-1,r,anchor) && r.timeMs==5990);
     store.resume();assert(!store.copy(status.generation,0,r,anchor));
     store.trigger(8,8000000);store.tick(9500000);assert(store.status().state==FROZEN && store.status().rowCount==0);
     store.resume();
@@ -88,7 +109,7 @@ static void storeTests(){
     store.push(FlightLogCodec::encode(row,wrap-10000),wrap-10000);
     store.push(FlightLogCodec::encode(row,wrap+10000),wrap+10000);store.freeze();
     assert(store.copy(store.status().generation,0,r,anchor));
-    float decoded[41];FlightLogCodec::decode(r,anchor,decoded,41);
+    float decoded[FLIGHT_LOG_COLUMNS];FlightLogCodec::decode(r,anchor,decoded,FLIGHT_LOG_COLUMNS);
     assert(decoded[0]==(float)((double)(wrap-10000)/1000000));
     store.resume();
     store.push(FlightLogCodec::encode(row,10000),10000);
@@ -110,20 +131,26 @@ static void throttleReleaseDetectorTests(){
     assert(!detector.observe(true,0.00f,1220000));
 }
 static void integrationTests(){
-    assert(getLogColumnCount()==41 && !strcmp(getLogColumnName(34),"motor_fl"));
+    assert(getLogColumnCount()==FLIGHT_LOG_COLUMNS && !strcmp(getLogColumnName(34),"motor_fl"));
     assert(!strcmp(getLogColumnName(35),"rate_i_x"));
     assert(!strcmp(getLogColumnName(40),"accel_correction_confidence"));
-    float row[41];uint32_t seq;
-    assert(!copyLatestLogRow(row,41,&seq));
+    assert(!strcmp(getLogColumnName(41),"route_revision"));
+    assert(!strcmp(getLogColumnName(52),"route_termination_reason"));
+	assert(!strcmp(getLogColumnName(53),"magnetic_yaw"));
+	assert(!strcmp(getLogColumnName(56),"magnetometer_flags"));
+    float row[FLIGHT_LOG_COLUMNS];uint32_t seq;
+    assert(!copyLatestLogRow(row,FLIGHT_LOG_COLUMNS,&seq));
     armed=true;assert(!freezeFlightLog() && !resumeFlightLog());armed=false;
     activeMotors=true;assert(!freezeFlightLog() && !resumeFlightLog());activeMotors=false;
     for(int i=0;i<410;++i){testUs=i*10000;t=testUs/1e6;gyro.x=i*.01f;logData();}
-    assert(freezeFlightLog());auto status=getFlightLogStatus();assert(status.rowCount==400);
-    std::vector<uint8_t> expected(400*140),actual(expected.size());
-    for(uint32_t i=0;i<400;++i){assert(copyFrozenLogRow(status.generation,i,row,35));FlightLogCodec::legacyBytes(row,&expected[i*140]);}
-    // Canonical first float32 is 0.1f (first ten records were overwritten), little endian.
-    assert(expected[0]==0xcd && expected[1]==0xcc && expected[2]==0xcc && expected[3]==0x3d);
-    for(uint32_t ofs: {0u,89u,90u,139u,140u,55999u,56000u,56001u,UINT32_MAX}){
+    assert(freezeFlightLog());auto status=getFlightLogStatus();assert(status.rowCount==FlightLogStore::CAPACITY);
+    std::vector<uint8_t> expected(FlightLogStore::CAPACITY*140),actual(expected.size());
+    for(uint32_t i=0;i<FlightLogStore::CAPACITY;++i){assert(copyFrozenLogRow(status.generation,i,row,35));FlightLogCodec::legacyBytes(row,&expected[i*140]);}
+    // The oldest retained sample is (410-capacity)*10 ms.
+    float firstTime=(410-FlightLogStore::CAPACITY)*.01f;uint32_t firstBits;memcpy(&firstBits,&firstTime,4);
+    assert(!memcmp(expected.data(),&firstBits,4));
+    const uint32_t lastByte=(uint32_t)expected.size()-1, endByte=(uint32_t)expected.size();
+    for(uint32_t ofs: {0u,89u,90u,139u,140u,lastByte,endByte,endByte+1,UINT32_MAX}){
         for(size_t len: {size_t(0),size_t(1),size_t(89),size_t(90),size_t(91),size_t(UINT32_MAX)}){
             size_t n=readFrozenLogBytes(status.generation,ofs,actual.data(),len);
             size_t wanted=ofs>=expected.size()?0:std::min(len,expected.size()-ofs);
@@ -138,8 +165,9 @@ static void integrationTests(){
         ((uint32_t)DISARM_REASON_WEB_LOCK << FLIGHT_LOG_DISARM_CAUSE_SHIFT)));
     assert(!freezeFlightLog() && !resumeFlightLog());
     testUs+=1500000;logData();assert(getFlightLogStatus().state==FROZEN);
-    assert(copyLatestLogRow(row,41,&seq));assert(row[0]==(float)(testUs/1000)/1000);
+    assert(copyLatestLogRow(row,FLIGHT_LOG_COLUMNS,&seq));assert(row[0]==(float)(testUs/1000)/1000);
     assert(fabsf(row[40]-accelCorrectionConfidence)<=.5f/63);
+    assert(row[41]==7 && row[42]==2 && row[43]==3 && row[51]==88);
 }
 #if defined(CF_DRONE_CAPTURE_ARMED_LOOP_TRACE)
 static void diagnosticReleaseTests(){

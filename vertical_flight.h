@@ -38,3 +38,4 @@ void setRouteNavigationTarget(float altitudeMeters, float headingRadians, bool v
 void clearRouteNavigationTarget();
 bool routeNavigationTarget(float &altitudeMeters, float &headingRadians);
 bool applyRouteAltitudeControl(float hoverThrust, float &thrust);
+bool resetNavigationOrigin(bool taskActive);

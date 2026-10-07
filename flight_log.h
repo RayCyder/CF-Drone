@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 constexpr int FLIGHT_LOG_LEGACY_COLUMNS = 35;
-constexpr int FLIGHT_LOG_COLUMNS = 41;
+constexpr int FLIGHT_LOG_COLUMNS = 57;
 constexpr uint32_t FLIGHT_LOG_LEGACY_ROW_BYTES = 140;
 constexpr uint32_t FLIGHT_LOG_DISARM_REASON = 0x80000000UL;
 // On a disarm trigger, bits 24..30 encode DisarmReason; bits 0..15 remain

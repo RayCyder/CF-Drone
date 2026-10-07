@@ -10,6 +10,7 @@
 #include "task_switch_trace_runtime.h"
 #include "control.h"
 #include "flight_log.h"
+#include "route_log.h"
 #include "log_transfer.h"
 #include "system_log.h"
 #include "web_rc_input.h"
@@ -169,7 +170,7 @@ void loop() {
 	updateBatteryVoltage(); // 更新电池电压采样与低电压保护判断
 	MONITOR_STAGE(LOOP_STAGE_BATTERY_ADC);
 	serviceMotorTest(); // 命中3秒截止时间时先清零试转输出
-	updateExternalSensors(); // Low-rate compass calibration sampling; active only while disarmed
+	updateExternalSensors(); // Fuse the background 50 Hz compass stream after each attitude update
 	updateVerticalFlightState(); // 200 Hz IMU prediction with asynchronous barometer/range corrections
 	if (!motorTestActive) control(); // 单电机诊断试转期间维持目标输出，其余飞控循环保持正常频率
 	MONITOR_STAGE(LOOP_STAGE_CONTROL_LAW);

@@ -5,6 +5,8 @@
 #include "diagnostics.h"
 #include "control.h"
 #include "pid.h"
+#include "route_log.h"
+#include "external_sensors.h"
 
 extern bool armed;
 extern bool motorsActive();
@@ -26,7 +28,10 @@ static const char *const logColumnNames[FLIGHT_LOG_COLUMNS] = {
     "thrustTarget", "battery_v", "rc_roll", "rc_pitch", "rc_yaw", "rc_throttle", "rc_mode",
     "flight_mode", "rc_age_s", "armed", "fault_mask", "motor_rl", "motor_rr", "motor_fr", "motor_fl",
     "rate_i_x", "rate_i_y", "rate_i_z", "mix_scale", "control_source",
-    "accel_correction_confidence"
+    "accel_correction_confidence", "route_revision", "route_schema", "route_step", "route_state",
+    "route_target_z", "route_actual_z", "route_target_yaw", "route_actual_yaw",
+    "route_flow_x", "route_flow_y", "route_quality", "route_termination_reason",
+	"magnetic_yaw", "navigation_yaw", "magnetic_innovation", "magnetometer_flags"
 };
 static_assert((DIAG_IMU_INIT | DIAG_IMU_TIMEOUT | DIAG_IMU_INVALID | DIAG_MOTOR_INIT |
     DIAG_RC_LOSS | DIAG_WEB_RC_LOSS | DIAG_BATTERY_LOW | DIAG_LOOP_OVERRUN | DIAG_PARAMETER |
@@ -128,6 +133,10 @@ void logData() {
     }
 #endif
     const Vector angles = attitude.toEuler(), targetAngles = attitudeTarget.toEuler();
+    RouteLogSnapshot routeLog;
+    const bool haveRouteLog = getRouteLogSnapshot(routeLog);
+	MagnetometerEstimate magnetometer;
+	const bool haveMagnetometer = getMagnetometerEstimate(magnetometer);
     const float row[FLIGHT_LOG_COLUMNS] = {
         0, dt, gyro.x, gyro.y, gyro.z, acc.x, acc.y, acc.z,
         rates.x, rates.y, rates.z, ratesTarget.x, ratesTarget.y, ratesTarget.z,
@@ -137,7 +146,23 @@ void logData() {
         armed ? 1.0f : 0.0f, (float)getActiveDiagnosticFaults(), motors[0], motors[1], motors[2], motors[3],
         rollRatePID.i * rollRatePID.integral, pitchRatePID.i * pitchRatePID.integral,
         yawRatePID.i * yawRatePID.integral, motorMixScale, (float)getCurrentControlSource(),
-        accelCorrectionConfidence
+        accelCorrectionConfidence,
+        haveRouteLog ? (float)routeLog.revision : 0.0f,
+        haveRouteLog ? (float)routeLog.schema : 0.0f,
+        haveRouteLog ? (float)routeLog.step : 0.0f,
+        haveRouteLog ? (float)routeLog.state : 0.0f,
+        haveRouteLog ? routeLog.targetAltitudeMeters : NAN,
+        haveRouteLog ? routeLog.actualAltitudeMeters : NAN,
+        haveRouteLog ? routeLog.targetYawRadians : NAN,
+        haveRouteLog ? routeLog.actualYawRadians : NAN,
+        haveRouteLog ? routeLog.flowXMeters : NAN,
+        haveRouteLog ? routeLog.flowYMeters : NAN,
+        haveRouteLog ? (float)routeLog.quality : 0.0f,
+		haveRouteLog ? (float)routeLog.terminationReason : 0.0f,
+		haveMagnetometer ? magnetometer.magneticHeadingRadians : NAN,
+		haveMagnetometer ? magnetometer.navigationHeadingRadians : NAN,
+		haveMagnetometer ? magnetometer.innovationRadians : NAN,
+		haveMagnetometer ? (float)((magnetometer.trusted ? 0x8000u : 0u) | magnetometer.rejectReasons) : 0.0f
     };
     const FlightLogRecord record = FlightLogCodec::encode(row, now);
     portENTER_CRITICAL(&logBufferMux);

@@ -43,6 +43,46 @@ struct OpticalFlowSample {
 	bool valid = false;
 };
 
+enum MagnetometerRejectReason : uint16_t {
+	MAG_REJECT_NONE = 0,
+	MAG_REJECT_NOT_DETECTED = 1u << 0,
+	MAG_REJECT_NOT_READY = 1u << 1,
+	MAG_REJECT_NOT_CALIBRATED = 1u << 2,
+	MAG_REJECT_STALE = 1u << 3,
+	MAG_REJECT_BUS = 1u << 4,
+	MAG_REJECT_FIELD_NORM = 1u << 5,
+	MAG_REJECT_INNOVATION = 1u << 6,
+	MAG_REJECT_TILT = 1u << 7,
+};
+
+struct MagnetometerEstimate {
+	int16_t raw[3] = {};
+	float corrected[3] = {};
+	float fieldNorm = 0.0f;
+	float fieldNormReference = 0.0f;
+	float magneticHeadingRadians = 0.0f;
+	float navigationHeadingRadians = 0.0f;
+	float innovationRadians = 0.0f;
+	uint32_t timestampUs = 0;
+	uint32_t sequence = 0;
+	uint32_t sampleCount = 0;
+	uint32_t failureCount = 0;
+	uint16_t rejectReasons = MAG_REJECT_NOT_READY;
+	bool detected = false;
+	bool ready = false;
+	bool calibrated = false;
+	bool fresh = false;
+	bool trusted = false;
+};
+
+enum class OpticalFlowSampleState : uint8_t {
+	Invalid = 0,
+	Stale = 1,
+	LowQuality = 2,
+	FreshZero = 3,
+	FreshMotion = 4,
+};
+
 inline bool sensorSampleFresh(uint32_t nowUs, uint32_t timestampUs, uint32_t maxAgeUs) {
 	return (uint32_t)(nowUs - timestampUs) <= maxAgeUs;
 }
@@ -70,6 +110,27 @@ inline bool opticalFlowSampleUsable(const OpticalFlowSample &sample, uint32_t no
 	return sample.valid && isfinite(sample.deltaXAngularRadians) &&
 		isfinite(sample.deltaYAngularRadians) && sample.quality >= minimumQuality &&
 		sensorSampleFresh(nowUs, sample.timestampUs, maxAgeUs);
+}
+
+inline OpticalFlowSampleState classifyOpticalFlowSample(const OpticalFlowSample &sample,
+	uint32_t nowUs, uint32_t maxAgeUs, uint8_t minimumQuality) {
+	if (!sample.valid || !isfinite(sample.deltaXAngularRadians) ||
+		!isfinite(sample.deltaYAngularRadians)) return OpticalFlowSampleState::Invalid;
+	if (!sensorSampleFresh(nowUs, sample.timestampUs, maxAgeUs))
+		return OpticalFlowSampleState::Stale;
+	if (sample.quality < minimumQuality) return OpticalFlowSampleState::LowQuality;
+	return sample.motionDetected ? OpticalFlowSampleState::FreshMotion :
+		OpticalFlowSampleState::FreshZero;
+}
+
+inline const char *opticalFlowSampleStateName(OpticalFlowSampleState state) {
+	switch (state) {
+		case OpticalFlowSampleState::FreshZero: return "fresh_zero";
+		case OpticalFlowSampleState::FreshMotion: return "fresh_motion";
+		case OpticalFlowSampleState::LowQuality: return "low_quality";
+		case OpticalFlowSampleState::Stale: return "stale";
+		default: return "invalid";
+	}
 }
 
 class BarometerInterface {

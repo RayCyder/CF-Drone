@@ -10,6 +10,8 @@
 #include "control.h"
 #include "wifi_recovery_policy.h"
 #include "vertical_flight.h"
+#include "external_sensors.h"
+#include "navigation_heading.h"
 
 extern bool isLevelCalibrationActive();
 extern bool parameterPersistencePending();
@@ -539,6 +541,12 @@ void disarm(DisarmReason reason) {
 }
 
 void control() {
+	#if WEB_RC_ENABLED
+	static MagHeadingLossGuard routeMagHeadingLossGuard(500);
+	const bool localRouteActive = mode == AUTO && isLocalSequenceRunning();
+	const bool magneticHeadingLossExceeded = routeMagHeadingLossGuard.update(
+		localRouteActive, magHeadingTrusted(), millis());
+	#endif
 	interpretControls();
 #if WEB_RC_ENABLED
 	interpretWebRC();
@@ -557,7 +565,13 @@ void control() {
 		#if WEB_RC_ENABLED
 		else if (mode == AUTO && isLocalSequenceRunning()) {
 			float routeAltitude = 0.0f, routeHeading = 0.0f;
-			if (routeNavigationTarget(routeAltitude, routeHeading) &&
+			if (magneticHeadingLossExceeded) {
+				clearRouteNavigationTarget();
+				recordSystemLogEvent("ROUTE_ABORT", "reason=mag_heading_untrusted duration_ms=500");
+				descend();
+				setWebRCWarn("磁航向失效超过 500 ms，已保持连续航向并退出航线进入受控下降");
+				routeMagHeadingLossGuard.reset();
+			} else if (routeNavigationTarget(routeAltitude, routeHeading) &&
 				!applyRouteAltitudeControl(hoverThrustTarget(), thrustTarget)) {
 				clearRouteNavigationTarget();
 				descend();
@@ -747,7 +761,8 @@ void controlAttitude() {
 		ratesTarget.z = ratesExtra.z;
 	} else {
 		// Retain absolute yaw targets for external AUTO attitude commands.
-		const float yawError = wrapAngle(attitudeTarget.getYaw() - attitude.getYaw());
+		const float actualYaw = navigationHeadingRadians(attitude.getYaw());
+		const float yawError = wrapAngle(attitudeTarget.getYaw() - actualYaw);
 		ratesTarget.z = yawPID.update(yawError) + ratesExtra.z;
 	}
 	ratesTarget = constrainRatesToConfiguredLimits(ratesTarget);

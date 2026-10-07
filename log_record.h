@@ -14,8 +14,15 @@ struct FlightLogRecord {
     uint16_t rcAge, faults, motors[4], mixScale;
     int16_t integral[3];
     uint8_t mode, armed, source, quality;
+    uint32_t routeRevision;
+    uint16_t routeStep;
+    uint8_t routeSchema, routeState, routeQuality, routeTerminationReason;
+    int16_t routeTargetAltitude, routeActualAltitude, routeTargetYaw, routeActualYaw;
+    int16_t routeFlowX, routeFlowY;
+	int16_t magneticYaw, navigationYaw, magneticInnovation;
+	uint16_t magnetometerFlags;
 };
-static_assert(sizeof(FlightLogRecord) == 80, "Flight log record must remain 80 bytes");
+static_assert(sizeof(FlightLogRecord) == 112, "Flight log record layout changed unexpectedly");
 static_assert(sizeof(float) == 4, "Legacy log transport requires float32");
 
 namespace FlightLogCodec {
@@ -61,6 +68,22 @@ inline FlightLogRecord encode(const float *v, uint64_t nowUs) {
     if (confidence < 0.0f) confidence = 0.0f;
     if (confidence > 1.0f) confidence = 1.0f;
     r.quality = (uint8_t)((r.quality & 0x03) | ((uint8_t)(confidence * 63.0f + 0.5f) << 2));
+    r.routeRevision = isfinite(v[41]) && v[41] >= 0.0f ? (uint32_t)v[41] : 0;
+    r.routeSchema = isfinite(v[42]) && v[42] >= 0.0f && v[42] < 255.0f ? (uint8_t)v[42] : 0;
+    r.routeStep = isfinite(v[43]) && v[43] >= 0.0f && v[43] <= 65535.0f ? (uint16_t)v[43] : 0;
+    r.routeState = isfinite(v[44]) && v[44] >= 0.0f && v[44] < 255.0f ? (uint8_t)v[44] : 0;
+    r.routeTargetAltitude = signedValue(v[45], 100.0f, r.quality);
+    r.routeActualAltitude = signedValue(v[46], 100.0f, r.quality);
+    r.routeTargetYaw = signedValue(v[47], 1000.0f, r.quality);
+    r.routeActualYaw = signedValue(v[48], 1000.0f, r.quality);
+    r.routeFlowX = signedValue(v[49], 100.0f, r.quality);
+    r.routeFlowY = signedValue(v[50], 100.0f, r.quality);
+    r.routeQuality = isfinite(v[51]) && v[51] >= 0.0f && v[51] < 255.0f ? (uint8_t)v[51] : 0;
+    r.routeTerminationReason = isfinite(v[52]) && v[52] >= 0.0f && v[52] < 255.0f ? (uint8_t)v[52] : 0;
+	r.magneticYaw = signedValue(v[53], 1000.0f, r.quality);
+	r.navigationYaw = signedValue(v[54], 1000.0f, r.quality);
+	r.magneticInnovation = signedValue(v[55], 1000.0f, r.quality);
+	r.magnetometerFlags = isfinite(v[56]) && v[56] >= 0.0f && v[56] <= 65535.0f ? (uint16_t)v[56] : 65535;
     return r;
 }
 inline void decode(const FlightLogRecord &r, uint64_t anchorMs, float *v, int columns) {
@@ -78,6 +101,19 @@ inline void decode(const FlightLogRecord &r, uint64_t anchorMs, float *v, int co
     }
     if (columns >= FLIGHT_LOG_COLUMNS) {
         v[40] = ((r.quality >> 2) & 0x3f) / 63.0f;
+        v[41] = (float)r.routeRevision; v[42] = r.routeSchema; v[43] = r.routeStep;
+        v[44] = r.routeState;
+        v[45] = signedFloat(r.routeTargetAltitude, 100.0f);
+        v[46] = signedFloat(r.routeActualAltitude, 100.0f);
+        v[47] = signedFloat(r.routeTargetYaw, 1000.0f);
+        v[48] = signedFloat(r.routeActualYaw, 1000.0f);
+        v[49] = signedFloat(r.routeFlowX, 100.0f);
+        v[50] = signedFloat(r.routeFlowY, 100.0f);
+        v[51] = r.routeQuality; v[52] = r.routeTerminationReason;
+		v[53] = signedFloat(r.magneticYaw, 1000.0f);
+		v[54] = signedFloat(r.navigationYaw, 1000.0f);
+		v[55] = signedFloat(r.magneticInnovation, 1000.0f);
+		v[56] = r.magnetometerFlags;
     }
 }
 inline void legacyBytes(const float *row, uint8_t *out) {
@@ -91,8 +127,8 @@ inline void legacyBytes(const float *row, uint8_t *out) {
 // Caller supplies synchronization; methods perform bounded work and no I/O.
 class FlightLogStore {
 public:
-    static constexpr uint32_t CAPACITY = 400;
-    static_assert(CAPACITY * sizeof(FlightLogRecord) == 32000, "Flight ring RAM budget");
+    static constexpr uint32_t CAPACITY = 334;
+static_assert(CAPACITY * sizeof(FlightLogRecord) == 37408, "Flight ring RAM budget");
     FlightLogStatus status() const { return {state, generation, reason, count, missed, triggerUs}; }
     bool sampleDue(uint64_t now) {
         if (hasSchedule && now < nextSampleUs) return false;

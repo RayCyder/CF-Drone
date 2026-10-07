@@ -4,8 +4,10 @@ const path = require('node:path');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'web_rc_html_controller.h'), 'utf8');
 
-assert.match(source, /const ROUTE_RECORD_HEADER='# WEB_RC_RECORDED_V2'/,
-  'recordings carry the V2 schema marker');
+assert.match(source, /const ROUTE_RECORD_HEADER_V2='# WEB_RC_RECORDED_V2'/,
+  'navigation recordings carry the V2 schema marker');
+assert.match(source, /const ROUTE_RECORD_HEADER_V1='# WEB_RC_RECORDED_V1'/,
+  'non-navigation recordings remain explicit V1');
 assert.match(source,
   /const \[duration,throttle,roll,pitch,yaw,altitude,heading\]=fields\.map\(Number\)/,
   'the editor parses height and heading after the five legacy controls');
@@ -15,6 +17,12 @@ assert.match(source,
 assert.match(source,
   /formatRouteRecordLine\(segment\)[\s\S]*segment\.altitude\.toFixed\(3\)[\s\S]*segment\.heading\.toFixed\(2\)/,
   'V2 lines retain high resolution height and heading');
+assert.match(source,
+  /segments\.every\(segment=>segment\.altitude!==null&&segment\.heading!==null\)/,
+  'recording output chooses one schema for every row');
+assert.match(source,
+  /value\.altitude===null\|\|value\.heading===null[\s\S]*stopRouteRecording/,
+  'armed V2 recording stops before writing a stale navigation row');
 assert.match(source,
   /routeRecording&&routeRecordStartedArmed\?ROUTE_RECORD_SAMPLE_MS:FORCE_SEND_INTERVAL/,
   'armed recording requests a board snapshot at the 10 Hz recording cadence');

@@ -55,6 +55,8 @@ void clearRouteNavigationTarget(){}
 bool applyAltitudeHoldControl(float,float,float,float&){return true;}
 bool applyRouteAltitudeControl(float,float&){return true;}
 bool routeNavigationTarget(float&,float&){return false;}
+float navigationHeadingRadians(float fallbackYawRadians){return fallbackYawRadians;}
+bool magHeadingTrusted(){return false;}
 void webRCLossFailsafe();
 bool motorOutputsOK=true;
 bool gyroBiasCalibrated=true;

@@ -2,6 +2,7 @@
 
 #include "external_sensors.h"
 #include "flight_sensor_interfaces.h"
+#include "navigation_origin.h"
 #include "quaternion.h"
 #include "vertical_navigation.h"
 #include "vector.h"
@@ -20,10 +21,7 @@ portMUX_TYPE verticalFlightMux = portMUX_INITIALIZER_UNLOCKED;
 uint32_t lastUpdateUs = 0;
 uint32_t lastFlowTimestampUs = 0;
 float rangeGroundOffsetMeters = NAN;
-float flowXMeters = 0.0f;
-float flowYMeters = 0.0f;
-float flowVXMps = 0.0f;
-float flowVYMps = 0.0f;
+NavigationOriginState flowOrigin;
 float routeAltitudeMeters = 0.0f;
 float routeHeadingRadians = 0.0f;
 bool routeTargetValid = false;
@@ -50,13 +48,13 @@ void updateFlowShadow(const OpticalFlowSample &flow, const DownwardRangeSample &
 		range.distanceMeters >= RANGE_MIN_METERS && range.distanceMeters <= RANGE_MAX_METERS &&
 		fabsf(roll) <= FLOW_MAX_TILT_RAD && fabsf(pitch) <= FLOW_MAX_TILT_RAD;
 	const bool flowUsable = opticalFlowSampleUsable(flow, nowUs, 100000U, FLOW_MIN_QUALITY) &&
-		flow.motionDetected && rangeUsable && flow.timestampUs != lastFlowTimestampUs;
+		rangeUsable && flow.timestampUs != lastFlowTimestampUs;
 	next.rangeValid = rangeUsable;
 	next.rangeAglMeters = rangeUsable ? range.distanceMeters * cosf(roll) * cosf(pitch) : 0.0f;
 	if (!flowUsable) {
 		next.flowValid = false;
-		flowVXMps *= 0.95f;
-		flowVYMps *= 0.95f;
+		flowOrigin.vxMps *= 0.95f;
+		flowOrigin.vyMps *= 0.95f;
 		return;
 	}
 	const float sampleDt = lastFlowTimestampUs ?
@@ -67,16 +65,18 @@ void updateFlowShadow(const OpticalFlowSample &flow, const DownwardRangeSample &
 	// PMW3901 reports angular image displacement. Remove the matching body-rate
 	// rotation before multiplying by AGL. Axis signs remain diagnostic until the
 	// expansion-board mounting transform is verified by the prop-off hand test.
-	const float bodyVX = -(flow.deltaYAngularRadians - gyro.x * sampleDt) * next.rangeAglMeters / sampleDt;
-	const float bodyVY =  (flow.deltaXAngularRadians - gyro.y * sampleDt) * next.rangeAglMeters / sampleDt;
+	const float bodyVX = flow.motionDetected ?
+		-(flow.deltaYAngularRadians - gyro.x * sampleDt) * next.rangeAglMeters / sampleDt : 0.0f;
+	const float bodyVY = flow.motionDetected ?
+		 (flow.deltaXAngularRadians - gyro.y * sampleDt) * next.rangeAglMeters / sampleDt : 0.0f;
 	if (!isfinite(bodyVX) || !isfinite(bodyVY) || fabsf(bodyVX) > 4.0f || fabsf(bodyVY) > 4.0f) return;
 	const float cy = cosf(yaw), sy = sinf(yaw);
 	const float worldVX = cy * bodyVX - sy * bodyVY;
 	const float worldVY = sy * bodyVX + cy * bodyVY;
-	flowVXMps += 0.25f * (worldVX - flowVXMps);
-	flowVYMps += 0.25f * (worldVY - flowVYMps);
-	flowXMeters += flowVXMps * sampleDt;
-	flowYMeters += flowVYMps * sampleDt;
+	flowOrigin.vxMps += 0.25f * (worldVX - flowOrigin.vxMps);
+	flowOrigin.vyMps += 0.25f * (worldVY - flowOrigin.vyMps);
+	flowOrigin.xMeters += flowOrigin.vxMps * sampleDt;
+	flowOrigin.yMeters += flowOrigin.vyMps * sampleDt;
 	next.flowValid = true;
 }
 }
@@ -144,10 +144,10 @@ void updateVerticalFlightState() {
 	next.flowAgeMs = haveFlow ? (uint32_t)(nowUs - flow.timestampUs) / 1000U : UINT32_MAX;
 	next.flowQuality = haveFlow ? flow.quality : 0;
 	if (haveFlow && haveRange) updateFlowShadow(flow, range, nowUs, roll, pitch, yaw, next);
-	next.flowPositionXMeters = flowXMeters;
-	next.flowPositionYMeters = flowYMeters;
-	next.flowVelocityXMps = flowVXMps;
-	next.flowVelocityYMps = flowVYMps;
+	next.flowPositionXMeters = flowOrigin.xMeters;
+	next.flowPositionYMeters = flowOrigin.yMeters;
+	next.flowVelocityXMps = flowOrigin.vxMps;
+	next.flowVelocityYMps = flowOrigin.vyMps;
 	next.controlActive = altitudeControllerActive;
 	next.altitudeTargetMeters = altitudeTargetMeters;
 	next.verticalSpeedTargetMps = verticalSpeedTargetMps;
@@ -162,6 +162,18 @@ bool getVerticalFlightState(VerticalFlightState &state) {
 	state = verticalSnapshot;
 	portEXIT_CRITICAL(&verticalFlightMux);
 	return state.timestampUs != 0;
+}
+
+bool resetNavigationOrigin(bool taskActive) {
+	if (armed && taskActive) return false;
+	portENTER_CRITICAL(&verticalFlightMux);
+	flowOrigin.reset();
+	verticalSnapshot.flowPositionXMeters = 0.0f;
+	verticalSnapshot.flowPositionYMeters = 0.0f;
+	verticalSnapshot.flowVelocityXMps = 0.0f;
+	verticalSnapshot.flowVelocityYMps = 0.0f;
+	portEXIT_CRITICAL(&verticalFlightMux);
+	return true;
 }
 
 bool verticalFlightHealthy() {

@@ -40,6 +40,19 @@ struct OpenLoopParseResult {
     uint16_t count;
     uint32_t totalMs;
     const char *reason;
+    uint8_t schemaVersion = 0;
+    uint8_t sourceKind = 0;
+    uint8_t controlPolicy = 0;
+};
+
+enum OpenLoopSourceKind : uint8_t {
+    OPEN_LOOP_SOURCE_AUTHORED = 1,
+    OPEN_LOOP_SOURCE_RECORDED = 2,
+};
+
+enum OpenLoopControlPolicy : uint8_t {
+    OPEN_LOOP_POLICY_SLEW = 1,
+    OPEN_LOOP_POLICY_DIRECT = 2,
 };
 
 struct OpenLoopControls {
@@ -52,6 +65,11 @@ struct OpenLoopControls {
     bool hasHeading;
     float headingDegrees;
 };
+
+static inline void openLoopResetStartOffsets(float &altitudeMeters, float &headingRadians) {
+    altitudeMeters = 0.0f;
+    headingRadians = 0.0f;
+}
 
 enum OpenLoopRunState : uint8_t {
     OPEN_LOOP_STATE_EMPTY = 0,
@@ -172,7 +190,8 @@ static inline int32_t openLoopRoundToInt(float value) {
     return (int32_t)(value >= 0.0f ? value + 0.5f : value - 0.5f);
 }
 
-static inline bool openLoopParseLine(char *line, OpenLoopPackedStep &step, uint32_t &durationMs) {
+static inline bool openLoopParseLine(char *line, OpenLoopPackedStep &step, uint32_t &durationMs,
+                                     uint8_t &columnCount) {
     char *cursor = line;
     openLoopSkipSeparators(cursor);
     if (!*cursor || *cursor == '#') return false;
@@ -192,6 +211,7 @@ static inline bool openLoopParseLine(char *line, OpenLoopPackedStep &step, uint3
     openLoopSkipSeparators(cursor);
     if (*cursor) return false;
     if (valueCount != 5 && valueCount != 7) return false;
+    columnCount = (uint8_t)valueCount;
 
     if (values[0] < 0.1f || values[0] > 600.0f ||
         values[1] < 0.0f || values[1] > 100.0f ||
@@ -236,6 +256,11 @@ static inline OpenLoopParseResult parseOpenLoopSequenceText(const char *text,
 
     char line[128];
     size_t lineLength = 0;
+    uint8_t expectedColumns = 0;
+    bool metadataSeen = false;
+    bool contentSeen = false;
+    bool nonEmptyLineSeen = false;
+    size_t lineNumber = 0;
     for (size_t i = 0; i <= length; ++i) {
         const char c = (i == length) ? '\n' : text[i];
         if (c == '\r') continue;
@@ -243,14 +268,63 @@ static inline OpenLoopParseResult parseOpenLoopSequenceText(const char *text,
             line[lineLength] = '\0';
             char *trim = line;
             while (isspace((unsigned char)*trim)) trim++;
-            if (*trim && *trim != '#') {
+            if (*trim == '#') {
+                const bool legacyV1 = strcmp(trim, "# WEB_RC_RECORDED_V1") == 0;
+                const bool legacyV2 = strcmp(trim, "# WEB_RC_RECORDED_V2") == 0;
+                const bool authoredV2 = strcmp(trim,
+                    "# CF_ROUTE_META schema=2 source=authored policy=slew") == 0;
+                const bool routeMetadata = strncmp(trim, "# CF_ROUTE_META", 15) == 0 ||
+                    strncmp(trim, "# WEB_RC_RECORDED_", 18) == 0;
+                if (legacyV1 || legacyV2 || authoredV2) {
+                    if (lineNumber != 0 || metadataSeen || contentSeen || nonEmptyLineSeen) {
+                        result.reason = "schema_mismatch";
+                        return result;
+                    }
+                    metadataSeen = true;
+                    if (legacyV1) {
+                        result.schemaVersion = 1;
+                        result.sourceKind = OPEN_LOOP_SOURCE_RECORDED;
+                        result.controlPolicy = OPEN_LOOP_POLICY_DIRECT;
+                        expectedColumns = 5;
+                    } else if (legacyV2) {
+                        result.schemaVersion = 2;
+                        result.sourceKind = OPEN_LOOP_SOURCE_RECORDED;
+                        result.controlPolicy = OPEN_LOOP_POLICY_DIRECT;
+                        expectedColumns = 7;
+                    } else {
+                        result.schemaVersion = 2;
+                        result.sourceKind = OPEN_LOOP_SOURCE_AUTHORED;
+                        result.controlPolicy = OPEN_LOOP_POLICY_SLEW;
+                        expectedColumns = 7;
+                    }
+                } else if (routeMetadata) {
+                    result.reason = "schema_mismatch";
+                    return result;
+                }
+            } else if (*trim) {
+                contentSeen = true;
                 if (result.count >= capacity || result.count >= OPEN_LOOP_MAX_STEPS) {
                     result.reason = "too_many_steps";
                     return result;
                 }
                 uint32_t durationMs = 0;
-                if (!openLoopParseLine(trim, out[result.count], durationMs)) {
+                uint8_t columnCount = 0;
+                if (!openLoopParseLine(trim, out[result.count], durationMs, columnCount)) {
                     result.reason = "invalid_row";
+                    return result;
+                }
+                if (!metadataSeen) {
+                    if (columnCount != 5) {
+                        result.reason = "schema_mismatch";
+                        return result;
+                    }
+                    result.schemaVersion = 1;
+                    result.sourceKind = OPEN_LOOP_SOURCE_AUTHORED;
+                    result.controlPolicy = OPEN_LOOP_POLICY_SLEW;
+                    expectedColumns = 5;
+                }
+                if (columnCount != expectedColumns) {
+                    result.reason = "schema_mismatch";
                     return result;
                 }
                 if (result.totalMs > OPEN_LOOP_MAX_TOTAL_MS - durationMs) {
@@ -260,6 +334,8 @@ static inline OpenLoopParseResult parseOpenLoopSequenceText(const char *text,
                 result.totalMs += durationMs;
                 result.count++;
             }
+            if (*trim) nonEmptyLineSeen = true;
+            ++lineNumber;
             lineLength = 0;
         } else {
             if (lineLength >= sizeof(line) - 1) {

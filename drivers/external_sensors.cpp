@@ -8,10 +8,14 @@
 #include "bmp388_compensation.h"
 #include "calibration_sensor_policy.h"
 #include "flight_sensor_interfaces.h"
+#include "navigation_heading.h"
+#include "quaternion.h"
+#include "system_log.h"
 
 extern Preferences storage;
 extern bool armed;
 extern bool motorTestActive;
+extern Quaternion attitude;
 bool motorsActive();
 bool beginPersistentWriteBatch();
 void finishPersistentWriteBatch(bool wroteAny);
@@ -26,11 +30,17 @@ constexpr uint32_t BARO_SAMPLE_INTERVAL_MS = 50;
 constexpr uint32_t BARO_MAX_SAMPLE_AGE_US = 250000;
 constexpr uint32_t BARO_BASELINE_SAMPLES = 25;
 constexpr uint32_t MAG_CAL_MAGIC = 0x4D414731; // MAG1
+constexpr uint32_t MAG_CAL_MAGIC_V2 = 0x4D414732; // MAG2
+constexpr uint32_t MAG_MAX_SAMPLE_AGE_US = 100000;
+constexpr float MAG_FIELD_NORM_TOLERANCE = 0.20f;
+constexpr float MAG_MAX_TILT_RADIANS = 1.04719755f; // 60 degrees
 
 struct MagCalibration {
 	float offset[3] = {};
 	float scale[3] = {1.0f, 1.0f, 1.0f};
 	float headingOffset = 0.0f;
+	float fieldNorm = 0.0f;
+	float quality = 0.0f;
 	bool valid = false;
 };
 
@@ -39,6 +49,17 @@ struct PersistedMagCalibration {
 	float offset[3];
 	float scale[3];
 	float headingOffset;
+};
+
+struct PersistedMagCalibrationV2 {
+	uint32_t magic;
+	uint16_t version;
+	uint16_t reserved;
+	float offset[3];
+	float scale[3];
+	float headingOffset;
+	float fieldNorm;
+	float quality;
 };
 
 struct MagRuntimeState {
@@ -50,6 +71,11 @@ struct MagRuntimeState {
 	bool active = false;
 	bool compassReady = false;
 	uint8_t barometerAddress = 0;
+	uint8_t consecutiveSuccesses = 0;
+	uint8_t consecutiveFailures = 0;
+	uint16_t baselineSamples = 0;
+	float baselineMean = 0.0f;
+	float baselineM2 = 0.0f;
 };
 
 struct Bmp388RuntimeState {
@@ -58,10 +84,14 @@ struct Bmp388RuntimeState {
 	bool calibrationReady = false;
 };
 
-static_assert(sizeof(MagRuntimeState) <= 64, "Magnetometer runtime RAM budget");
+static_assert(sizeof(MagRuntimeState) <= 96, "Magnetometer runtime RAM budget");
 MagRuntimeState magRuntime;
 Bmp388RuntimeState bmpRuntime;
 portMUX_TYPE bmpSampleMux = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE magSampleMux = portMUX_INITIALIZER_UNLOCKED;
+MagnetometerEstimate magEstimate;
+NavigationHeadingEstimator headingEstimator;
+uint32_t lastHeadingSequence = 0;
 SemaphoreHandle_t externalSensorI2cMutex = nullptr;
 #define magCalibration (magRuntime.calibration)
 #define magMinimum (magRuntime.minimum)
@@ -100,6 +130,9 @@ bool writeRegister(uint8_t address, uint8_t reg, uint8_t value) {
 	if (externalSensorI2cMutex) xSemaphoreGive(externalSensorI2cMutex);
 	return ok;
 }
+
+bool readQmc5883p(int16_t &x, int16_t &y, int16_t &z);
+bool calibratedMag(int16_t rawX, int16_t rawY, int16_t rawZ, float corrected[3]);
 
 uint16_t readU16(const uint8_t *p) {
 	return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
@@ -160,9 +193,73 @@ void externalSensorTask(void *) {
 	float baselineAltitude = NAN;
 	uint32_t baselineCount = 0;
 	uint32_t lastSampleUs = 0;
+	uint32_t lastBarometerMs = 0;
 	for (;;) {
-		vTaskDelayUntil(&wake, pdMS_TO_TICKS(BARO_SAMPLE_INTERVAL_MS));
+		vTaskDelayUntil(&wake, pdMS_TO_TICKS(MAG_SAMPLE_INTERVAL_MS));
 		pollDownwardRangeSensor();
+		if (qmcReady) {
+			int16_t x = 0, y = 0, z = 0;
+			if (readQmc5883p(x, y, z)) {
+				MagnetometerEstimate next;
+				portENTER_CRITICAL(&magSampleMux);
+				next = magEstimate;
+				portEXIT_CRITICAL(&magSampleMux);
+				next.raw[0] = x; next.raw[1] = y; next.raw[2] = z;
+				next.timestampUs = micros();
+				next.detected = true;
+				next.calibrated = magCalibration.valid;
+				if (magCalibration.valid) {
+					calibratedMag(x, y, z, next.corrected);
+					next.fieldNorm = sqrtf(next.corrected[0] * next.corrected[0] +
+						next.corrected[1] * next.corrected[1] + next.corrected[2] * next.corrected[2]);
+					if (magCalibration.fieldNorm < 250.0f && !armed && !motorTestActive &&
+						isfinite(next.fieldNorm) && next.fieldNorm >= 250.0f && magRuntime.baselineSamples < 100) {
+						++magRuntime.baselineSamples;
+						const float delta = next.fieldNorm - magRuntime.baselineMean;
+						magRuntime.baselineMean += delta / (float)magRuntime.baselineSamples;
+						magRuntime.baselineM2 += delta * (next.fieldNorm - magRuntime.baselineMean);
+						if (magRuntime.baselineSamples == 100) {
+							const float variance = magRuntime.baselineM2 / 99.0f;
+							if (variance >= 0.0f && sqrtf(variance) <= magRuntime.baselineMean * 0.05f) {
+								magCalibration.fieldNorm = magRuntime.baselineMean;
+								magCalibration.quality = 0.5f; // Runtime migration of a valid MAG1 record.
+							}
+						}
+					}
+					next.fieldNormReference = magCalibration.fieldNorm;
+				}
+				++next.sequence;
+				++next.sampleCount;
+				if (magRuntime.consecutiveSuccesses < UINT8_MAX) ++magRuntime.consecutiveSuccesses;
+				magRuntime.consecutiveFailures = 0;
+				next.ready = magRuntime.consecutiveSuccesses >= 3;
+				portENTER_CRITICAL(&magSampleMux);
+				magEstimate = next;
+				if (magCalibrationActive && !armed && !motorTestActive) {
+					const int16_t sample[3] = {x, y, z};
+					for (int axis = 0; axis < 3; ++axis) {
+						if (sample[axis] < magMinimum[axis]) magMinimum[axis] = sample[axis];
+						if (sample[axis] > magMaximum[axis]) magMaximum[axis] = sample[axis];
+					}
+					++magCalibrationSamples;
+				}
+				portEXIT_CRITICAL(&magSampleMux);
+			} else {
+				if (magRuntime.consecutiveFailures < UINT8_MAX) ++magRuntime.consecutiveFailures;
+				if (magRuntime.consecutiveFailures >= 3) magRuntime.consecutiveSuccesses = 0;
+				portENTER_CRITICAL(&magSampleMux);
+				++magEstimate.failureCount;
+				if (magRuntime.consecutiveFailures >= 3) {
+					magEstimate.ready = false;
+					magEstimate.trusted = false;
+				}
+				magEstimate.rejectReasons |= MAG_REJECT_BUS;
+				portEXIT_CRITICAL(&magSampleMux);
+			}
+		}
+		const uint32_t nowMs = millis();
+		if ((uint32_t)(nowMs - lastBarometerMs) < BARO_SAMPLE_INTERVAL_MS) continue;
+		lastBarometerMs = nowMs;
 		if (!bmpAddress) continue;
 		BarometerSample sample;
 		if (!readBmp388(bmpAddress, sample)) {
@@ -230,30 +327,48 @@ bool readQmc5883p(int16_t &x, int16_t &y, int16_t &z) {
 	return true;
 }
 
-bool calculateMagCalibration(float offset[3], float scale[3]) {
-	if (magCalibrationSamples < 300) return false;
+bool calculateMagCalibration(float offset[3], float scale[3], float &fieldNorm, float &quality) {
+	int16_t minimum[3], maximum[3];
+	uint32_t sampleCount = 0;
+	portENTER_CRITICAL(&magSampleMux);
+	memcpy(minimum, magMinimum, sizeof(minimum));
+	memcpy(maximum, magMaximum, sizeof(maximum));
+	sampleCount = magCalibrationSamples;
+	portEXIT_CRITICAL(&magSampleMux);
+	if (sampleCount < 300) return false;
 	float halfRange[3];
 	float meanHalfRange = 0.0f;
+	float minimumHalfRange = INFINITY;
+	float maximumHalfRange = 0.0f;
 	for (int axis = 0; axis < 3; ++axis) {
-		const int32_t span = (int32_t)magMaximum[axis] - (int32_t)magMinimum[axis];
+		const int32_t span = (int32_t)maximum[axis] - (int32_t)minimum[axis];
 		if (span < 500) return false; // Require rotation that excites every sensor axis.
-		offset[axis] = ((float)magMaximum[axis] + (float)magMinimum[axis]) * 0.5f;
+		offset[axis] = ((float)maximum[axis] + (float)minimum[axis]) * 0.5f;
 		halfRange[axis] = (float)span * 0.5f;
 		meanHalfRange += halfRange[axis] / 3.0f;
+		if (halfRange[axis] < minimumHalfRange) minimumHalfRange = halfRange[axis];
+		if (halfRange[axis] > maximumHalfRange) maximumHalfRange = halfRange[axis];
 	}
 	if (!isfinite(meanHalfRange) || meanHalfRange < 250.0f) return false;
 	for (int axis = 0; axis < 3; ++axis) {
 		scale[axis] = meanHalfRange / halfRange[axis];
 		if (!isfinite(scale[axis]) || scale[axis] < 0.33f || scale[axis] > 3.0f) return false;
 	}
+	fieldNorm = meanHalfRange;
+	quality = maximumHalfRange > 0.0f ? minimumHalfRange / maximumHalfRange : 0.0f;
+	if (sampleCount < 600) quality *= (float)sampleCount / 600.0f;
 	return true;
 }
 
 bool calibratedMag(int16_t rawX, int16_t rawY, int16_t rawZ, float corrected[3]) {
-	if (!magCalibration.valid) return false;
+	MagCalibration calibration;
+	portENTER_CRITICAL(&magSampleMux);
+	calibration = magCalibration;
+	portEXIT_CRITICAL(&magSampleMux);
+	if (!calibration.valid) return false;
 	const int16_t raw[3] = {rawX, rawY, rawZ};
 	for (int axis = 0; axis < 3; ++axis) {
-		corrected[axis] = ((float)raw[axis] - magCalibration.offset[axis]) * magCalibration.scale[axis];
+		corrected[axis] = ((float)raw[axis] - calibration.offset[axis]) * calibration.scale[axis];
 	}
 	return true;
 }
@@ -263,24 +378,41 @@ float calculateHeadingDegrees(const float mag[3], float roll, float pitch) {
 	const float horizontalX = mag[0] * cosf(pitch) + mag[2] * sinf(pitch);
 	const float horizontalY = mag[0] * sinf(roll) * sinf(pitch) +
 		mag[1] * cosf(roll) - mag[2] * sinf(roll) * cosf(pitch);
-	float heading = atan2f(-horizontalY, horizontalX) * 57.2957795f + magCalibration.headingOffset;
+	float headingOffset = 0.0f;
+	portENTER_CRITICAL(&magSampleMux);
+	headingOffset = magCalibration.headingOffset;
+	portEXIT_CRITICAL(&magSampleMux);
+	float heading = atan2f(-horizontalY, horizontalX) * 57.2957795f + headingOffset;
 	while (heading < 0.0f) heading += 360.0f;
 	while (heading >= 360.0f) heading -= 360.0f;
 	return heading;
 }
 
 void loadMagCalibration() {
-	PersistedMagCalibration stored;
-	if (storage.getBytesLength("MAG_CAL") != sizeof(stored) ||
-		storage.getBytes("MAG_CAL", &stored, sizeof(stored)) != sizeof(stored) || stored.magic != MAG_CAL_MAGIC) return;
+	PersistedMagCalibrationV2 storedV2 = {};
+	PersistedMagCalibration storedV1 = {};
+	const size_t length = storage.getBytesLength("MAG_CAL");
+	bool v2 = length == sizeof(storedV2) &&
+		storage.getBytes("MAG_CAL", &storedV2, sizeof(storedV2)) == sizeof(storedV2) &&
+		storedV2.magic == MAG_CAL_MAGIC_V2 && storedV2.version == 2;
+	if (!v2 && (length != sizeof(storedV1) ||
+		storage.getBytes("MAG_CAL", &storedV1, sizeof(storedV1)) != sizeof(storedV1) ||
+		storedV1.magic != MAG_CAL_MAGIC)) return;
 	for (int axis = 0; axis < 3; ++axis) {
-		if (!isfinite(stored.offset[axis]) || !isfinite(stored.scale[axis]) ||
-			stored.scale[axis] < 0.33f || stored.scale[axis] > 3.0f) return;
-		magCalibration.offset[axis] = stored.offset[axis];
-		magCalibration.scale[axis] = stored.scale[axis];
+		const float offset = v2 ? storedV2.offset[axis] : storedV1.offset[axis];
+		const float scale = v2 ? storedV2.scale[axis] : storedV1.scale[axis];
+		if (!isfinite(offset) || !isfinite(scale) || scale < 0.33f || scale > 3.0f) return;
+		magCalibration.offset[axis] = offset;
+		magCalibration.scale[axis] = scale;
 	}
-	if (!isfinite(stored.headingOffset)) return;
-	magCalibration.headingOffset = stored.headingOffset;
+	const float headingOffset = v2 ? storedV2.headingOffset : storedV1.headingOffset;
+	if (!isfinite(headingOffset)) return;
+	magCalibration.headingOffset = headingOffset;
+	if (v2 && isfinite(storedV2.fieldNorm) && storedV2.fieldNorm >= 250.0f &&
+		isfinite(storedV2.quality) && storedV2.quality >= 0.0f && storedV2.quality <= 1.0f) {
+		magCalibration.fieldNorm = storedV2.fieldNorm;
+		magCalibration.quality = storedV2.quality;
+	}
 	magCalibration.valid = true;
 }
 } // namespace
@@ -319,12 +451,19 @@ void setupExternalSensors() {
 #else
 	qmcReady = false;
 #endif
+	portENTER_CRITICAL(&magSampleMux);
+	magEstimate.detected = qmcReady;
+	magEstimate.calibrated = magCalibration.valid;
+	magEstimate.rejectReasons = qmcReady ? (magCalibration.valid ? MAG_REJECT_NOT_READY : MAG_REJECT_NOT_CALIBRATED) :
+		MAG_REJECT_NOT_DETECTED;
+	portEXIT_CRITICAL(&magSampleMux);
 	Serial.printf("EXT_SENSOR bus=ready sda=%d scl=%d bmp388=%s addr=0x%02X qmc5883p=%s addr=0x%02X\n",
 		BOARD_I2C_SDA, BOARD_I2C_SCL, bmpReady ? "ready" : "not_found", bmpAddress,
 		qmcReady ? "ready" : "not_found", qmcReady ? QMC5883P_ADDR : 0);
-	if ((bmpReady || downwardRangeAvailable()) && xTaskCreatePinnedToCore(externalSensorTask, "ext-i2c", 3072,
+	if ((bmpReady || downwardRangeAvailable() || qmcReady) && xTaskCreatePinnedToCore(externalSensorTask, "ext-i2c", 3584,
 		nullptr, 1, nullptr, 0) != pdPASS) {
 		bmpAddress = 0;
+		qmcReady = false;
 		markDownwardRangeUnavailable();
 		Serial.println("EXT_SENSOR task=start_failed");
 	}
@@ -332,30 +471,79 @@ void setupExternalSensors() {
 
 void updateExternalSensors() {
 	updateSupplementarySensors();
-	if (!magCalibrationActive) return;
 	if (armed || motorTestActive || motorsActive()) {
-		magCalibrationActive = false;
-		Serial.println("MAG_CAL state=aborted reason=outputs_active");
-		return;
+		if (magCalibrationActive) {
+			magCalibrationActive = false;
+			Serial.println("MAG_CAL state=aborted reason=outputs_active");
+		}
 	}
-	const uint32_t now = millis();
-	if ((uint32_t)(now - lastMagSampleMs) < MAG_SAMPLE_INTERVAL_MS) return;
-	lastMagSampleMs = now;
-	if (!qmcReady) return;
-	int16_t x, y, z;
-	if (!readQmc5883p(x, y, z)) return;
-	const int16_t sample[3] = {x, y, z};
-	for (int axis = 0; axis < 3; ++axis) {
-		if (sample[axis] < magMinimum[axis]) magMinimum[axis] = sample[axis];
-		if (sample[axis] > magMaximum[axis]) magMaximum[axis] = sample[axis];
+	MagnetometerEstimate estimate;
+	portENTER_CRITICAL(&magSampleMux);
+	estimate = magEstimate;
+	portEXIT_CRITICAL(&magSampleMux);
+	const uint32_t nowUs = micros();
+	const float roll = attitude.getRoll();
+	const float pitch = attitude.getPitch();
+	const float gyroYaw = attitude.getYaw();
+	headingEstimator.predict(gyroYaw, nowUs);
+	uint16_t reasons = MAG_REJECT_NONE;
+	if (!estimate.detected) reasons |= MAG_REJECT_NOT_DETECTED;
+	if (!estimate.ready) reasons |= MAG_REJECT_NOT_READY;
+	if (!estimate.calibrated) reasons |= MAG_REJECT_NOT_CALIBRATED;
+	const bool fresh = estimate.timestampUs != 0 &&
+		(uint32_t)(nowUs - estimate.timestampUs) <= MAG_MAX_SAMPLE_AGE_US;
+	if (!fresh) reasons |= MAG_REJECT_STALE;
+	if (estimate.failureCount && !estimate.ready) reasons |= MAG_REJECT_BUS;
+	const bool normReady = estimate.fieldNormReference >= 250.0f && isfinite(estimate.fieldNorm);
+	const bool normValid = normReady && fabsf(estimate.fieldNorm - estimate.fieldNormReference) <=
+		estimate.fieldNormReference * MAG_FIELD_NORM_TOLERANCE;
+	if (!normValid) reasons |= MAG_REJECT_FIELD_NORM;
+	const bool tiltValid = isfinite(roll) && isfinite(pitch) && fabsf(roll) <= MAG_MAX_TILT_RADIANS &&
+		fabsf(pitch) <= MAG_MAX_TILT_RADIANS;
+	if (!tiltValid) reasons |= MAG_REJECT_TILT;
+	const bool baseTrusted = reasons == MAG_REJECT_NONE;
+	if (estimate.sequence != lastHeadingSequence && estimate.calibrated) {
+		estimate.magneticHeadingRadians = radians(calculateHeadingDegrees(estimate.corrected, roll, pitch));
+		const bool accepted = headingEstimator.observe(estimate.magneticHeadingRadians, baseTrusted,
+			estimate.timestampUs, !armed);
+		if (!accepted && baseTrusted) reasons |= MAG_REJECT_INNOVATION;
+		lastHeadingSequence = estimate.sequence;
 	}
-	++magCalibrationSamples;
+	headingEstimator.predict(gyroYaw, nowUs);
+	const NavigationHeadingState &heading = headingEstimator.state();
+	estimate.navigationHeadingRadians = heading.fusedYawRadians;
+	estimate.innovationRadians = heading.innovationRadians;
+	estimate.fresh = fresh;
+	estimate.trusted = baseTrusted && heading.trusted;
+	if (baseTrusted && !heading.trusted) reasons |= MAG_REJECT_INNOVATION;
+	estimate.rejectReasons = reasons;
+	portENTER_CRITICAL(&magSampleMux);
+	// Preserve a newer raw sample that may have arrived while fusion was running.
+	if (magEstimate.sequence == estimate.sequence) magEstimate = estimate;
+	else {
+		magEstimate.navigationHeadingRadians = estimate.navigationHeadingRadians;
+		magEstimate.innovationRadians = estimate.innovationRadians;
+		magEstimate.trusted = false;
+	}
+	portEXIT_CRITICAL(&magSampleMux);
+	static bool healthInitialized = false;
+	static bool previousTrusted = false;
+	if (!healthInitialized || previousTrusted != estimate.trusted) {
+		char details[64];
+		snprintf(details, sizeof(details), "trusted=%u reasons=0x%04X age_ms=%lu",
+			estimate.trusted ? 1U : 0U, (unsigned)estimate.rejectReasons,
+			(unsigned long)(estimate.timestampUs ? (uint32_t)(nowUs - estimate.timestampUs) / 1000U : UINT32_MAX));
+		recordSystemLogEvent("MAG_HEALTH", details);
+		previousTrusted = estimate.trusted;
+		healthInitialized = true;
+	}
 }
 
 bool startMagCalibration() {
 	const CalibrationSensorAvailability sensors = {true, qmcReady};
 	if (!magneticHeadingCalibrationSensorsReady(sensors) ||
 		armed || motorTestActive || motorsActive()) return false;
+	portENTER_CRITICAL(&magSampleMux);
 	for (int axis = 0; axis < 3; ++axis) {
 		magMinimum[axis] = INT16_MAX;
 		magMaximum[axis] = INT16_MIN;
@@ -363,16 +551,19 @@ bool startMagCalibration() {
 	magCalibrationSamples = 0;
 	lastMagSampleMs = millis();
 	magCalibrationActive = true;
+	portEXIT_CRITICAL(&magSampleMux);
 	return true;
 }
 
 void stopMagCalibration() {
+	portENTER_CRITICAL(&magSampleMux);
 	magCalibrationActive = false;
+	portEXIT_CRITICAL(&magSampleMux);
 }
 
 void printMagCalibrationStatus() {
-	float offsets[3], scales[3];
-	const bool candidateValid = calculateMagCalibration(offsets, scales);
+	float offsets[3], scales[3], fieldNorm = 0.0f, quality = 0.0f;
+	const bool candidateValid = calculateMagCalibration(offsets, scales, fieldNorm, quality);
 	Serial.printf("MAG_CAL available=%u state=%s samples=%lu saved=%u candidate=%s", qmcReady ? 1U : 0U,
 		magCalibrationActive ? "collecting" : "stopped",
 		(unsigned long)magCalibrationSamples, magCalibration.valid ? 1 : 0, candidateValid ? "ready" : "insufficient_coverage");
@@ -380,40 +571,55 @@ void printMagCalibrationStatus() {
 		Serial.printf(" min%d=%d max%d=%d", axis, magMinimum[axis], axis, magMaximum[axis]);
 		if (candidateValid) Serial.printf(" off%d=%.1f scale%d=%.3f", axis, offsets[axis], axis, scales[axis]);
 	}
-	Serial.printf(" heading_offset_deg=%.2f\n", magCalibration.headingOffset);
+	Serial.printf(" heading_offset_deg=%.2f field_norm=%.1f quality=%.3f\n",
+		magCalibration.headingOffset, candidateValid ? fieldNorm : magCalibration.fieldNorm,
+		candidateValid ? quality : magCalibration.quality);
 }
 
 bool saveMagCalibration() {
 	if (magCalibrationActive || armed || motorTestActive || motorsActive()) return false;
-	float offsets[3], scales[3];
-	const bool haveNewCalibration = calculateMagCalibration(offsets, scales);
-	if (!haveNewCalibration && !magCalibration.valid) return false;
-	if (!beginPersistentWriteBatch()) return false;
-	PersistedMagCalibration record = {};
-	record.magic = MAG_CAL_MAGIC;
+	float offsets[3], scales[3], fieldNorm = 0.0f, quality = 0.0f;
+	const bool haveNewCalibration = calculateMagCalibration(offsets, scales, fieldNorm, quality);
+	MagCalibration current;
+	portENTER_CRITICAL(&magSampleMux);
+	current = magCalibration;
+	portEXIT_CRITICAL(&magSampleMux);
+	if (!haveNewCalibration && !current.valid) return false;
+	PersistedMagCalibrationV2 record = {};
+	record.magic = MAG_CAL_MAGIC_V2;
+	record.version = 2;
 	if (haveNewCalibration) {
 		for (int axis = 0; axis < 3; ++axis) {
 			record.offset[axis] = offsets[axis];
 			record.scale[axis] = scales[axis];
 		}
 	} else {
-		memcpy(record.offset, magCalibration.offset, sizeof(record.offset));
-		memcpy(record.scale, magCalibration.scale, sizeof(record.scale));
+		memcpy(record.offset, current.offset, sizeof(record.offset));
+		memcpy(record.scale, current.scale, sizeof(record.scale));
 	}
-	record.headingOffset = magCalibration.headingOffset;
-	PersistedMagCalibration readBack = {};
+	record.headingOffset = current.headingOffset;
+	record.fieldNorm = haveNewCalibration ? fieldNorm : current.fieldNorm;
+	record.quality = haveNewCalibration ? quality : current.quality;
+	if (!beginPersistentWriteBatch()) return false;
+	PersistedMagCalibrationV2 readBack = {};
 	const bool wroteAny = storage.putBytes("MAG_CAL", &record, sizeof(record)) == sizeof(record);
 	const bool ok = wroteAny && storage.getBytes("MAG_CAL", &readBack, sizeof(readBack)) == sizeof(readBack) &&
 		memcmp(&record, &readBack, sizeof(record)) == 0;
 	finishPersistentWriteBatch(wroteAny);
 	if (!ok) return false;
+	MagCalibration published = current;
 	if (haveNewCalibration) {
-		for (int axis = 0; axis < 3; ++axis) {
-			magCalibration.offset[axis] = offsets[axis];
-			magCalibration.scale[axis] = scales[axis];
-		}
+		memcpy(published.offset, offsets, sizeof(published.offset));
+		memcpy(published.scale, scales, sizeof(published.scale));
+		published.fieldNorm = fieldNorm;
+		published.quality = quality;
 	}
-	magCalibration.valid = true;
+	published.valid = true;
+	portENTER_CRITICAL(&magSampleMux);
+	magCalibration = published;
+	magEstimate.calibrated = true;
+	magEstimate.fieldNormReference = published.fieldNorm;
+	portEXIT_CRITICAL(&magSampleMux);
 	return true;
 }
 
@@ -424,7 +630,12 @@ bool resetMagCalibration() {
 	const bool wroteAny = wasPresent && removed;
 	finishPersistentWriteBatch(wroteAny);
 	if (!removed) return false;
+	portENTER_CRITICAL(&magSampleMux);
 	magCalibration = MagCalibration();
+	headingEstimator.reset();
+	magEstimate.calibrated = false;
+	magEstimate.trusted = false;
+	portEXIT_CRITICAL(&magSampleMux);
 	return true;
 }
 
@@ -438,9 +649,11 @@ bool alignMagHeading(float knownHeadingDegrees, float rollRadians, float pitchRa
 	float corrected[3];
 	calibratedMag(x, y, z, corrected);
 	const float current = calculateHeadingDegrees(corrected, rollRadians, pitchRadians);
+	portENTER_CRITICAL(&magSampleMux);
 	magCalibration.headingOffset += knownHeadingDegrees - current;
 	while (magCalibration.headingOffset < -360.0f) magCalibration.headingOffset += 360.0f;
 	while (magCalibration.headingOffset > 360.0f) magCalibration.headingOffset -= 360.0f;
+	portEXIT_CRITICAL(&magSampleMux);
 	return true;
 }
 
@@ -485,20 +698,17 @@ void printExternalSensorReadings(float rollRadians, float pitchRadians) {
 	} else {
 		Serial.println("BARO bmp388=not_found");
 	}
-	if (qmcReady) {
-		int16_t x, y, z;
-		if (readQmc5883p(x, y, z)) {
-			if (magCalibration.valid) {
-				float corrected[3];
-				calibratedMag(x, y, z, corrected);
-				Serial.printf("COMPASS qmc5883p raw_x=%d raw_y=%d raw_z=%d calibrated_x=%.1f calibrated_y=%.1f calibrated_z=%.1f magnetic_heading_deg=%.1f source=magnetometer_tilt_compensated\n",
-					x, y, z, corrected[0], corrected[1], corrected[2], calculateHeadingDegrees(corrected, rollRadians, pitchRadians));
-			} else {
-				Serial.printf("COMPASS qmc5883p raw_x=%d raw_y=%d raw_z=%d heading=unavailable reason=magcal_required\n", x, y, z);
-			}
-		} else {
-			Serial.println("COMPASS qmc5883p read=not_ready");
-		}
+	MagnetometerEstimate magnetic;
+	if (getMagnetometerEstimate(magnetic)) {
+		Serial.printf("COMPASS qmc5883p detected=%u ready=%u calibrated=%u fresh=%u trusted=%u raw_x=%d raw_y=%d raw_z=%d calibrated_x=%.1f calibrated_y=%.1f calibrated_z=%.1f field_norm=%.1f field_reference=%.1f magnetic_heading_deg=%.1f navigation_heading_deg=%.1f innovation_deg=%.1f age_ms=%lu samples=%lu failures=%lu reject=0x%04X\n",
+			magnetic.detected, magnetic.ready, magnetic.calibrated, magnetic.fresh, magnetic.trusted,
+			magnetic.raw[0], magnetic.raw[1], magnetic.raw[2], magnetic.corrected[0], magnetic.corrected[1],
+			magnetic.corrected[2], magnetic.fieldNorm, magnetic.fieldNormReference,
+			degrees(magnetic.magneticHeadingRadians), degrees(magnetic.navigationHeadingRadians),
+			degrees(magnetic.innovationRadians),
+			(unsigned long)((uint32_t)(nowUs - magnetic.timestampUs) / 1000U),
+			(unsigned long)magnetic.sampleCount, (unsigned long)magnetic.failureCount,
+			(unsigned)magnetic.rejectReasons);
 	} else {
 		Serial.println("COMPASS qmc5883p=not_found");
 	}
@@ -506,6 +716,27 @@ void printExternalSensorReadings(float rollRadians, float pitchRadians) {
 
 bool compassAvailable() {
 	return qmcReady;
+}
+
+bool getMagnetometerEstimate(MagnetometerEstimate &estimate) {
+	portENTER_CRITICAL(&magSampleMux);
+	estimate = magEstimate;
+	portEXIT_CRITICAL(&magSampleMux);
+	return estimate.detected;
+}
+
+bool magHeadingTrusted() {
+	MagnetometerEstimate estimate;
+	return getMagnetometerEstimate(estimate) && estimate.trusted;
+}
+
+float navigationHeadingRadians(float fallbackYawRadians) {
+	const NavigationHeadingState &heading = headingEstimator.state();
+	// Once aligned, retain the learned gyro-to-magnetic offset even while the
+	// magnetic sample is unhealthy. Trust is reported separately so AUTO can
+	// exit deliberately without creating a discontinuous yaw error.
+	return heading.initialized && isfinite(heading.fusedYawRadians) ?
+		heading.fusedYawRadians : fallbackYawRadians;
 }
 
 bool barometerAvailable() {

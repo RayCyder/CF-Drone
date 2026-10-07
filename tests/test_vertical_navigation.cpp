@@ -84,6 +84,9 @@ int main() {
 	const uint32_t rejectedBefore = estimator.state().rejectedObservationCount;
 	const auto &afterOutlier = estimator.update(input);
 	assert(afterOutlier.rejectedObservationCount == rejectedBefore + 1);
+	assert(afterOutlier.acceptedRangeCount == 1);
+	assert(afterOutlier.receivedObservationCount == 3);
+	assert(afterOutlier.acceptedObservationCount == 2);
 
 	input = inputAt(1080000);
 	input.range = range(0.60f, 1080000);
@@ -91,6 +94,25 @@ int main() {
 	const uint32_t rangeBeforeTilt = estimator.state().acceptedRangeCount;
 	const auto &afterTilt = estimator.update(input);
 	assert(afterTilt.acceptedRangeCount == rangeBeforeTilt);
+
+	// VN-3b: a stream of fresh but rejected observations is not trusted and
+	// cannot keep the height source healthy after the last accepted sample ages out.
+	VerticalNavigationEstimator rejectionEstimator;
+	input = inputAt(4000000);
+	input.barometer = baro(1.0f, 4000000);
+	rejectionEstimator.update(input);
+	for (int i = 1; i <= 20; ++i) {
+		input = inputAt(4000000 + (uint32_t)i * 20000);
+		input.barometer = baro(20.0f, input.nowUs);
+		rejectionEstimator.update(input);
+	}
+	const auto &rejectedStream = rejectionEstimator.state();
+	assert(rejectedStream.receivedObservationCount == 21);
+	assert(rejectedStream.acceptedObservationCount == 1);
+	assert(rejectedStream.trustedObservationCount == 1);
+	assert(rejectedStream.rejectedObservationCount == 20);
+	assert(!rejectedStream.barometerHealthy);
+	assert(!rejectedStream.healthy);
 
 	// VN-4: range-only devices initialize and stay usable, covering IMU+ToF variants
 	// without a barometer.

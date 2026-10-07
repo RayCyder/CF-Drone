@@ -144,7 +144,7 @@ STA 模式下应使用路由器分配给飞控的实际 IP 地址。
 
 上锁时返回完整遥控器页面。解锁或电机正在输出时返回小型恢复页，只保留双摇杆、状态、心跳、迫降、上锁和急停，避免 100 KiB 级完整页面下载占用控制服务；重新上锁后可加载完整页面。
 
-遥控页顶部的“航线录制”按钮会打开独立编辑页面。V1 每行包含五个字段：持续秒数、油门百分比、横滚、俯仰、偏航输入；V2 以 `# WEB_RC_RECORDED_V2` 开头，并在每行追加融合相对高度（米）和相对陀螺航向（度）。三个姿态轴仍是 `-100..100` 的遥控输入。空行和其他 `#` 注释行会忽略。最多 128 段、总时长 30 分钟、正文 4096 字节。先在上锁且电机停止时上传校验并读回，再切换 AUTO；操作者解锁后主循环再次检查批次、模式、垂直估计和链路并自动启动。飞控用两组定长缓冲保存动作，不在控制循环分配内存。编辑内容可存入浏览器 `localStorage`；飞控 RAM 内序列在重启后清除。完整操作、手工格式和定高算法见[航线录制、定制、回放与定高算法](../ROUTE_RECORDING_REPLAY_GUIDE.md)。
+遥控页顶部的“航线录制”按钮会打开独立编辑页面。V1 每行包含五个字段；V2 每行追加融合相对高度和相对陀螺航向。浏览器录制 V2 使用 `# WEB_RC_RECORDED_V2`，手写 V2 使用 `# CF_ROUTE_META schema=2 source=authored policy=slew`。V2 必须全为七列，不能混入五列段。三个姿态轴仍是 `-100..100` 的遥控输入。最多 128 段、总时长 30 分钟、正文 4096 字节。先在上锁且电机停止时上传校验并读回，再切换 AUTO；操作者解锁后主循环再次检查批次、模式、垂直估计和链路并自动启动。飞控用两组定长缓冲保存动作，不在控制循环分配内存。编辑内容可存入浏览器 `localStorage`；飞控 RAM 内序列在重启后清除。完整操作、手工格式和定高算法见[航线录制、定制、回放与定高算法](../ROUTE_RECORDING_REPLAY_GUIDE.md)。
 
 V2 回放从当前起点重新对齐记录的高度和航向，高度由垂直控制器闭环，航向由短程相对陀螺角闭环。横滚和俯仰仍按录制杆量回放；PMW3901 水平位置只作诊断影子估计，所以该功能仍不能保证实际水平位移、半径或落点。浏览器断开、控制循环停顿超过 100 ms、序列完成、垂直估计失效或操作者停止都会进入安全降级。迫降不能识别近地或触地，操作者须确认情况后上锁。执行期间摇杆不会隐式接管；点击“接管摇杆”或切换到 STAB/ACRO 才会明确停止序列并恢复手动控制。急停/上锁按钮仍立即停机。
 
@@ -163,9 +163,9 @@ Content-Type: text/html
 
 ### 5.1 本地航线接口
 
-`POST /route/upload` 接收原始文本正文。每个非空、非注释行必须包含五个或七个有限数字。前五列依次为持续秒数（`0.1..600`）、油门百分比（`0..100`）、横滚、俯仰、偏航输入值（各 `-100..100`）；七列 V2 再包含相对高度（`-20..20` 米）和相对航向（`-360..360` 度）。带 `# WEB_RC_RECORDED_V2` 文件头时启用高度/航向回放。最大 128 行、总时长 1800 秒、正文 4096 字节。只有上锁且电机停止才接受；上传成功返回 `plan_revision`，只表示校验通过并存入飞控 RAM，不会解锁或启动。失败的解析不会替换当前有效序列。
+`POST /route/upload` 接收原始文本正文。兼容规则固定为：无头且全五列是 V1 authored/slew；`# WEB_RC_RECORDED_V1` 是 V1 recorded/direct；`# WEB_RC_RECORDED_V2` 是 V2 recorded/direct；`# CF_ROUTE_META schema=2 source=authored policy=slew` 是 V2 authored/slew。元数据必须唯一且精确位于正文第一行。V2 必须全部为七列；缺 schema 的七列、混合列数、未知 schema/source/policy 均返回 `schema_mismatch`。字段范围、段数、时长和正文容量限制保持不变。只有上锁且电机停止才接受；上传成功返回 `plan_revision`，不会解锁或启动。失败的解析不会替换当前有效序列。
 
-`GET /route/plan` 仅在上锁时读回当前文本，并通过 `X-Plan-Revision` 返回批次号。页面确认读回内容和批次后请求 AUTO 模式；操作者随后解锁，主循环在当前批次有效、Web RC 在线且模式仍为 AUTO 时自动启动。固件没有 `/route/start` 或 `/route/stop`。`GET /route/status` 返回 `state`（含 `start_pending`）、段数、当前段、总时长、`plan_revision`、`pending`、原因、解锁状态和模式。`POST /route/takeover` 明确切回 STAB 手动控制；页面迫降按钮使用 Web RC 按钮消息。切换到 STAB/ACRO 也会取消序列。
+`GET /route/plan` 仅在上锁时读回当前文本，并通过 `X-Plan-Revision` 返回批次号。页面确认读回内容和批次后请求 AUTO 模式；操作者随后解锁，主循环在当前批次有效、Web RC 在线且模式仍为 AUTO 时自动启动。固件没有 `/route/start` 或 `/route/stop`。`GET /route/status` 返回 `state`、段数、当前段、总时长、`plan_revision`、`pending`、原因、解锁状态、模式以及结构化 `schema/source/policy`。`POST /route/takeover` 明确切回 STAB 手动控制；页面迫降按钮使用 Web RC 按钮消息。切换到 STAB/ACRO 也会取消序列。
 
 V1 保持原有开环杆量语义。V2 增加高度和相对航向闭环，但水平位置仍未闭环。Web RC 的“急停”仍会立即 disarm；停止/完成/断连进入现有受控下降流程，不能确认着陆。
 
@@ -341,6 +341,17 @@ GET /web_rc/status
   "http_idle_drops": 2,
   "control_source": 2,
   "thrust_target": 0.25,
+	"compass_detected": true,
+	"compass_ready": true,
+	"compass_calibrated": true,
+	"compass_fresh": true,
+	"compass_trusted": true,
+	"compass_age_ms": 12,
+	"compass_reject_reasons": 0,
+	"magnetic_heading_deg": 83.2,
+	"navigation_heading_deg": 82.9,
+	"magnetic_innovation_deg": 0.3,
+	"magnetic_field_norm": 1632.0,
   "barometer_available": true,
   "barometer_usable": true,
   "barometer_guard_ready": true,
@@ -372,6 +383,17 @@ GET /web_rc/status
 | `http_idle_drops` | integer | 次 | 本次启动后因连接建立但未发送请求而主动关闭的 TCP 连接数 |
 | `control_source` | integer | 枚举 | 实际控制来源；`2` 为 Web RC，`6` 为受控下降 |
 | `thrust_target` | number | 0..1 | 当前控制器目标推力；可能与摇杆油门不同 |
+| `compass_detected` | boolean | - | QMC5883P 身份探测成功 |
+| `compass_ready` | boolean | - | 驱动已连续取得有效样本；不代表已校准或可信 |
+| `compass_calibrated` | boolean | - | 已加载通过范围校验的磁力计校准 |
+| `compass_fresh` | boolean | - | 最近磁样本年龄不超过 100 ms |
+| `compass_trusted` | boolean | - | 校准、新鲜度、场强、倾角和航向创新门控均通过，可供导航使用 |
+| `compass_age_ms` | integer | ms | 最近磁样本年龄；无样本为 `-1` |
+| `compass_reject_reasons` | integer | 位掩码 | 不可信原因：bit0 未探测、bit1 未就绪、bit2 未校准、bit3 陈旧、bit4 总线、bit5 场强、bit6 创新、bit7 倾角 |
+| `magnetic_heading_deg` | number | ° | 校准和倾斜补偿后的磁航向 |
+| `navigation_heading_deg` | number | ° | 陀螺短时连续、磁航向长期修正后的导航航向 |
+| `magnetic_innovation_deg` | number | ° | 磁航向与融合航向的环绕误差 |
+| `magnetic_field_norm` | number | 原始标度 | 校准后三轴磁场模长，用于干扰门控 |
 | `barometer_available` | boolean | - | 运行时是否实际检测到 BMP388；构建启用不等于实体传感器存在 |
 | `barometer_usable` | boolean | - | 当前估计是否有效、有限且样本年龄不超过 250 ms |
 | `barometer_guard_ready` | boolean | - | 样本可用且相对高度至少 1 m，迫降快速下降保护具备介入条件；这不是定高或触地能力 |

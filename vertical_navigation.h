@@ -63,7 +63,11 @@ struct VerticalNavigationState {
 	uint32_t lastUpdateUs = 0;
 	uint32_t acceptedBarometerCount = 0;
 	uint32_t acceptedRangeCount = 0;
+	uint32_t receivedObservationCount = 0;
+	uint32_t acceptedObservationCount = 0;
 	uint32_t rejectedObservationCount = 0;
+	uint32_t trustedObservationCount = 0;
+	uint32_t lastTrustedObservationUs = 0;
 	bool initialized = false;
 	bool barometerHealthy = false;
 	bool rangeHealthy = false;
@@ -84,6 +88,8 @@ public:
 		lastBarometerTimestampUs_ = 0;
 		lastRangeTimestampUs_ = 0;
 		lastFlowTimestampUs_ = 0;
+		lastBarometerReceivedTimestampUs_ = 0;
+		lastRangeReceivedTimestampUs_ = 0;
 	}
 
 	const VerticalNavigationState &state() const { return state_; }
@@ -123,11 +129,15 @@ public:
 
 		if (!state_.initialized) {
 			if (baroFresh) {
+				lastBarometerReceivedTimestampUs_ = barometer.timestampUs;
+				++state_.receivedObservationCount;
 				state_.altitudeMeters = barometer.altitudeMeters;
 				state_.lastBarometerAltitudeMeters = barometer.altitudeMeters;
 				state_.initialized = true;
 				acceptBarometer(barometer);
 			} else if (rangeFresh) {
+				lastRangeReceivedTimestampUs_ = range.timestampUs;
+				++state_.receivedObservationCount;
 				const float correctedRange = correctedRangeAltitude(input, range);
 				if (isfinite(correctedRange)) {
 					state_.altitudeMeters = correctedRange;
@@ -150,18 +160,24 @@ public:
 			-tuning_.verticalSpeedLimitMps, tuning_.verticalSpeedLimitMps);
 		state_.altitudeMeters += state_.verticalSpeedMps * dt;
 
-		if (baroFresh && barometer.timestampUs != lastBarometerTimestampUs_) {
-			fuseObservation(barometer.altitudeMeters, tuning_.baroPositionAlpha,
-				tuning_.baroVelocityBeta, tuning_.baroInnovationGateM, dt);
-			acceptBarometer(barometer);
+		if (baroFresh && barometer.timestampUs != lastBarometerReceivedTimestampUs_) {
+			lastBarometerReceivedTimestampUs_ = barometer.timestampUs;
+			++state_.receivedObservationCount;
+			if (fuseObservation(barometer.altitudeMeters, tuning_.baroPositionAlpha,
+				tuning_.baroVelocityBeta, tuning_.baroInnovationGateM, dt))
+				acceptBarometer(barometer);
 		}
 
-		if (rangeFresh && range.timestampUs != lastRangeTimestampUs_) {
+		if (rangeFresh && range.timestampUs != lastRangeReceivedTimestampUs_) {
+			lastRangeReceivedTimestampUs_ = range.timestampUs;
+			++state_.receivedObservationCount;
 			const float correctedRange = correctedRangeAltitude(input, range);
 			if (isfinite(correctedRange) && correctedRange <= tuning_.rangeMaxUsableMeters) {
-				fuseObservation(correctedRange, tuning_.rangePositionAlpha,
-					tuning_.rangeVelocityBeta, tuning_.rangeInnovationGateM, dt);
-				acceptRange(range, correctedRange);
+				if (fuseObservation(correctedRange, tuning_.rangePositionAlpha,
+					tuning_.rangeVelocityBeta, tuning_.rangeInnovationGateM, dt))
+					acceptRange(range, correctedRange);
+			} else {
+				++state_.rejectedObservationCount;
 			}
 		}
 
@@ -200,37 +216,51 @@ private:
 		return range.distanceMeters * tiltScale;
 	}
 
-	void fuseObservation(float measuredAltitudeMeters, float positionAlpha, float velocityBeta,
+	bool fuseObservation(float measuredAltitudeMeters, float positionAlpha, float velocityBeta,
 		float innovationGateMeters, float dt) {
-		if (!isfinite(measuredAltitudeMeters)) return;
+		if (!isfinite(measuredAltitudeMeters)) {
+			++state_.rejectedObservationCount;
+			return false;
+		}
 		const float innovation = measuredAltitudeMeters - state_.altitudeMeters;
 		state_.lastInnovationMeters = innovation;
 		if (fabsf(innovation) > innovationGateMeters) {
 			++state_.rejectedObservationCount;
-			return;
+			return false;
 		}
 		state_.altitudeMeters += innovation * positionAlpha;
 		state_.verticalSpeedMps += (innovation * velocityBeta) / fmaxf(dt, tuning_.dtMinSeconds);
 		state_.verticalSpeedMps = clamp(state_.verticalSpeedMps,
 			-tuning_.verticalSpeedLimitMps, tuning_.verticalSpeedLimitMps);
+		return true;
+	}
+
+	void markTrusted(uint32_t timestampUs) {
+		++state_.acceptedObservationCount;
+		++state_.trustedObservationCount;
+		state_.lastTrustedObservationUs = timestampUs;
 	}
 
 	void acceptBarometer(const BarometerSample &barometer) {
 		lastBarometerTimestampUs_ = barometer.timestampUs;
 		state_.lastBarometerAltitudeMeters = barometer.altitudeMeters;
 		++state_.acceptedBarometerCount;
+		markTrusted(barometer.timestampUs);
 	}
 
 	void acceptRange(const DownwardRangeSample &range, float correctedRangeMeters) {
 		lastRangeTimestampUs_ = range.timestampUs;
 		state_.lastRangeAltitudeMeters = correctedRangeMeters;
 		++state_.acceptedRangeCount;
+		markTrusted(range.timestampUs);
 	}
 
 	void updateHealth(uint32_t nowUs, bool baroFresh, bool rangeFresh, bool flowFresh) {
-		state_.barometerHealthy = baroFresh && lastBarometerTimestampUs_ != 0 &&
+		(void)baroFresh;
+		(void)rangeFresh;
+		state_.barometerHealthy = lastBarometerTimestampUs_ != 0 &&
 			sensorSampleFresh(nowUs, lastBarometerTimestampUs_, VERTICAL_NAV_BARO_MAX_AGE_US);
-		state_.rangeHealthy = rangeFresh && lastRangeTimestampUs_ != 0 &&
+		state_.rangeHealthy = lastRangeTimestampUs_ != 0 &&
 			sensorSampleFresh(nowUs, lastRangeTimestampUs_, VERTICAL_NAV_RANGE_MAX_AGE_US);
 		state_.flowHealthy = flowFresh && lastFlowTimestampUs_ != 0 &&
 			sensorSampleFresh(nowUs, lastFlowTimestampUs_, VERTICAL_NAV_FLOW_MAX_AGE_US);
@@ -253,6 +283,8 @@ private:
 	uint32_t lastBarometerTimestampUs_ = 0;
 	uint32_t lastRangeTimestampUs_ = 0;
 	uint32_t lastFlowTimestampUs_ = 0;
+	uint32_t lastBarometerReceivedTimestampUs_ = 0;
+	uint32_t lastRangeReceivedTimestampUs_ = 0;
 };
 
 struct VerticalHoldTuning {
